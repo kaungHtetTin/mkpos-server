@@ -35,6 +35,8 @@ class MobileAuthApiTest extends TestCase
     public function test_portable_clients_can_use_the_same_auth_routes_with_a_bearer_token(): void
     {
         $headers = [
+            'Origin' => 'https://www.mkposmyanmar.com',
+            'Referer' => 'https://www.mkposmyanmar.com/web-mkpos/',
             'X-MKPOS-Auth' => 'token',
             'X-MKPOS-Client' => 'android',
         ];
@@ -56,6 +58,24 @@ class MobileAuthApiTest extends TestCase
 
         $this->withToken($token)->postJson('/api/auth/logout')->assertOk();
         $this->withToken($token)->getJson('/api/auth/me')->assertUnauthorized();
+    }
+
+    public function test_explicit_token_mode_never_falls_back_to_an_existing_session(): void
+    {
+        $this->withHeaders([
+            'Origin' => 'http://127.0.0.1:5174',
+            'Referer' => 'http://127.0.0.1:5174/signup',
+        ])->postJson('/api/auth/register', [
+            'business_name' => 'Session Isolation Shop',
+            'owner_name' => 'Session Owner',
+            'email' => 'session-isolation@example.com',
+            'password' => 'password123',
+            'password_confirmation' => 'password123',
+        ])->assertCreated();
+
+        $this->withHeader('X-MKPOS-Auth', 'token')
+            ->getJson('/api/auth/me')
+            ->assertUnauthorized();
     }
 
     public function test_wildcard_cors_reflects_arbitrary_origins_for_credentialed_clients(): void

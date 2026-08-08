@@ -15,7 +15,11 @@ class SetBusinessContext
 
     public function handle(Request $request, Closure $next)
     {
+        $tokenRequested = $request->header('X-MKPOS-Auth') === 'token';
         $tokenAuthenticated = (bool) $request->bearerToken();
+        if ($tokenRequested && ! $tokenAuthenticated) {
+            abort(401, 'Unauthenticated.');
+        }
         $user = $request->user($tokenAuthenticated ? 'sanctum' : 'web');
         if ($tokenAuthenticated && $user) {
             Auth::guard('web')->setUser($user);

@@ -39,7 +39,7 @@ class Kernel extends HttpKernel
         ],
 
         'api' => [
-            \Laravel\Sanctum\Http\Middleware\EnsureFrontendRequestsAreStateful::class,
+            \App\Http\Middleware\EnsureFrontendRequestsAreStatefulUnlessToken::class,
             'throttle:api',
             \Illuminate\Routing\Middleware\SubstituteBindings::class,
         ],
@@ -57,6 +57,7 @@ class Kernel extends HttpKernel
         'auth.basic' => \Illuminate\Auth\Middleware\AuthenticateWithBasicAuth::class,
         'auth.session' => \Illuminate\Session\Middleware\AuthenticateSession::class,
         'business' => \App\Http\Middleware\SetBusinessContext::class,
+        'office.auth' => \App\Http\Middleware\AuthenticateOffice::class,
         'owner' => \App\Http\Middleware\EnsureOwner::class,
         'module' => \App\Http\Middleware\EnsureModuleAccess::class,
         'subscription' => \App\Http\Middleware\EnsureActiveSubscription::class,

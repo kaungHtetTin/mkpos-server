@@ -169,7 +169,7 @@ Route::middleware(['auth:sanctum', 'business'])->group(function () {
 });
 
 Route::post('/office/auth/login', [OfficeAuthController::class, 'login'])->middleware('throttle:10,1');
-Route::middleware('auth:office')->prefix('office')->group(function () {
+Route::middleware('office.auth')->prefix('office')->group(function () {
     Route::get('/auth/me', [OfficeAuthController::class, 'me']);
     Route::put('/auth/profile', [OfficeAuthController::class, 'updateProfile'])->middleware('throttle:10,1');
     Route::post('/auth/logout', [OfficeAuthController::class, 'logout']);

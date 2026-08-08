@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Office;
 
 use App\Http\Controllers\Controller;
+use App\Models\PlatformAdmin;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Hash;
@@ -25,6 +26,18 @@ class OfficeAuthController extends Controller
             'password' => $data['password'],
             'is_active' => true,
         ];
+
+        if ($this->wantsToken($request)) {
+            $admin = PlatformAdmin::where('email', $credentials['email'])
+                ->where('is_active', true)
+                ->first();
+            if (! $admin || ! Hash::check($credentials['password'], $admin->password)) {
+                return response()->json(['message' => 'The email or password is incorrect.'], 422);
+            }
+
+            return $this->payload($admin, $this->issueToken($request, $admin));
+        }
+
         if (! Auth::guard('office')->attempt($credentials, (bool) ($data['remember'] ?? false))) {
             return response()->json(['message' => 'The email or password is incorrect.'], 422);
         }
@@ -57,17 +70,31 @@ class OfficeAuthController extends Controller
 
         $admin->name = trim($data['name']);
         $admin->email = Str::lower(trim($data['email']));
-        if (! empty($data['password'])) {
+        $passwordChanged = ! empty($data['password']);
+        if ($passwordChanged) {
             $admin->password = Hash::make($data['password']);
             $admin->setRememberToken(Str::random(60));
         }
         $admin->save();
 
-        return $this->payload();
+        $token = null;
+        if ($passwordChanged && $request->bearerToken()) {
+            $admin->tokens()->delete();
+            $token = $this->issueToken($request, $admin);
+        }
+
+        return $this->payload($admin, $token);
     }
 
     public function logout(Request $request): array
     {
+        if ($request->bearerToken()) {
+            $request->user('sanctum')?->currentAccessToken()?->delete();
+            Auth::forgetGuards();
+
+            return ['ok' => true];
+        }
+
         Auth::guard('office')->logout();
         $request->session()->invalidate();
         $request->session()->regenerateToken();
@@ -75,8 +102,26 @@ class OfficeAuthController extends Controller
         return ['ok' => true];
     }
 
-    private function payload(): array
+    private function payload(?PlatformAdmin $admin = null, ?string $token = null): array
     {
-        return ['admin' => Auth::guard('office')->user()->only(['id', 'name', 'email'])];
+        $payload = ['admin' => ($admin ?? Auth::guard('office')->user())->only(['id', 'name', 'email'])];
+        if ($token) {
+            $payload['access_token'] = $token;
+            $payload['token_type'] = 'Bearer';
+        }
+
+        return $payload;
+    }
+
+    private function wantsToken(Request $request): bool
+    {
+        return $request->header('X-MKPOS-Auth') === 'token';
+    }
+
+    private function issueToken(Request $request, PlatformAdmin $admin): string
+    {
+        $client = preg_replace('/[^a-z0-9_-]+/i', '-', (string) $request->header('X-MKPOS-Client', 'office'));
+
+        return $admin->createToken('office-'.trim($client, '-'), ['office'])->plainTextToken;
     }
 }
