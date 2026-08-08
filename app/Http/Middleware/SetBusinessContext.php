@@ -5,6 +5,7 @@ namespace App\Http\Middleware;
 use App\Tenancy\TenantContext;
 use Closure;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Auth;
 
 class SetBusinessContext
 {
@@ -14,7 +15,11 @@ class SetBusinessContext
 
     public function handle(Request $request, Closure $next)
     {
-        $user = $request->user('web');
+        $tokenAuthenticated = (bool) $request->bearerToken();
+        $user = $request->user($tokenAuthenticated ? 'sanctum' : 'web');
+        if ($tokenAuthenticated && $user) {
+            Auth::guard('web')->setUser($user);
+        }
         $businessId = (int) ($user?->business_id ?? 0);
         abort_if($businessId < 1, 403, 'Your account is not assigned to a business.');
         abort_if(! $user->is_active, 403, 'This user account is inactive.');
@@ -25,6 +30,7 @@ class SetBusinessContext
             return $next($request);
         } finally {
             $this->context->clear();
+            if ($tokenAuthenticated) Auth::forgetGuards();
         }
     }
 }

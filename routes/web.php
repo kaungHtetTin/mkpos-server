@@ -20,6 +20,13 @@ Route::get('/office/{path?}', function () {
     return response()->file($index);
 })->where('path', '.*');
 
+Route::get('/app/{path?}', function () {
+    $index = public_path('app/index.html');
+    abort_unless(is_file($index), 404, 'React build not found. Run npm run build:laravel in frontend.');
+
+    return response()->file($index);
+})->where('path', '.*');
+
 Route::get('/{path?}', function () {
     $index = public_path('app/index.html');
     abort_unless(is_file($index), 404, 'React build not found. Run npm run build:laravel in frontend.');

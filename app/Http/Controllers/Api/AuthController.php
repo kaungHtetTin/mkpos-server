@@ -70,9 +70,12 @@ class AuthController extends Controller
             return [$business, $user];
         });
 
+        if ($this->usesTokenAuth($request)) {
+            return response()->json($this->tokenPayload($user, $business, $request), 201);
+        }
+
         Auth::guard('web')->login($user);
         $request->session()->regenerate();
-
         return response()->json($this->payload($user, $business), 201);
     }
 
@@ -88,6 +91,18 @@ class AuthController extends Controller
         unset($credentials['remember']);
         $credentials['email'] = Str::lower(trim($credentials['email']));
         $credentials['is_active'] = true;
+
+        if ($this->usesTokenAuth($request)) {
+            $user = User::with('business')->where('email', $credentials['email'])->where('is_active', true)->first();
+            if (! $user || ! Hash::check($credentials['password'], $user->password)) {
+                return response()->json(['message' => 'The email or password is incorrect.'], 422);
+            }
+            if (! $user->business || $user->business->status !== 'active') {
+                return response()->json(['message' => 'This business account is not active.'], 403);
+            }
+
+            return $this->tokenPayload($user, $user->business, $request);
+        }
 
         if (! Auth::guard('web')->attempt($credentials, $remember)) {
             return response()->json(['message' => 'The email or password is incorrect.'], 422);
@@ -140,6 +155,13 @@ class AuthController extends Controller
 
     public function logout(Request $request): array
     {
+        if ($request->bearerToken() && $request->user()?->currentAccessToken()) {
+            $request->user()->currentAccessToken()->delete();
+            Auth::forgetGuards();
+
+            return ['ok' => true];
+        }
+
         Auth::guard('web')->logout();
         $request->session()->invalidate();
         $request->session()->regenerateToken();
@@ -158,6 +180,22 @@ class AuthController extends Controller
             'business' => $business->only(['id', 'name', 'slug', 'status', 'timezone', 'currency']),
             'subscription' => app(SubscriptionService::class)->status((int) $business->id),
         ];
+    }
+
+    private function usesTokenAuth(Request $request): bool
+    {
+        return Str::lower((string) $request->header('X-MKPOS-Auth')) === 'token';
+    }
+
+    private function tokenPayload(User $user, Business $business, Request $request): array
+    {
+        $client = preg_replace('/[^a-z0-9._-]+/i', '-', (string) $request->header('X-MKPOS-Client', 'portable')) ?: 'portable';
+        $token = $user->createToken('mkpos-'.$client, ['*']);
+
+        return array_merge($this->payload($user, $business), [
+            'access_token' => $token->plainTextToken,
+            'token_type' => 'Bearer',
+        ]);
     }
 
     private function uniqueSlug(string $name): string
