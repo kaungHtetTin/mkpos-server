@@ -45,6 +45,7 @@ Route::middleware(['auth:sanctum', 'business'])->group(function () {
     Route::get('/app-config', fn () => array_merge(config('mkpos'), [
         'business' => request()->user('web')->business->only(['id', 'name', 'slug', 'timezone', 'currency']),
         'permissions' => app(AccessService::class)->permissions(request()->user('web')),
+        'language' => DB::table('settings')->where('key', 'language')->value('value') ?: 'en',
     ]));
     Route::get('/subscription', [SubscriptionController::class, 'status']);
     Route::middleware('owner')->group(function () {

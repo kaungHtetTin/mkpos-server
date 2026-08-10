@@ -73,13 +73,15 @@ class SaleController extends ApiController
             $sale = DB::table('sales')->where('id', $id)->lockForUpdate()->first();
             abort_if(! $sale, 404, 'Sale not found');
             abort_if($sale->status === 'voided', 400, 'Voided sale cannot be edited');
-            foreach (DB::table('sale_items')->where('sale_id', $id)->get() as $item) {
+            $existingItems = DB::table('sale_items')->where('sale_id', $id)->get();
+            $editableArchivedProductIds = $existingItems->pluck('product_id')->filter()->map(fn ($productId) => (int) $productId)->unique()->values()->all();
+            foreach ($existingItems as $item) {
                 DB::table('products')->where('id', $item->product_id)->increment('stock', $item->quantity + $item->foc_quantity, ['updated_at' => now()]);
                 $this->insertMovement($item->product_id, $item->product_name, 'sale_edit_restore', (float) ($item->quantity + $item->foc_quantity), 'sale', $id, $sale->receipt_no);
             }
             DB::table('sale_items')->where('sale_id', $id)->delete();
 
-            return $this->save($id, $data, $sale->receipt_no);
+            return $this->save($id, $data, $sale->receipt_no, null, $editableArchivedProductIds);
         });
     }
 
@@ -155,9 +157,17 @@ class SaleController extends ApiController
             'payment_method' => ['nullable', 'string'], 'paid_amount' => ['nullable', 'integer', 'min:0'], 'customer_id' => ['nullable', 'integer', 'exists:customers,id'], 'admin_pin' => ['nullable', 'string']]);
     }
 
-    private function save(?int $id, array $data, ?string $receiptNo = null, ?array $offline = null): array
+    private function save(?int $id, array $data, ?string $receiptNo = null, ?array $offline = null, array $editableArchivedProductIds = []): array
     {
-        $products = DB::table('products')->whereIn('id', collect($data['items'])->pluck('product_id'))->where('is_active', true)->lockForUpdate()->get()->keyBy('id');
+        $products = DB::table('products')
+            ->whereIn('id', collect($data['items'])->pluck('product_id'))
+            ->where(function ($query) use ($editableArchivedProductIds) {
+                $query->where('is_active', true);
+                if ($editableArchivedProductIds !== []) {
+                    $query->orWhereIn('id', $editableArchivedProductIds);
+                }
+            })
+            ->lockForUpdate()->get()->keyBy('id');
         abort_if($products->count() !== collect($data['items'])->pluck('product_id')->unique()->count(), 404, 'One or more products were not found');
         if ($offline) {
             $this->validateOfflineItems($data['items'], $products);

@@ -144,6 +144,49 @@ class PosApiTest extends TestCase
         $this->assertDatabaseHas('products', ['id' => $product['id'], 'stock' => 1]);
     }
 
+    public function test_sale_update_recalculates_stock_totals_and_customer_credit(): void
+    {
+        $this->registerOwner('Sale Update Shop', 'sale-update@example.com');
+
+        $product = $this->postJson('/api/products', [
+            'name' => 'Update Product', 'sku' => 'UPDATE-1', 'barcode' => '', 'category' => 'Tests',
+            'price' => 1500, 'cost' => 900, 'stock' => 10, 'low_stock_threshold' => 1,
+            'prices' => [['name' => 'Retail', 'price' => 1500]],
+        ])->assertOk()->json();
+        $customer = $this->postJson('/api/customers', ['name' => 'Update Customer'])->assertOk()->json();
+
+        $sale = $this->postJson('/api/sales', [
+            'customer_id' => $customer['id'], 'payment_type' => 'credit', 'payment_method' => 'Cash',
+            'paid_amount' => 1000, 'discount' => 0, 'items' => [[
+                'product_id' => $product['id'], 'price_type' => 'Retail', 'quantity' => 2,
+                'foc_quantity' => 0, 'unit_price' => 1500,
+            ]],
+        ])->assertOk()->assertJsonPath('credit_amount', 2000)->json();
+
+        // Historical sales must remain editable after a product is archived.
+        $this->deleteJson('/api/products/'.$product['id'])->assertOk();
+
+        $this->putJson('/api/sales/'.$sale['id'], [
+            'customer_id' => null, 'payment_type' => 'cash', 'payment_method' => 'Cash',
+            'paid_amount' => 4000, 'discount' => 500, 'admin_pin' => '', 'items' => [[
+                'product_id' => $product['id'], 'price_type' => 'Retail', 'quantity' => 3,
+                'foc_quantity' => 0, 'unit_price' => 1500,
+            ]],
+        ])->assertOk()
+            ->assertJsonPath('id', $sale['id'])
+            ->assertJsonPath('total', 4000)
+            ->assertJsonPath('paid_amount', 4000)
+            ->assertJsonPath('credit_amount', 0)
+            ->assertJsonPath('customer_id', null)
+            ->assertJsonPath('items.0.quantity', 3);
+
+        $this->assertDatabaseHas('products', ['id' => $product['id'], 'stock' => 7]);
+        $this->assertDatabaseHas('stock_movements', [
+            'product_id' => $product['id'], 'movement_type' => 'sale_edit_restore',
+            'reference_type' => 'sale', 'reference_id' => $sale['id'],
+        ]);
+    }
+
     public function test_pos_api_requires_authentication(): void
     {
         $this->getJson('/api/products')->assertUnauthorized();

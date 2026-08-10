@@ -29,6 +29,10 @@ class MobileAuthApiTest extends TestCase
             ->assertOk()
             ->assertJsonPath('business.name', 'Mobile Session Shop');
 
+        $this->getJson('/api/app-config')
+            ->assertOk()
+            ->assertJsonPath('language', 'en');
+
         $this->postJson('/api/auth/logout')->assertOk();
     }
 
