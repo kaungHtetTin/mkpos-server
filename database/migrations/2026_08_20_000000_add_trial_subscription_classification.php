@@ -105,23 +105,14 @@ return new class extends Migration
         // JSON check generated when this table was originally created. Convert
         // that legacy inline check once; explicit checks created here are safe
         // across subsequent up/down ALTER operations.
-        $checkExists = (bool) DB::selectOne(
-            "SELECT COUNT(*) AS aggregate
-             FROM information_schema.CHECK_CONSTRAINTS
-             WHERE CONSTRAINT_SCHEMA = DATABASE()
-               AND TABLE_NAME = 'subscription_plans'
-               AND CONSTRAINT_NAME = 'features'"
-        )->aggregate;
-        if ($checkExists) {
-            // A dump/import can make MariaDB retain the original query alias
-            // internally even though SHOW CREATE TABLE displays `features`.
-            // Recreating the check before ALTER removes that stale binding.
-            DB::statement('ALTER TABLE subscription_plans DROP CONSTRAINT features');
-        } else {
-            DB::statement(
-                'ALTER TABLE subscription_plans MODIFY features LONGTEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NULL'
-            );
-        }
+        // Do not DROP CONSTRAINT by the reported name. Some hosted MariaDB
+        // versions expose the implicit JSON check in information_schema as
+        // `features` but reject that same name in ALTER TABLE. Converting the
+        // JSON alias to its underlying LONGTEXT representation removes the
+        // stale implicit check without depending on its internal name.
+        DB::statement(
+            'ALTER TABLE subscription_plans MODIFY features LONGTEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NULL'
+        );
 
         try {
             Schema::table('subscription_plans', $change);
