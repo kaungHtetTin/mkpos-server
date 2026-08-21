@@ -11,6 +11,29 @@ class OfficePortableAuthApiTest extends TestCase
 {
     use DatabaseTransactions;
 
+    public function test_production_office_origin_receives_session_middleware(): void
+    {
+        PlatformAdmin::create([
+            'name' => 'Production Platform Owner',
+            'email' => 'production-office@example.com',
+            'password' => Hash::make('password123'),
+            'is_active' => true,
+        ]);
+
+        $login = $this->withHeaders([
+            'Origin' => 'https://www.mkposmyanmar.com',
+            'Referer' => 'https://www.mkposmyanmar.com/public/office/',
+        ])->postJson('/api/office/auth/login', [
+            'email' => 'production-office@example.com',
+            'password' => 'password123',
+        ])->assertOk()->assertJsonPath('admin.email', 'production-office@example.com');
+
+        $login->assertJsonMissing(['access_token']);
+        $this->getJson('/api/office/auth/me')
+            ->assertOk()
+            ->assertJsonPath('admin.email', 'production-office@example.com');
+    }
+
     public function test_portable_office_can_login_use_and_revoke_an_admin_token(): void
     {
         $admin = PlatformAdmin::create([
