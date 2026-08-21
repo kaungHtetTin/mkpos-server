@@ -20,6 +20,8 @@ class SubscriptionApiTest extends TestCase
     public function test_owner_without_subscription_is_limited_to_renewal_flow(): void
     {
         $session = $this->registerBusiness('Blocked Shop', 'blocked@example.com');
+        DB::table('business_subscriptions')->where('business_id', $session['business']['id'])->delete();
+        $session = $this->getJson('/api/auth/me')->assertOk()->json();
 
         $this->assertFalse($session['subscription']['is_valid']);
         $this->getJson('/api/products')->assertStatus(402)->assertJsonPath('subscription.reason', 'no_subscription');
@@ -213,15 +215,23 @@ class SubscriptionApiTest extends TestCase
             'subscription_plan_id' => $plan['id'],
         ])->assertOk()->assertJsonPath('is_valid', true);
 
-        $initial = DB::table('business_subscriptions')->where('business_id', $businessId)->first();
+        $initial = DB::table('business_subscriptions')
+            ->where('business_id', $businessId)
+            ->where('access_type', 'paid')
+            ->first();
         $initialEnd = Carbon::parse($initial->ends_at);
 
         $this->putJson('/api/office/businesses/'.$businessId.'/subscription', [
             'subscription_plan_id' => $plan['id'],
         ])->assertOk()->assertJsonPath('is_valid', true);
 
-        $extended = DB::table('business_subscriptions')->where('business_id', $businessId)->first();
-        $this->assertSame(1, DB::table('business_subscriptions')->where('business_id', $businessId)->count());
+        $extended = DB::table('business_subscriptions')
+            ->where('business_id', $businessId)
+            ->where('access_type', 'paid')
+            ->first();
+        $this->assertSame(2, DB::table('business_subscriptions')->where('business_id', $businessId)->count());
+        $this->assertSame(1, DB::table('business_subscriptions')->where('business_id', $businessId)->where('access_type', 'trial')->where('status', 'cancelled')->count());
+        $this->assertSame(1, DB::table('business_subscriptions')->where('business_id', $businessId)->where('access_type', 'paid')->where('status', 'active')->count());
         $this->assertSame(2, DB::table('subscription_payments')->where('business_id', $businessId)->count());
         $this->assertSame(120000, (int) DB::table('subscription_payments')->where('business_id', $businessId)->sum('amount'));
         $this->assertSame(['assignment', 'renewal'], DB::table('subscription_payments')->where('business_id', $businessId)->orderBy('id')->pluck('type')->all());

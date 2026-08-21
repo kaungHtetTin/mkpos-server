@@ -40,6 +40,7 @@ class Kernel extends HttpKernel
 
         'api' => [
             \App\Http\Middleware\EnsureFrontendRequestsAreStatefulUnlessToken::class,
+            \App\Http\Middleware\MonitorTrialRollout::class,
             'throttle:api',
             \Illuminate\Routing\Middleware\SubstituteBindings::class,
         ],
@@ -61,6 +62,7 @@ class Kernel extends HttpKernel
         'owner' => \App\Http\Middleware\EnsureOwner::class,
         'module' => \App\Http\Middleware\EnsureModuleAccess::class,
         'subscription' => \App\Http\Middleware\EnsureActiveSubscription::class,
+        'subscription.capability' => \App\Http\Middleware\EnsureSubscriptionCapability::class,
         'cache.headers' => \Illuminate\Http\Middleware\SetCacheHeaders::class,
         'can' => \Illuminate\Auth\Middleware\Authorize::class,
         'guest' => \App\Http\Middleware\RedirectIfAuthenticated::class,

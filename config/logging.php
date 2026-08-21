@@ -70,6 +70,13 @@ return [
             'days' => 14,
         ],
 
+        'trial_rollout' => [
+            'driver' => 'daily',
+            'path' => storage_path('logs/trial-rollout.log'),
+            'level' => env('TRIAL_MONITOR_LOG_LEVEL', 'warning'),
+            'days' => (int) env('TRIAL_MONITOR_LOG_DAYS', 30),
+        ],
+
         'slack' => [
             'driver' => 'slack',
             'url' => env('LOG_SLACK_WEBHOOK_URL'),

@@ -7,6 +7,7 @@ use App\Models\Business;
 use App\Models\User;
 use App\Services\AccessService;
 use App\Services\SubscriptionService;
+use App\Services\TrialSubscriptionService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
@@ -18,6 +19,10 @@ use Illuminate\Validation\ValidationException;
 
 class AuthController extends Controller
 {
+    public function __construct(private TrialSubscriptionService $trials)
+    {
+    }
+
     public function register(Request $request)
     {
         $data = $request->validate([
@@ -66,6 +71,7 @@ class AuthController extends Controller
                 'minimum_profit' => 0,
                 'updated_at' => now(),
             ]);
+            $this->trials->grant((int) $business->id);
 
             return [$business, $user];
         });

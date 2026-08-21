@@ -26,7 +26,9 @@ class PlanController extends Controller
 
     public function update(Request $request, int $id): array
     {
-        abort_if(! DB::table('subscription_plans')->where('id', $id)->exists(), 404, 'Plan not found');
+        $plan = DB::table('subscription_plans')->where('id', $id)->first();
+        abort_if(! $plan, 404, 'Plan not found');
+        abort_if((bool) $plan->is_system, 403, 'System subscription plans cannot be modified.');
         $data = $this->validated($request, $id);
         DB::table('subscription_plans')->where('id', $id)->update($this->values($data) + ['updated_at' => now()]);
 
@@ -35,7 +37,10 @@ class PlanController extends Controller
 
     public function destroy(int $id): array
     {
-        abort_if(! DB::table('subscription_plans')->where('id', $id)->update(['is_active' => false, 'updated_at' => now()]), 404, 'Plan not found');
+        $plan = DB::table('subscription_plans')->where('id', $id)->first();
+        abort_if(! $plan, 404, 'Plan not found');
+        abort_if((bool) $plan->is_system, 403, 'System subscription plans cannot be deleted.');
+        DB::table('subscription_plans')->where('id', $id)->update(['is_active' => false, 'updated_at' => now()]);
 
         return $this->find($id);
     }
@@ -66,6 +71,8 @@ class PlanController extends Controller
             'currency' => $data['currency'],
             'duration_days' => $data['duration_days'],
             'features' => json_encode(array_values($data['features'] ?? [])),
+            'is_system' => false,
+            'is_public' => true,
             'is_active' => $data['is_active'] ?? true,
             'sort_order' => $data['sort_order'] ?? 0,
         ];
@@ -84,6 +91,8 @@ class PlanController extends Controller
         $item = (array) $plan;
         $item['features'] = $plan->features ? json_decode($plan->features, true) : [];
         $item['is_active'] = (bool) $plan->is_active;
+        $item['is_system'] = (bool) $plan->is_system;
+        $item['is_public'] = (bool) $plan->is_public;
 
         return $item;
     }

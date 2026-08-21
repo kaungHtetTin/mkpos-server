@@ -161,9 +161,11 @@ Route::middleware(['auth:sanctum', 'business'])->group(function () {
             Route::post('/settings/receipt-preview', [SettingsController::class, 'receiptPreview']);
             Route::post('/settings/test-print', [SettingsController::class, 'testPrint']);
             Route::get('/data/status', [DataBackupController::class, 'status']);
-            Route::get('/data/export', [DataBackupController::class, 'export']);
-            Route::post('/data/restore-file', [DataBackupController::class, 'restore']);
         });
+        Route::get('/data/export', [DataBackupController::class, 'export'])
+            ->middleware(['subscription.capability:data_export', 'owner']);
+        Route::post('/data/restore-file', [DataBackupController::class, 'restore'])
+            ->middleware(['subscription.capability:data_restore', 'owner']);
         Route::get('/settings', [SettingsController::class, 'index'])
             ->middleware('module:sell,products,purchases,suppliers,customers,expenses,transactions,reports');
     });

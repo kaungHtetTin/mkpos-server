@@ -17,7 +17,10 @@ class SubscriptionController extends Controller
 
     public function plans(): array
     {
-        return ['items' => DB::table('subscription_plans')->where('is_active', true)
+        return ['items' => DB::table('subscription_plans')
+            ->where('is_active', true)
+            ->where('is_public', true)
+            ->where('is_system', false)
             ->orderBy('sort_order')->orderBy('price')->get()->map(function ($plan) {
                 $item = (array) $plan;
                 $item['features'] = $plan->features ? json_decode($plan->features, true) : [];
@@ -73,7 +76,10 @@ class SubscriptionController extends Controller
     public function requestPlan(Request $request)
     {
         $data = $request->validate([
-            'subscription_plan_id' => ['required', Rule::exists('subscription_plans', 'id')->where('is_active', true)],
+            'subscription_plan_id' => ['required', Rule::exists('subscription_plans', 'id')
+                ->where('is_active', true)
+                ->where('is_public', true)
+                ->where('is_system', false)],
             'payment_method_id' => ['required', Rule::exists('payment_methods', 'id')->where('is_active', true)],
             'payment_screenshot' => ['required', 'image', 'mimes:jpeg,jpg,png,webp', 'max:5120'],
             'message' => ['nullable', 'string', 'max:1000'],

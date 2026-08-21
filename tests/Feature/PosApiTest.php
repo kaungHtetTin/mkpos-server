@@ -144,6 +144,53 @@ class PosApiTest extends TestCase
         $this->assertDatabaseHas('products', ['id' => $product['id'], 'stock' => 1]);
     }
 
+    public function test_expired_trial_only_syncs_sales_queued_before_expiry_during_the_grace_period(): void
+    {
+        config(['mkpos.trial.offline_sync_grace_days' => 7]);
+        $this->registerOwner('Trial Offline Shop', 'trial-offline@example.com');
+
+        $product = $this->postJson('/api/products', [
+            'name' => 'Trial Offline Product', 'sku' => 'TRIAL-OFF-1', 'barcode' => '', 'category' => 'Tests',
+            'price' => 1000, 'cost' => 500, 'stock' => 5, 'low_stock_threshold' => 1,
+            'prices' => [['name' => 'Retail', 'price' => 1000]],
+        ])->assertOk()->json();
+
+        $businessId = DB::table('users')->where('email', 'trial-offline@example.com')->value('business_id');
+        $trialEndsAt = now()->copy()->subDay();
+        DB::table('business_subscriptions')->where('business_id', $businessId)->where('access_type', 'paid')->delete();
+        DB::table('business_subscriptions')->where('business_id', $businessId)->where('access_type', 'trial')->update([
+            'starts_at' => $trialEndsAt->copy()->subMonth(),
+            'ends_at' => $trialEndsAt,
+        ]);
+
+        $payload = [
+            'offline_sale_uuid' => '3d26de1e-99b8-471c-b284-a0a6fcdac723',
+            'offline_created_at' => $trialEndsAt->copy()->subHour()->toISOString(),
+            'payment_type' => 'cash', 'payment_method' => 'Cash', 'paid_amount' => 1000,
+            'discount' => 0, 'customer_id' => null,
+            'items' => [[
+                'product_id' => $product['id'], 'product_name' => 'Trial Offline Product',
+                'price_type' => 'Retail', 'quantity' => 1, 'foc_quantity' => 0, 'unit_price' => 1000,
+            ]],
+        ];
+
+        $status = app(\App\Services\SubscriptionService::class)->status((int) $businessId);
+        $this->assertSame('trial', $status['access_type']);
+        $this->assertSame('expired', $status['reason']);
+        $this->assertTrue(app(\App\Services\SubscriptionService::class)->allowsOfflineTrialSync($status, $payload['offline_created_at']));
+
+        $this->postJson('/api/sales/offline-sync', $payload)->assertOk()->assertJsonPath('source', 'offline');
+
+        $payload['offline_sale_uuid'] = '8cb5e912-a0ad-47e4-9a95-8c043d78d642';
+        $payload['offline_created_at'] = now()->toISOString();
+        $this->postJson('/api/sales/offline-sync', $payload)->assertStatus(402);
+
+        $this->travelTo($trialEndsAt->copy()->addDays(7));
+        $payload['offline_sale_uuid'] = 'ff1b5bbc-0d0f-40c1-b59f-8643c60bcbbf';
+        $payload['offline_created_at'] = $trialEndsAt->copy()->subMinutes(30)->toISOString();
+        $this->postJson('/api/sales/offline-sync', $payload)->assertStatus(402);
+    }
+
     public function test_sale_update_recalculates_stock_totals_and_customer_credit(): void
     {
         $this->registerOwner('Sale Update Shop', 'sale-update@example.com');

@@ -2,15 +2,116 @@
 
 namespace Tests\Feature;
 
+use App\Models\User;
 use Illuminate\Foundation\Testing\DatabaseTransactions;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Storage;
 use Tests\TestCase;
 
 class DataBackupApiTest extends TestCase
 {
     use DatabaseTransactions;
+
+    public function test_trial_can_view_status_but_export_and_restore_return_the_capability_contract(): void
+    {
+        $session = $this->registerTrialOwner('Trial Backup Shop', 'trial-backup@example.com');
+        $businessId = (int) $session['business']['id'];
+
+        $this->getJson('/api/data/status')->assertOk()
+            ->assertJsonPath('ok', true)
+            ->assertJsonPath('scope', 'current_business')
+            ->assertJsonStructure(['counts']);
+
+        $this->getJson('/api/data/export')->assertForbidden()
+            ->assertJsonPath('code', 'trial_feature_restricted')
+            ->assertJsonPath('capability', 'data_export')
+            ->assertJsonPath('subscription.is_valid', true)
+            ->assertJsonPath('subscription.access_type', 'trial')
+            ->assertJsonPath('subscription.is_trial', true)
+            ->assertJsonPath('subscription.capabilities.data_export', false);
+
+        $this->postJson('/api/data/restore-file', [])->assertForbidden()
+            ->assertJsonPath('code', 'trial_feature_restricted')
+            ->assertJsonPath('capability', 'data_restore')
+            ->assertJsonPath('subscription.access_type', 'trial')
+            ->assertJsonPath('subscription.capabilities.data_restore', false);
+
+        $staff = User::create([
+            'business_id' => $businessId,
+            'name' => 'Trial Staff',
+            'email' => 'trial-backup-staff@example.com',
+            'password' => Hash::make('password123'),
+            'role' => 'staff',
+            'is_active' => true,
+        ]);
+        $this->actingAs($staff, 'web');
+
+        $this->getJson('/api/data/export')->assertForbidden()
+            ->assertJsonPath('code', 'trial_feature_restricted')
+            ->assertJsonPath('capability', 'data_export');
+        $this->postJson('/api/data/restore-file')->assertForbidden()
+            ->assertJsonPath('code', 'trial_feature_restricted')
+            ->assertJsonPath('capability', 'data_restore');
+    }
+
+    public function test_expired_subscription_keeps_the_existing_402_contract_for_backup_routes(): void
+    {
+        $session = $this->registerTrialOwner('Expired Backup Shop', 'expired-backup@example.com');
+        DB::table('business_subscriptions')->where('business_id', $session['business']['id'])->update([
+            'starts_at' => now()->subMonths(2),
+            'ends_at' => now()->subMonth(),
+            'updated_at' => now(),
+        ]);
+
+        $this->getJson('/api/data/status')->assertStatus(402)
+            ->assertJsonPath('subscription.is_valid', false);
+        $this->getJson('/api/data/export')->assertStatus(402)
+            ->assertJsonPath('subscription.is_valid', false);
+        $this->postJson('/api/data/restore-file')->assertStatus(402)
+            ->assertJsonPath('subscription.is_valid', false);
+    }
+
+    public function test_missing_and_cancelled_subscriptions_keep_402_on_paid_only_backup_routes(): void
+    {
+        $missing = $this->registerTrialOwner('Missing Backup Shop', 'missing-backup@example.com');
+        DB::table('business_subscriptions')->where('business_id', $missing['business']['id'])->delete();
+        $this->assertPaidBackupRoutesRequireActiveSubscription('no_subscription');
+
+        $cancelled = $this->registerTrialOwner('Cancelled Backup Shop', 'cancelled-backup@example.com');
+        DB::table('business_subscriptions')->where('business_id', $cancelled['business']['id'])->update([
+            'status' => 'cancelled',
+            'starts_at' => now(),
+            'updated_at' => now(),
+        ]);
+        $this->assertPaidBackupRoutesRequireActiveSubscription('cancelled');
+    }
+
+    public function test_portable_trial_requests_cannot_bypass_capability_enforcement(): void
+    {
+        $response = $this->withHeaders([
+            'Origin' => 'https://www.mkposmyanmar.com',
+            'X-MKPOS-Auth' => 'token',
+            'X-MKPOS-Client' => 'android',
+        ])->postJson('/api/auth/register', [
+            'business_name' => 'Portable Trial Backup Shop',
+            'owner_name' => 'Portable Trial Owner',
+            'email' => 'portable-trial-backup@example.com',
+            'password' => 'password123',
+            'password_confirmation' => 'password123',
+        ])->assertCreated();
+
+        $this->withToken($response->json('access_token'))
+            ->getJson('/api/data/export')
+            ->assertForbidden()
+            ->assertJsonPath('code', 'trial_feature_restricted')
+            ->assertJsonPath('capability', 'data_export');
+        $this->postJson('/api/data/restore-file')
+            ->assertForbidden()
+            ->assertJsonPath('code', 'trial_feature_restricted')
+            ->assertJsonPath('capability', 'data_restore');
+    }
 
     public function test_owner_can_export_and_restore_only_their_operational_business_data(): void
     {
@@ -101,11 +202,11 @@ class DataBackupApiTest extends TestCase
 
     private function registerOwner(string $businessName, string $email): array
     {
-        $this->withHeader('Origin', 'http://localhost');
-        $session = $this->postJson('/api/auth/register', [
-            'business_name' => $businessName, 'owner_name' => 'Backup Owner', 'email' => $email,
-            'password' => 'password123', 'password_confirmation' => 'password123',
-        ])->assertCreated()->json();
+        $session = $this->registerTrialOwner($businessName, $email);
+        DB::table('business_subscriptions')
+            ->where('business_id', $session['business']['id'])
+            ->where('access_type', 'trial')
+            ->update(['status' => 'cancelled', 'updated_at' => now()]);
         $planId = DB::table('subscription_plans')->insertGetId([
             'name' => 'Backup Test Plan', 'slug' => 'backup-test-plan-'.uniqid(), 'price' => 1000,
             'currency' => 'Ks', 'duration_days' => 30, 'features' => '[]', 'is_active' => true,
@@ -118,5 +219,25 @@ class DataBackupApiTest extends TestCase
         ]);
 
         return $session;
+    }
+
+    private function registerTrialOwner(string $businessName, string $email): array
+    {
+        $this->withHeader('Origin', 'http://localhost');
+
+        return $this->postJson('/api/auth/register', [
+            'business_name' => $businessName, 'owner_name' => 'Backup Owner', 'email' => $email,
+            'password' => 'password123', 'password_confirmation' => 'password123',
+        ])->assertCreated()->json();
+    }
+
+    private function assertPaidBackupRoutesRequireActiveSubscription(string $reason): void
+    {
+        $this->getJson('/api/data/export')->assertStatus(402)
+            ->assertJsonPath('subscription.is_valid', false)
+            ->assertJsonPath('subscription.reason', $reason);
+        $this->postJson('/api/data/restore-file')->assertStatus(402)
+            ->assertJsonPath('subscription.is_valid', false)
+            ->assertJsonPath('subscription.reason', $reason);
     }
 }
