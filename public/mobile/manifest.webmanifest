@@ -1,0 +1,30 @@
+{
+  "id": "./",
+  "name": "MKPOS Business Management",
+  "short_name": "MKPOS",
+  "description": "Mobile point of sale and business management for MKPOS.",
+  "lang": "en",
+  "dir": "ltr",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "display_override": ["window-controls-overlay", "standalone", "minimal-ui"],
+  "orientation": "portrait-primary",
+  "background_color": "#eef3f0",
+  "theme_color": "#123f35",
+  "categories": ["business", "finance", "productivity"],
+  "icons": [
+    {
+      "src": "branding/mkicon.png",
+      "sizes": "1024x1024",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "branding/mktransparenticon.png",
+      "sizes": "1024x1024",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}
