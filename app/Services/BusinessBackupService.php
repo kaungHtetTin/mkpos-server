@@ -22,17 +22,17 @@ class BusinessBackupService
     private const TABLES = [
         'products', 'product_prices', 'price_type_rules', 'customers', 'suppliers',
         'sales', 'sale_items', 'purchases', 'purchase_items', 'customer_payments',
-        'expenses', 'settings', 'stock_movements',
+        'supplier_payments', 'expenses', 'settings', 'stock_movements',
     ];
 
     private const INSERT_ORDER = [
         'products', 'customers', 'suppliers', 'price_type_rules', 'settings',
         'product_prices', 'sales', 'sale_items', 'purchases', 'purchase_items',
-        'customer_payments', 'expenses', 'stock_movements',
+        'customer_payments', 'supplier_payments', 'expenses', 'stock_movements',
     ];
 
     private const DELETE_ORDER = [
-        'stock_movements', 'expenses', 'customer_payments', 'purchase_items',
+        'stock_movements', 'expenses', 'supplier_payments', 'customer_payments', 'purchase_items',
         'purchases', 'sale_items', 'sales', 'product_prices', 'price_type_rules',
         'products', 'customers', 'suppliers', 'settings',
     ];
@@ -128,6 +128,9 @@ class BusinessBackupService
         }
         $rowCount = 0;
         foreach (self::TABLES as $table) {
+            if ($table === 'supplier_payments' && ! isset($tables[$table])) {
+                $tables[$table] = [];
+            }
             if (! isset($tables[$table]) || ! is_array($tables[$table])) {
                 throw ValidationException::withMessages(['backup' => ["The backup is missing {$table} data."]]);
             }
@@ -147,9 +150,16 @@ class BusinessBackupService
             }
             foreach (self::INSERT_ORDER as $table) {
                 $columns = array_flip($this->backupColumns($table));
-                $rows = array_map(function ($row) use ($columns) {
+                $rows = array_map(function ($row) use ($columns, $table) {
                     if (! is_array($row)) {
                         throw ValidationException::withMessages(['backup' => ['The backup contains an invalid table row.']]);
+                    }
+
+                    if ($table === 'purchases' && ! array_key_exists('paid_amount', $row)) {
+                        $row['payment_type'] = 'cash';
+                        $row['payment_method'] = 'Cash';
+                        $row['paid_amount'] = (int) ($row['total_cost'] ?? 0);
+                        $row['credit_amount'] = 0;
                     }
 
                     return array_intersect_key($row, $columns);

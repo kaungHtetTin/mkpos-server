@@ -9,6 +9,7 @@ class TenantBuilder extends Builder
     private const TENANT_TABLES = [
         'products', 'product_prices', 'price_type_rules', 'customers', 'suppliers',
         'sales', 'sale_items', 'purchases', 'purchase_items', 'customer_payments',
+        'supplier_payments',
         'expenses', 'settings', 'stock_movements',
     ];
 

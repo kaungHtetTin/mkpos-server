@@ -74,15 +74,91 @@ class SaleController extends ApiController
             abort_if(! $sale, 404, 'Sale not found');
             abort_if($sale->status === 'voided', 400, 'Voided sale cannot be edited');
             $existingItems = DB::table('sale_items')->where('sale_id', $id)->get();
+            $productIdMap = $this->saleEditProductIdMap($existingItems, $data['items']);
+            foreach ($data['items'] as &$item) {
+                $item['product_id'] = $productIdMap[(int) $item['product_id']] ?? (int) $item['product_id'];
+            }
+            unset($item);
             $editableArchivedProductIds = $existingItems->pluck('product_id')->filter()->map(fn ($productId) => (int) $productId)->unique()->values()->all();
             foreach ($existingItems as $item) {
-                DB::table('products')->where('id', $item->product_id)->increment('stock', $item->quantity + $item->foc_quantity, ['updated_at' => now()]);
-                $this->insertMovement($item->product_id, $item->product_name, 'sale_edit_restore', (float) ($item->quantity + $item->foc_quantity), 'sale', $id, $sale->receipt_no);
+                $productId = $productIdMap[(int) $item->product_id] ?? (int) $item->product_id;
+                $productName = DB::table('products')->where('id', $productId)->value('name') ?: $item->product_name;
+                DB::table('products')->where('id', $productId)->increment('stock', $item->quantity + $item->foc_quantity, ['updated_at' => now()]);
+                $this->insertMovement($productId, $productName, 'sale_edit_restore', (float) ($item->quantity + $item->foc_quantity), 'sale', $id, $sale->receipt_no);
             }
             DB::table('sale_items')->where('sale_id', $id)->delete();
 
             return $this->save($id, $data, $sale->receipt_no, null, $editableArchivedProductIds);
         });
+    }
+
+    /**
+     * Resolve archived products to one unambiguous active replacement before a
+     * historical sale is recalculated. This keeps edits attached to the stock
+     * record shown in inventory after a product was archived and recreated.
+     */
+    private function saleEditProductIdMap($existingItems, array $submittedItems): array
+    {
+        $productIds = $existingItems->pluck('product_id')
+            ->merge(collect($submittedItems)->pluck('product_id'))
+            ->filter()->map(fn ($productId) => (int) $productId)->unique()->values();
+        $products = DB::table('products')->whereIn('id', $productIds)->get()->keyBy('id');
+        $map = [];
+
+        foreach ($productIds as $productId) {
+            $product = $products[$productId] ?? null;
+            if (! $product || $product->is_active) {
+                $map[$productId] = $productId;
+
+                continue;
+            }
+
+            $replacement = $this->activeReplacementForArchivedProduct($product);
+            $map[$productId] = $replacement?->id ?? $productId;
+        }
+
+        return $map;
+    }
+
+    private function activeReplacementForArchivedProduct(object $product): ?object
+    {
+        $uniqueCandidate = function ($query): ?object {
+            $candidates = $query->limit(2)->lockForUpdate()->get();
+
+            return $candidates->count() === 1 ? $candidates->first() : null;
+        };
+
+        $barcode = trim((string) $product->barcode);
+        if ($barcode !== '') {
+            $replacement = $uniqueCandidate(DB::table('products')->where('is_active', true)->where('barcode', $barcode));
+            if ($replacement) {
+                return $replacement;
+            }
+        }
+
+        $sku = trim((string) $product->sku);
+        if ($sku !== '') {
+            $replacement = $uniqueCandidate(DB::table('products')->where('is_active', true)->where('sku', $sku));
+            if ($replacement) {
+                return $replacement;
+            }
+        }
+
+        $query = DB::table('products')
+            ->where('is_active', true)
+            ->where('name', $product->name)
+            ->where('category', $product->category)
+            ->where('base_unit', $product->base_unit)
+            ->where('purchase_conversion_factor', $product->purchase_conversion_factor)
+            ->where('price', $product->price)
+            ->where('cost', $product->cost);
+        if ($product->purchase_unit === null) {
+            $query->whereNull('purchase_unit');
+        } else {
+            $query->where('purchase_unit', $product->purchase_unit);
+        }
+
+        return $uniqueCandidate($query);
     }
 
     public function show(int $id): array
@@ -113,17 +189,68 @@ class SaleController extends ApiController
     public function receipt(int $id): array
     {
         $sale = $this->show($id);
-        $settings = array_merge(['shop_name' => 'MKPOS Shop', 'currency' => 'Ks', 'receipt_paper_size' => '80mm'], DB::table('settings')->pluck('value', 'key')->all());
-        $lines = [$settings['shop_name'], 'Receipt: '.$sale['receipt_no']];
+        $settings = array_merge([
+            'shop_name' => 'MKPOS Shop', 'shop_title' => '', 'shop_address' => '', 'shop_phone' => '', 'currency' => 'Ks',
+            'receipt_footer' => '', 'receipt_show_customer' => '1', 'receipt_show_payment_method' => '1', 'receipt_show_price_type' => '1',
+            'receipt_paper_size' => '80mm', 'receipt_header_alignment' => 'center', 'receipt_margin_left' => '3', 'receipt_margin_right' => '3',
+            'receipt_header_font_size' => '11', 'receipt_body_font_size' => '8.2', 'receipt_line_height' => '1.45',
+        ], DB::table('settings')->pluck('value', 'key')->all());
+        $escape = fn ($value) => htmlspecialchars((string) $value, ENT_QUOTES, 'UTF-8');
+        $enabled = fn ($value) => ! in_array(strtolower(trim((string) $value)), ['', '0', 'false', 'off', 'no'], true);
+        $quantity = fn ($value) => rtrim(rtrim(number_format((float) $value, 3, '.', ''), '0'), '.');
+        $showCustomer = $enabled($settings['receipt_show_customer']) && ! empty($sale['customer_name']);
+        $showPayment = $enabled($settings['receipt_show_payment_method']);
+        $showPriceType = $enabled($settings['receipt_show_price_type']);
+        $lines = array_values(array_filter([
+            $settings['shop_name'], $settings['shop_title'], $settings['shop_address'], $settings['shop_phone'],
+            'Receipt: '.$sale['receipt_no'], 'Date: '.$sale['created_at'],
+            $showCustomer ? 'Customer: '.$sale['customer_name'] : null,
+            $showPayment ? 'Payment: '.$sale['payment_method'] : null,
+        ], fn ($line) => $line !== null && trim((string) $line) !== ''));
         $rows = '';
         foreach ($sale['items'] as $item) {
-            $lines[] = $item['product_name'].' x '.$item['quantity'].'  '.$item['line_total'];
-            $rows .= '<tr><td>'.htmlspecialchars($item['product_name']).' x '.$item['quantity'].'</td><td style="text-align:right">'.number_format($item['line_total']).'</td></tr>';
+            $itemQuantity = $quantity($item['quantity']);
+            $lines[] = $item['product_name'].' x '.$itemQuantity.'  '.number_format($item['line_total']).' '.$settings['currency'];
+            if ($showPriceType) {
+                $lines[] = '  Price type: '.($item['price_type'] ?: 'Retail');
+            }
+            if ((float) $item['foc_quantity'] > 0) {
+                $lines[] = '  FOC: '.$quantity($item['foc_quantity']);
+            }
+            $rows .= '<div class="receipt-item"><div class="receipt-item-name">'.$escape($item['product_name']).'</div>'
+                .($showPriceType ? '<div class="receipt-row"><span>Price type</span><strong>'.$escape($item['price_type'] ?: 'Retail').'</strong></div>' : '')
+                .'<div class="receipt-row receipt-item-amount"><span>'.$escape($itemQuantity).' × '.number_format($item['unit_price']).'</span><strong>'.number_format($item['line_total']).' '.$escape($settings['currency']).'</strong></div>'
+                .((float) $item['foc_quantity'] > 0 ? '<div class="receipt-foc">FOC: '.$escape($quantity($item['foc_quantity'])).'</div>' : '').'</div>';
+        }
+        if ((int) $sale['discount'] > 0) {
+            $lines[] = 'Discount: -'.number_format($sale['discount']).' '.$settings['currency'];
         }
         $lines[] = 'Total: '.number_format($sale['total']).' '.$settings['currency'];
-        $html = '<div class="receipt"><h2>'.htmlspecialchars($settings['shop_name']).'</h2><p>'.htmlspecialchars($sale['receipt_no']).'</p><table style="width:100%">'.$rows.'</table><hr><strong>Total: '.number_format($sale['total']).' '.htmlspecialchars($settings['currency']).'</strong></div>';
+        if (trim((string) $settings['receipt_footer']) !== '') {
+            $lines[] = $settings['receipt_footer'];
+        }
+        $html = '<div class="receipt-document"><header class="receipt-shop-header"><div class="shop-name">'.$escape($settings['shop_name']).'</div>'
+            .(trim((string) $settings['shop_title']) !== '' ? '<div class="shop-title">'.$escape($settings['shop_title']).'</div>' : '')
+            .(trim((string) $settings['shop_address']) !== '' ? '<div class="shop-address">'.$escape($settings['shop_address']).'</div>' : '')
+            .(trim((string) $settings['shop_phone']) !== '' ? '<div class="shop-phone">'.$escape($settings['shop_phone']).'</div>' : '').'</header>'
+            .'<div class="receipt-rule"></div><div class="receipt-meta"><div class="receipt-row"><span>Receipt</span><strong>'.$escape($sale['receipt_no']).'</strong></div>'
+            .'<div class="receipt-row"><span>Date</span><strong>'.$escape($sale['created_at']).'</strong></div>'
+            .($showCustomer ? '<div class="receipt-row"><span>Customer</span><strong>'.$escape($sale['customer_name']).'</strong></div>' : '')
+            .($showPayment ? '<div class="receipt-row"><span>Payment</span><strong>'.$escape($sale['payment_method']).'</strong></div>' : '').'</div>'
+            .'<div class="receipt-rule"></div><div class="receipt-items">'.$rows.'</div><div class="receipt-rule"></div><div class="receipt-totals">'
+            .'<div class="receipt-row"><span>Subtotal</span><strong>'.number_format($sale['subtotal']).' '.$escape($settings['currency']).'</strong></div>'
+            .((int) $sale['discount'] > 0 ? '<div class="receipt-row"><span>Discount</span><strong>-'.number_format($sale['discount']).' '.$escape($settings['currency']).'</strong></div>' : '')
+            .'<div class="receipt-row receipt-total"><span>Total</span><strong>'.number_format($sale['total']).' '.$escape($settings['currency']).'</strong></div>'
+            .'<div class="receipt-row"><span>Paid</span><strong>'.number_format($sale['paid_amount']).' '.$escape($settings['currency']).'</strong></div>'
+            .((int) $sale['credit_amount'] > 0 ? '<div class="receipt-row"><span>Credit</span><strong>'.number_format($sale['credit_amount']).' '.$escape($settings['currency']).'</strong></div>' : '').'</div>'
+            .(trim((string) $settings['receipt_footer']) !== '' ? '<div class="receipt-rule"></div><div class="receipt-footer">'.$escape($settings['receipt_footer']).'</div>' : '').'</div>';
 
-        return ['sale' => $sale, 'text' => implode("\n", $lines), 'html' => $html, 'paper_size' => $settings['receipt_paper_size'], 'layout' => ['paper_size' => $settings['receipt_paper_size']]];
+        $layout = ['paper_size' => $settings['receipt_paper_size'], 'header_alignment' => $settings['receipt_header_alignment'],
+            'margin_left' => (float) $settings['receipt_margin_left'], 'margin_right' => (float) $settings['receipt_margin_right'],
+            'header_font_size' => (float) $settings['receipt_header_font_size'], 'body_font_size' => (float) $settings['receipt_body_font_size'],
+            'line_height' => (float) $settings['receipt_line_height']];
+
+        return ['sale' => $sale, 'text' => implode("\n", $lines), 'html' => $html, 'paper_size' => $settings['receipt_paper_size'], 'layout' => $layout];
     }
 
     public function print(int $id): array

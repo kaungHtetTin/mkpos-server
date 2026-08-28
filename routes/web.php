@@ -1,5 +1,7 @@
 <?php
 
+use App\Http\Controllers\DownloadController;
+use App\Http\Controllers\LandingController;
 use Illuminate\Support\Facades\Route;
 
 /*
@@ -12,6 +14,11 @@ use Illuminate\Support\Facades\Route;
 | contains the "web" middleware group. Now create something great!
 |
 */
+
+Route::get('/', [LandingController::class, 'index'])->name('landing');
+Route::get('/downloads/{platform}', [DownloadController::class, 'show'])
+    ->whereIn('platform', ['windows', 'android'])
+    ->name('downloads.show');
 
 Route::get('/office/{path?}', function () {
     $index = public_path('office/index.html');

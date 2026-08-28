@@ -78,7 +78,72 @@ class BusinessSubscriptionController extends Controller
         return [
             'business' => (array) $business,
             'billing' => $this->subscriptions->status($businessId),
+            'business_summary' => $this->businessSummary($businessId),
             'billing_history' => $history,
+        ];
+    }
+
+    private function businessSummary(int $businessId): array
+    {
+        $products = DB::table('products')->where('business_id', $businessId)->where('is_active', true);
+        $productSummary = (clone $products)->selectRaw(
+            'COUNT(*) as product_count, COALESCE(SUM(stock), 0) as stock_units, COALESCE(SUM(stock * cost), 0) as inventory_cost'
+        )->first();
+
+        $sales = DB::table('sales')->where('business_id', $businessId)->where('status', 'completed');
+        $saleSummary = (clone $sales)->selectRaw(
+            'COUNT(*) as sale_count, COALESCE(SUM(total), 0) as sales_total, COALESCE(SUM(credit_amount), 0) as credit_total, MAX(created_at) as latest_at'
+        )->first();
+
+        $purchases = DB::table('purchases')->where('business_id', $businessId)->where('status', 'completed');
+        $purchaseSummary = (clone $purchases)->selectRaw(
+            'COUNT(*) as purchase_count, COALESCE(SUM(total_cost), 0) as purchase_total, MAX(created_at) as latest_at'
+        )->first();
+
+        $payments = DB::table('customer_payments')->where('business_id', $businessId)->where('status', 'completed');
+        $paymentSummary = (clone $payments)->selectRaw(
+            "COUNT(*) as payment_count, COALESCE(SUM(CASE WHEN direction = 'customer_to_shop' THEN amount ELSE -amount END), 0) as net_collected, MAX(created_at) as latest_at"
+        )->first();
+
+        $supplierPayments = DB::table('supplier_payments')->where('business_id', $businessId)->where('status', 'completed');
+        $supplierPaymentSummary = (clone $supplierPayments)->selectRaw(
+            "COUNT(*) as payment_count, COALESCE(SUM(CASE WHEN direction = 'shop_to_supplier' THEN amount ELSE -amount END), 0) as settled_total, MAX(created_at) as latest_at"
+        )->first();
+
+        $expenses = DB::table('expenses')->where('business_id', $businessId)->where('status', 'completed');
+        $expenseSummary = (clone $expenses)->selectRaw(
+            'COUNT(*) as expense_count, COALESCE(SUM(amount), 0) as expense_total, MAX(created_at) as latest_at'
+        )->first();
+
+        $lastActivity = collect([
+            $saleSummary->latest_at,
+            $purchaseSummary->latest_at,
+            $paymentSummary->latest_at,
+            $supplierPaymentSummary->latest_at,
+            $expenseSummary->latest_at,
+        ])->filter()->map(fn ($value) => Carbon::parse($value))->sortDesc()->first();
+
+        return [
+            'customer_count' => DB::table('customers')->where('business_id', $businessId)->where('is_active', true)->count(),
+            'product_count' => (int) $productSummary->product_count,
+            'supplier_count' => DB::table('suppliers')->where('business_id', $businessId)->where('is_active', true)->count(),
+            'staff_count' => DB::table('users')->where('business_id', $businessId)->where('role', '<>', 'owner')->where('is_active', true)->count(),
+            'stock_units' => (float) $productSummary->stock_units,
+            'inventory_cost' => (int) round((float) $productSummary->inventory_cost),
+            'low_stock_count' => (clone $products)->where('stock', '>', 0)->where('low_stock_threshold', '>', 0)->whereColumn('stock', '<=', 'low_stock_threshold')->count(),
+            'out_of_stock_count' => (clone $products)->where('stock', '<=', 0)->count(),
+            'transaction_count' => (int) $saleSummary->sale_count + (int) $purchaseSummary->purchase_count + (int) $paymentSummary->payment_count + (int) $supplierPaymentSummary->payment_count,
+            'sale_count' => (int) $saleSummary->sale_count,
+            'sales_total' => (int) $saleSummary->sales_total,
+            'purchase_count' => (int) $purchaseSummary->purchase_count,
+            'purchase_total' => (int) $purchaseSummary->purchase_total,
+            'supplier_payment_count' => (int) $supplierPaymentSummary->payment_count,
+            'supplier_payable' => max(0, (int) DB::table('purchases')->where('business_id', $businessId)->where('status', 'completed')->sum('credit_amount') - (int) $supplierPaymentSummary->settled_total),
+            'customer_payment_count' => (int) $paymentSummary->payment_count,
+            'outstanding_credit' => max(0, (int) $saleSummary->credit_total - (int) $paymentSummary->net_collected),
+            'expense_count' => (int) $expenseSummary->expense_count,
+            'expense_total' => (int) $expenseSummary->expense_total,
+            'last_activity_at' => $lastActivity?->utc()->toISOString(),
         ];
     }
 
@@ -179,6 +244,69 @@ class BusinessSubscriptionController extends Controller
         });
 
         return $this->subscriptions->status($businessId);
+    }
+
+    public function extendTrial(Request $request, int $businessId): array
+    {
+        $data = $request->validate([
+            'days' => ['required', 'integer', 'between:1,365'],
+            'note' => ['nullable', 'string', 'max:500'],
+        ]);
+
+        $extension = DB::transaction(function () use ($businessId, $data) {
+            abort_if(! DB::table('businesses')->where('id', $businessId)->lockForUpdate()->first(['id']), 404, 'Business not found');
+
+            $entitlement = $this->subscriptions->status($businessId);
+            abort_unless(
+                $entitlement['access_type'] === 'trial' && $entitlement['subscription'],
+                409,
+                'Only a business currently on trial access can receive a trial extension.'
+            );
+
+            $trial = DB::table('business_subscriptions')
+                ->where('id', (int) $entitlement['subscription']['id'])
+                ->where('business_id', $businessId)
+                ->where('access_type', 'trial')
+                ->lockForUpdate()
+                ->first();
+            abort_if(! $trial, 409, 'The current trial record could not be extended.');
+
+            $now = now();
+            $days = (int) $data['days'];
+            $previousEnd = $trial->ends_at ? Carbon::parse($trial->ends_at) : null;
+            $base = $previousEnd && $previousEnd->isFuture() ? $previousEnd->copy() : $now->copy();
+            $newEnd = $base->addDays($days);
+            $admin = Auth::guard('office')->user();
+            $audit = sprintf(
+                'Trial extended %d day%s by %s on %s%s.',
+                $days,
+                $days === 1 ? '' : 's',
+                $admin?->name ?: 'Office admin',
+                $now->copy()->utc()->toDateTimeString().' UTC',
+                trim((string) ($data['note'] ?? '')) !== '' ? ': '.trim((string) $data['note']) : ''
+            );
+            $note = trim(implode("\n", array_filter([trim((string) $trial->note), $audit])));
+
+            DB::table('business_subscriptions')->where('id', $trial->id)->update([
+                'status' => 'active',
+                'ends_at' => $newEnd,
+                'note' => $note,
+                'updated_at' => $now,
+            ]);
+
+            return [
+                'days_added' => $days,
+                'previous_ends_at' => $previousEnd?->copy()->utc()->toISOString(),
+                'ends_at' => $newEnd->copy()->utc()->toISOString(),
+                'reactivated' => ! $previousEnd || $previousEnd->lessThanOrEqualTo($now),
+            ];
+        });
+
+        return [
+            'ok' => true,
+            'extension' => $extension,
+            'subscription' => $this->subscriptions->status($businessId),
+        ];
     }
 
     public function cancel(int $businessId): array

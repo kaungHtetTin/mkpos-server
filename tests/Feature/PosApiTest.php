@@ -12,7 +12,7 @@ class PosApiTest extends TestCase
 
     public function test_product_purchase_sale_and_report_flow(): void
     {
-        $this->registerOwner('Flow Shop', 'flow@example.com');
+        $session = $this->registerOwner('Flow Shop', 'flow@example.com');
 
         $product = $this->postJson('/api/products', [
             'name' => 'Migration Test Product', 'sku' => 'MIG-001', 'barcode' => '',
@@ -40,9 +40,23 @@ class PosApiTest extends TestCase
             ]],
         ])->assertOk()->assertJsonPath('credit_amount', 2000)->json();
 
-        $this->getJson('/api/sales/'.$sale['id'].'/receipt')->assertOk()->assertJsonPath('sale.receipt_no', $sale['receipt_no']);
+        foreach ([
+            'shop_name' => 'Flow Shop', 'shop_title' => 'Everyday essentials', 'shop_address' => '12 Market Road',
+            'shop_phone' => '09 123 456 789', 'receipt_footer' => 'Thank you for shopping', 'receipt_header_alignment' => 'right',
+        ] as $key => $value) {
+            DB::table('settings')->updateOrInsert(['business_id' => $session['business']['id'], 'key' => $key], ['value' => $value]);
+        }
+        $receipt = $this->getJson('/api/sales/'.$sale['id'].'/receipt')->assertOk()->assertJsonPath('sale.receipt_no', $sale['receipt_no'])
+            ->assertJsonPath('layout.header_alignment', 'right')->json();
+        $this->assertStringContainsString('Everyday essentials', $receipt['html']);
+        $this->assertStringContainsString('12 Market Road', $receipt['html']);
+        $this->assertStringContainsString('09 123 456 789', $receipt['html']);
+        $this->assertStringContainsString('Thank you for shopping', $receipt['html']);
         $this->getJson('/api/products?with_total=true')->assertOk()->assertJsonStructure(['items', 'total', 'limit', 'offset']);
-        $this->getJson('/api/reports/summary?all_time=true')->assertOk()->assertJsonStructure(['sales_total', 'expense_total', 'top_products', 'current_accounts']);
+        $this->getJson('/api/reports/summary?all_time=true')->assertOk()->assertJsonStructure([
+            'sales_total', 'expense_total', 'top_products', 'current_accounts',
+            'inventory_valuation' => ['as_of', 'product_count', 'stock_units', 'investment_value', 'potential_sales_value', 'potential_gross_profit'],
+        ]);
     }
 
     public function test_purchase_unit_is_converted_to_base_stock_without_changing_sale_prices(): void
@@ -234,10 +248,89 @@ class PosApiTest extends TestCase
         ]);
     }
 
+    public function test_sale_update_moves_stock_delta_to_the_active_replacement_product(): void
+    {
+        $this->registerOwner('Replacement Stock Shop', 'replacement-stock@example.com');
+
+        $archived = $this->postJson('/api/products', [
+            'name' => 'Valley', 'sku' => '', 'barcode' => '', 'category' => 'Drink',
+            'base_unit' => 'Bottle', 'purchase_unit' => 'Carton', 'purchase_conversion_factor' => 6,
+            'price' => 600, 'cost' => 500, 'stock' => 100, 'low_stock_threshold' => 0,
+            'prices' => [['name' => 'Retail', 'price' => 600]],
+        ])->assertOk()->json();
+        $sale = $this->postJson('/api/sales', [
+            'payment_type' => 'cash', 'payment_method' => 'Cash', 'paid_amount' => 12000,
+            'discount' => 0, 'items' => [[
+                'product_id' => $archived['id'], 'price_type' => 'Retail', 'quantity' => 20,
+                'foc_quantity' => 0, 'unit_price' => 600,
+            ]],
+        ])->assertOk()->json();
+        $this->deleteJson('/api/products/'.$archived['id'])->assertOk();
+
+        $active = $this->postJson('/api/products', [
+            'name' => 'Valley', 'sku' => '', 'barcode' => '', 'category' => 'Drink',
+            'base_unit' => 'Bottle', 'purchase_unit' => 'Carton', 'purchase_conversion_factor' => 6,
+            'price' => 600, 'cost' => 500, 'stock' => 731, 'low_stock_threshold' => 0,
+            'prices' => [['name' => 'Retail', 'price' => 600]],
+        ])->assertOk()->json();
+
+        $this->putJson('/api/sales/'.$sale['id'], [
+            'payment_type' => 'cash', 'payment_method' => 'Cash', 'paid_amount' => 30600,
+            'discount' => 0, 'admin_pin' => '', 'items' => [[
+                'product_id' => $archived['id'], 'price_type' => 'Retail', 'quantity' => 51,
+                'foc_quantity' => 0, 'unit_price' => 600,
+            ]],
+        ])->assertOk()
+            ->assertJsonPath('items.0.product_id', $active['id'])
+            ->assertJsonPath('items.0.quantity', 51);
+
+        $this->assertDatabaseHas('products', ['id' => $active['id'], 'stock' => 700]);
+        $this->assertDatabaseHas('products', ['id' => $archived['id'], 'stock' => 80]);
+        $this->assertDatabaseHas('stock_movements', [
+            'product_id' => $active['id'], 'movement_type' => 'sale_edit_restore',
+            'reference_type' => 'sale', 'reference_id' => $sale['id'], 'quantity_change' => 20,
+        ]);
+    }
+
     public function test_pos_api_requires_authentication(): void
     {
         $this->getJson('/api/products')->assertUnauthorized();
         $this->getJson('/api/app-config')->assertUnauthorized();
+    }
+
+    public function test_report_values_current_positive_stock_at_latest_cost_and_primary_selling_price(): void
+    {
+        $this->registerOwner('Valuation Shop', 'valuation@example.com');
+
+        $first = $this->postJson('/api/products', [
+            'name' => 'Valued Product', 'sku' => 'VALUE-1', 'barcode' => '', 'category' => 'Tests',
+            'price' => 1500, 'cost' => 800, 'stock' => 2.5, 'low_stock_threshold' => 1,
+            'prices' => [['name' => 'Retail', 'price' => 1500]],
+        ])->assertOk()->json();
+        $this->postJson('/api/products', [
+            'name' => 'Negative Product', 'sku' => 'VALUE-2', 'barcode' => '', 'category' => 'Tests',
+            'price' => 9000, 'cost' => 7000, 'stock' => 0, 'low_stock_threshold' => 1,
+            'prices' => [['name' => 'Retail', 'price' => 9000]],
+        ])->assertOk();
+        DB::table('products')->where('sku', 'VALUE-2')->update(['stock' => -2]);
+        $archived = $this->postJson('/api/products', [
+            'name' => 'Archived Product', 'sku' => 'VALUE-3', 'barcode' => '', 'category' => 'Tests',
+            'price' => 5000, 'cost' => 4000, 'stock' => 10, 'low_stock_threshold' => 1,
+            'prices' => [['name' => 'Retail', 'price' => 5000]],
+        ])->assertOk()->json();
+        $this->deleteJson('/api/products/'.$archived['id'])->assertOk();
+
+        $this->postJson('/api/purchases', [
+            'supplier_name' => 'Valuation Supplier',
+            'items' => [['product_id' => $first['id'], 'quantity' => 2, 'foc_quantity' => 0, 'unit_cost' => 2000]],
+        ])->assertOk();
+
+        $this->getJson('/api/reports/summary?start=2000-01-01&end=2000-01-02')->assertOk()
+            ->assertJsonPath('inventory_valuation.product_count', 1)
+            ->assertJsonPath('inventory_valuation.stock_units', 4.5)
+            ->assertJsonPath('inventory_valuation.investment_value', 9000)
+            ->assertJsonPath('inventory_valuation.potential_sales_value', 6750)
+            ->assertJsonPath('inventory_valuation.potential_gross_profit', -2250);
     }
 
     public function test_customer_payment_can_be_loaded_for_a_mobile_edit_deep_link(): void
@@ -268,6 +361,42 @@ class PosApiTest extends TestCase
             ->assertJsonPath('id', $expense['id'])
             ->assertJsonPath('title', 'Shop rent')
             ->assertJsonPath('amount', 50000);
+    }
+
+    public function test_admin_pin_protection_is_only_active_for_a_non_empty_configured_pin(): void
+    {
+        $session = $this->registerOwner('PIN Workflow Shop', 'pin-workflow@example.com');
+        $businessId = $session['business']['id'];
+
+        DB::table('settings')->updateOrInsert(
+            ['business_id' => $businessId, 'key' => 'admin_pin_hash'],
+            ['value' => ''],
+        );
+        $this->getJson('/api/settings')->assertOk()->assertJsonPath('admin_pin_set', '0');
+
+        $unprotectedExpense = $this->postJson('/api/expenses', [
+            'expense_date' => '2026-08-08', 'title' => 'Unprotected expense',
+            'amount' => 1000, 'payment_method' => 'Cash',
+        ])->assertOk()->json();
+        $this->deleteJson('/api/expenses/'.$unprotectedExpense['id'])
+            ->assertOk()
+            ->assertJsonPath('deleted', true);
+
+        DB::table('settings')->where([
+            'business_id' => $businessId,
+            'key' => 'admin_pin_hash',
+        ])->update(['value' => password_hash('2468', PASSWORD_DEFAULT)]);
+        $this->getJson('/api/settings')->assertOk()->assertJsonPath('admin_pin_set', '1');
+
+        $protectedExpense = $this->postJson('/api/expenses', [
+            'expense_date' => '2026-08-08', 'title' => 'Protected expense',
+            'amount' => 2000, 'payment_method' => 'Cash',
+        ])->assertOk()->json();
+        $this->deleteJson('/api/expenses/'.$protectedExpense['id'])->assertForbidden();
+        $this->deleteJson('/api/expenses/'.$protectedExpense['id'], ['admin_pin' => '0000'])->assertForbidden();
+        $this->deleteJson('/api/expenses/'.$protectedExpense['id'], ['admin_pin' => '2468'])
+            ->assertOk()
+            ->assertJsonPath('deleted', true);
     }
 
     public function test_each_business_has_an_isolated_workspace(): void

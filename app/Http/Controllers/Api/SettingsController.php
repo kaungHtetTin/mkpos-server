@@ -19,7 +19,8 @@ class SettingsController extends ApiController
     public function index(): array
     {
         $settings = array_merge(self::DEFAULTS, DB::table('settings')->where('key', '<>', 'admin_pin_hash')->pluck('value', 'key')->all());
-        $settings['admin_pin_set'] = DB::table('settings')->where('key', 'admin_pin_hash')->exists() ? '1' : '0';
+        $pinHash = (string) (DB::table('settings')->where('key', 'admin_pin_hash')->value('value') ?? '');
+        $settings['admin_pin_set'] = trim($pinHash) !== '' ? '1' : '0';
 
         return $settings;
     }

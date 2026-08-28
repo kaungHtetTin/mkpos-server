@@ -14,6 +14,7 @@ use App\Http\Controllers\Api\SettingsController;
 use App\Http\Controllers\Api\StaffController;
 use App\Http\Controllers\Api\SubscriptionController;
 use App\Http\Controllers\Api\SupplierController;
+use App\Http\Controllers\Office\AppReleaseController;
 use App\Http\Controllers\Office\BusinessSubscriptionController;
 use App\Http\Controllers\Office\FinancialReportController;
 use App\Http\Controllers\Office\OfficeAuthController;
@@ -101,8 +102,16 @@ Route::middleware(['auth:sanctum', 'business'])->group(function () {
         Route::middleware('module:suppliers')->group(function () {
             Route::post('/suppliers', [SupplierController::class, 'store']);
             Route::get('/suppliers/{id}', [SupplierController::class, 'show']);
+            Route::get('/suppliers/{id}/statement', [SupplierController::class, 'statement']);
+            Route::post('/suppliers/{id}/payments', [SupplierController::class, 'storePayment']);
             Route::put('/suppliers/{id}', [SupplierController::class, 'update']);
             Route::delete('/suppliers/{id}', [SupplierController::class, 'destroy']);
+        });
+        Route::middleware('module:suppliers,transactions')->group(function () {
+            Route::get('/supplier-payments', [SupplierController::class, 'allPayments']);
+            Route::get('/supplier-payments/{id}', [SupplierController::class, 'showPayment']);
+            Route::put('/supplier-payments/{id}', [SupplierController::class, 'updatePayment']);
+            Route::delete('/supplier-payments/{id}', [SupplierController::class, 'destroyPayment']);
         });
 
         Route::middleware('module:sell,transactions')->group(function () {
@@ -176,6 +185,10 @@ Route::middleware('office.auth')->prefix('office')->group(function () {
     Route::get('/auth/me', [OfficeAuthController::class, 'me']);
     Route::put('/auth/profile', [OfficeAuthController::class, 'updateProfile'])->middleware('throttle:10,1');
     Route::post('/auth/logout', [OfficeAuthController::class, 'logout']);
+    Route::get('/app-releases', [AppReleaseController::class, 'index']);
+    Route::put('/app-releases/{platform}', [AppReleaseController::class, 'store'])
+        ->whereIn('platform', ['windows', 'android'])
+        ->middleware('throttle:12,1');
     Route::get('/plans', [PlanController::class, 'index']);
     Route::post('/plans', [PlanController::class, 'store']);
     Route::put('/plans/{id}', [PlanController::class, 'update']);
@@ -191,6 +204,7 @@ Route::middleware('office.auth')->prefix('office')->group(function () {
     Route::get('/financial-report', [FinancialReportController::class, 'index']);
     Route::put('/businesses/{businessId}/subscription', [BusinessSubscriptionController::class, 'assign']);
     Route::post('/businesses/{businessId}/subscription/renew', [BusinessSubscriptionController::class, 'renew']);
+    Route::post('/businesses/{businessId}/subscription/trial/extend', [BusinessSubscriptionController::class, 'extendTrial']);
     Route::delete('/businesses/{businessId}/subscription', [BusinessSubscriptionController::class, 'cancel']);
     Route::post('/subscription-requests/{requestId}/approve', [BusinessSubscriptionController::class, 'approve']);
     Route::post('/subscription-requests/{requestId}/reject', [BusinessSubscriptionController::class, 'reject']);

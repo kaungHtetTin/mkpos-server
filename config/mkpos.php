@@ -5,6 +5,7 @@ return [
     'theme_name' => 'mkpos-green',
     'receipt_template_name' => 'standard-80mm',
     'report_template_name' => 'standard',
+    'release_upload_max_bytes' => max(1, (int) env('MKPOS_RELEASE_UPLOAD_MAX_MB', 512)) * 1024 * 1024,
     'default_payment_methods' => ['Cash', 'Wallet Pay', 'Banking Pay', 'KPay', 'Wave Pay', 'Credit'],
     'trial' => [
         'enabled' => filter_var(env('TRIAL_ENABLED', env('MKPOS_TRIAL_ENABLED', true)), FILTER_VALIDATE_BOOL),

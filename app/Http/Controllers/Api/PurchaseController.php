@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Validation\ValidationException;
 
 class PurchaseController extends ApiController
 {
@@ -43,6 +44,9 @@ class PurchaseController extends ApiController
         $row = DB::table('purchases')->where('id', $id)->first();
         abort_if(! $row, 404, 'Purchase not found');
         $purchase = (array) $row;
+        foreach (['total_cost', 'paid_amount', 'credit_amount'] as $field) {
+            $purchase[$field] = (int) $purchase[$field];
+        }
         $purchase['items'] = DB::table('purchase_items')->where('purchase_id', $id)->orderBy('id')->get()->map(function ($row) {
             $item = (array) $row;
             foreach (['quantity', 'foc_quantity', 'conversion_factor', 'base_quantity', 'base_foc_quantity', 'effective_unit_cost'] as $field) {
@@ -104,6 +108,7 @@ class PurchaseController extends ApiController
     private function validated(Request $request): array
     {
         return $request->validate(['supplier_id' => ['nullable', 'integer', 'exists:suppliers,id'], 'supplier_name' => ['nullable', 'string', 'max:255'], 'note' => ['nullable', 'string'],
+            'payment_method' => ['nullable', 'string', 'max:255'], 'paid_amount' => ['nullable', 'integer', 'min:0'],
             'items' => ['required', 'array', 'min:1'], 'items.*.id' => ['nullable', 'integer'], 'items.*.product_id' => ['required', 'integer', 'exists:products,id'], 'items.*.unit_name' => ['nullable', 'string', 'max:50'], 'items.*.quantity' => ['required', 'numeric', 'gt:0'],
             'items.*.foc_quantity' => ['nullable', 'numeric', 'min:0'], 'items.*.unit_cost' => ['required', 'integer', 'min:0']]);
     }
@@ -119,7 +124,30 @@ class PurchaseController extends ApiController
             $supplierName = $supplier->name;
         }
         $total = (int) round(collect($data['items'])->sum(fn ($item) => $item['quantity'] * $item['unit_cost']));
-        $values = ['supplier_id' => $data['supplier_id'] ?? null, 'supplier_name' => $supplierName, 'note' => $data['note'] ?? '', 'total_cost' => $total, 'status' => 'completed', 'updated_at' => now()];
+        $existingPaid = $id ? DB::table('purchases')->where('id', $id)->value('paid_amount') : null;
+        $paidAmount = array_key_exists('paid_amount', $data)
+            ? (int) $data['paid_amount']
+            : ($id ? min((int) $existingPaid, $total) : $total);
+        if ($paidAmount > $total) {
+            throw ValidationException::withMessages(['paid_amount' => ['Paid amount cannot be greater than the purchase total.']]);
+        }
+        $creditAmount = $total - $paidAmount;
+        if ($creditAmount > 0 && empty($data['supplier_id'])) {
+            throw ValidationException::withMessages(['supplier_id' => ['Select a saved supplier before recording purchase credit.']]);
+        }
+        $paymentMethod = trim((string) ($data['payment_method'] ?? 'Cash')) ?: 'Cash';
+        $values = [
+            'supplier_id' => $data['supplier_id'] ?? null,
+            'supplier_name' => $supplierName,
+            'note' => $data['note'] ?? '',
+            'total_cost' => $total,
+            'payment_type' => $creditAmount > 0 ? 'credit' : 'cash',
+            'payment_method' => $paidAmount === 0 && $creditAmount > 0 ? 'Credit' : $paymentMethod,
+            'paid_amount' => $paidAmount,
+            'credit_amount' => $creditAmount,
+            'status' => 'completed',
+            'updated_at' => now(),
+        ];
         if ($id) {
             DB::table('purchases')->where('id', $id)->update($values);
         } else {
