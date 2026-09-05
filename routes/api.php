@@ -20,6 +20,7 @@ use App\Http\Controllers\Office\FinancialReportController;
 use App\Http\Controllers\Office\OfficeAuthController;
 use App\Http\Controllers\Office\PaymentMethodController;
 use App\Http\Controllers\Office\PlanController;
+use App\Http\Controllers\Office\TutorialController;
 use App\Services\AccessService;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Route;
@@ -182,6 +183,11 @@ Route::middleware(['auth:sanctum', 'business'])->group(function () {
 
 Route::post('/office/auth/login', [OfficeAuthController::class, 'login'])->middleware('throttle:10,1');
 Route::middleware('office.auth')->prefix('office')->group(function () {
+    Route::get('/tutorials', [TutorialController::class, 'index']);
+    Route::post('/tutorials', [TutorialController::class, 'store']);
+    Route::put('/tutorials/{tutorial}', [TutorialController::class, 'update'])->whereNumber('tutorial');
+    Route::delete('/tutorials/{tutorial}', [TutorialController::class, 'destroy'])->whereNumber('tutorial');
+    Route::get('/tutorials/{tutorial}/thumbnail', [TutorialController::class, 'thumbnail'])->whereNumber('tutorial');
     Route::get('/auth/me', [OfficeAuthController::class, 'me']);
     Route::put('/auth/profile', [OfficeAuthController::class, 'updateProfile'])->middleware('throttle:10,1');
     Route::post('/auth/logout', [OfficeAuthController::class, 'logout']);
@@ -202,6 +208,7 @@ Route::middleware('office.auth')->prefix('office')->group(function () {
     Route::put('/businesses/{businessId}/owner-password', [BusinessSubscriptionController::class, 'resetOwnerPassword'])->middleware('throttle:10,1');
     Route::get('/subscription-requests', [BusinessSubscriptionController::class, 'requests']);
     Route::get('/financial-report', [FinancialReportController::class, 'index']);
+    Route::delete('/financial-records/{paymentId}', [FinancialReportController::class, 'destroy'])->whereNumber('paymentId');
     Route::put('/businesses/{businessId}/subscription', [BusinessSubscriptionController::class, 'assign']);
     Route::post('/businesses/{businessId}/subscription/renew', [BusinessSubscriptionController::class, 'renew']);
     Route::post('/businesses/{businessId}/subscription/trial/extend', [BusinessSubscriptionController::class, 'extendTrial']);

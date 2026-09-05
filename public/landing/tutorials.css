@@ -1,0 +1,19 @@
+.tutorial-section-heading { display:flex; align-items:center; justify-content:space-between; gap:16px; margin-bottom:16px; }
+.tutorial-section-heading h1,.tutorial-section-heading h2 { margin:4px 0 8px; }
+.tutorial-section-heading p { margin:0; }
+.tutorial-section-heading > a { flex-shrink:0; }
+.tutorial-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:14px; }
+.tutorial-card { min-width:0; background:#fff; border:1px solid #dbe5e0; border-radius:10px; overflow:hidden; }
+.tutorial-thumbnail { position:relative; display:block; aspect-ratio:16/9; background:#e9f1ed; overflow:hidden; }
+.tutorial-thumbnail img { display:block; width:100%; height:100%; object-fit:cover; }
+.tutorial-thumbnail span { position:absolute; bottom:8px; left:8px; padding:4px 8px; border-radius:4px; color:#fff; background:#103f33eb; font-size:12px; font-weight:700; }
+.tutorial-copy { padding:12px; overflow-wrap:anywhere; }
+.tutorial-copy h3 { font-size:16px; line-height:1.4; margin:0 0 6px; }
+.tutorial-copy p { font-size:13px; line-height:1.6; margin:0; white-space:pre-line; }
+.tutorial-empty { grid-column:1/-1; padding:18px; background:#edf6f1; border:1px solid #dbe5e0; border-radius:10px; }
+.tutorial-empty h3 { margin:0 0 6px; }
+.tutorial-empty p { margin:0 0 8px; }
+.tutorial-pagination { display:flex; align-items:center; justify-content:center; flex-wrap:wrap; gap:20px; padding-top:20px; font-size:14px; }
+.tutorial-pagination a { padding:8px 12px; border:1px solid #dbe5e0; border-radius:6px; }
+@media(max-width:900px) { .tutorial-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } .tutorial-section-heading { align-items:flex-start; flex-direction:column; } }
+@media(max-width:520px) { .tutorial-grid { grid-template-columns:minmax(0,1fr); } }

@@ -1,0 +1,16 @@
+<p class="manual-intro">Access controls which business pages a staff member can open. Set up roles before creating staff accounts, then test the result from a staff session. Page access and an Admin PIN serve different purposes.</p>
+<h2 id="roles">Create a cashier role</h2>
+<ol><li>Sign in as the owner and open <strong>Access</strong>.</li><li>Choose <strong>Create role</strong> and enter a meaningful Role name, such as Cashier.</li><li>In <strong>Page access</strong>, select only the required modules. For a sell-only cashier, select Sell.</li><li>Select <strong>Save role</strong>. A role needs a name and at least one selected page.</li><li>For another responsibility, create a separate role rather than expanding every cashier's access. Give Transactions access only to staff trusted to handle its record-changing tools.</li></ol>
+<h2 id="staff">Create the staff account</h2>
+<ol><li>Choose <strong>Create staff account</strong>.</li><li>Enter Staff name, a valid Email address and Assigned role.</li><li>Enter a unique Password of at least eight characters and Confirm password.</li><li>Save and verify the account appears with the intended role.</li><li>Have the staff member sign in with that account and confirm which pages appear. Test the workflow without creating unnecessary live transactions.</li></ol>
+<h2 id="cashier">What a sell-only cashier should expect</h2>
+<p>A sell-only account may open directly into the checkout interface without the owner's full navigation. That is expected, not a missing settings page. On web and Windows the <strong>Sign out</strong> button is in the Barcode Scan toolbar. Finish the current sale before signing out; an unfinished cart requires confirmation.</p>
+<p>If the cashier needs a price, product or printer change they cannot access, ask an authorized owner. Do not share the owner session just to bypass the role.</p>
+<h2 id="pin">Admin PIN and sensitive actions</h2>
+<p>The owner can maintain an Admin PIN in <strong>Settings → Security</strong>. Leaving the field blank keeps an existing PIN. Use it only when an authorized protected action asks for it. A PIN is not the staff sign-in password and does not grant access to an otherwise forbidden module.</p>
+<p>Read the full confirmation before edits, deletions or restore. Never place the PIN on the till or include it in a support screenshot.</p>
+<h2 id="maintain">Change roles or reset a staff password</h2>
+<p>Use Edit staff to review assignment details. Use Reset password for a staff member who cannot sign in, then enter and confirm the new password. Use Edit role to change its permitted pages; remember that more than one staff member may use that role. Verify access again after a new sign-in.</p>
+<p>Before deleting staff or changing access during a shift, finish their work and check for pending offline sales. Deleting an account is not a backup or a way to move queued transactions to another account.</p>
+<h2 id="handover">Safe handover checklist</h2>
+<ul><li>Current sale finished, and any unfinished cart deliberately handled.</li><li>Pending offline work checked and synchronized where possible.</li><li>Cash and payment evidence handed over according to the shop's process.</li><li>Outgoing cashier signed out; incoming cashier verified their own name and business.</li><li>Owner password, PIN and backup files kept private.</li></ul>

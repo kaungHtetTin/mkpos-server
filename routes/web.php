@@ -16,6 +16,11 @@ use Illuminate\Support\Facades\Route;
 */
 
 Route::get('/', [LandingController::class, 'index'])->name('landing');
+Route::get('/documentation', [LandingController::class, 'documentation'])->name('documentation.index');
+Route::get('/documentation/{topic}', [LandingController::class, 'documentation'])->name('documentation.show');
+Route::get('/plans', [LandingController::class, 'plans'])->name('plans.index');
+Route::get('/tutorials', [LandingController::class, 'tutorials'])->name('tutorials.index');
+Route::get('/tutorials/{tutorial}/thumbnail', [LandingController::class, 'tutorialThumbnail'])->whereNumber('tutorial')->name('tutorials.thumbnail');
 Route::get('/downloads/{platform}', [DownloadController::class, 'show'])
     ->whereIn('platform', ['windows', 'android'])
     ->name('downloads.show');

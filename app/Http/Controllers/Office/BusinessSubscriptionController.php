@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Office;
 
 use App\Http\Controllers\Controller;
 use App\Services\SubscriptionService;
+use App\Services\OfficeBusinessIndex;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -22,23 +23,45 @@ class BusinessSubscriptionController extends Controller
 
     public function index(Request $request): array
     {
-        $query = DB::table('businesses')->leftJoin('users', function ($join) {
-            $join->on('users.business_id', '=', 'businesses.id')->where('users.role', 'owner');
-        })->select('businesses.*', 'users.name as owner_name', 'users.email as owner_email');
+        $request->validate([
+            'page' => ['sometimes', 'integer', 'min:1'],
+            'per_page' => ['sometimes', 'integer', 'min:1', 'max:100'],
+            'q' => ['nullable', 'string', 'max:200'],
+            'access' => ['sometimes', Rule::in(['all', 'trial', 'paid', 'expired', 'cancelled', 'scheduled', 'none'])],
+            'prospect' => ['sometimes', Rule::in(['all', 'requested', 'engaged', 'setup', 'early', 'paid'])],
+            'sort' => ['sometimes', Rule::in(['newest', 'potential', 'activity'])],
+        ]);
+        $all = DB::query()->fromSub(app(OfficeBusinessIndex::class)->query(), 'business_index');
+        $counts = (clone $all)->select('access_state')->selectRaw('COUNT(*) as total')->groupBy('access_state')->pluck('total', 'access_state')->map(fn ($value) => (int) $value)->all();
+        $query = clone $all;
         if ($search = trim((string) $request->query('q', ''))) {
             $query->where(function ($filter) use ($search) {
                 $like = "%{$search}%";
-                $filter->where('businesses.name', 'like', $like)->orWhere('users.email', 'like', $like)->orWhere('users.name', 'like', $like);
+                $filter->where('name', 'like', $like)->orWhere('owner_email', 'like', $like)->orWhere('owner_name', 'like', $like);
             });
         }
-        $items = $query->orderByDesc('businesses.id')->get()->map(function ($business) {
+        foreach (['access' => 'access_state', 'prospect' => 'prospect'] as $parameter => $column) {
+            if ($request->query($parameter, 'all') !== 'all') $query->where($column, $request->query($parameter));
+        }
+        $total = (clone $query)->count();
+        $perPage = (int) $request->query('per_page', 25);
+        $lastPage = max(1, (int) ceil($total / $perPage));
+        $page = min((int) $request->query('page', 1), $lastPage);
+        if ($request->query('sort') === 'potential') {
+            $query->orderByRaw("CASE prospect WHEN 'requested' THEN 0 WHEN 'engaged' THEN 1 WHEN 'setup' THEN 2 WHEN 'early' THEN 3 ELSE 4 END")->orderByDesc('sales_30d');
+        } elseif ($request->query('sort') === 'activity') {
+            $query->orderByDesc('last_sale_at');
+        }
+        $items = $query->orderByDesc('id')->offset(($page - 1) * $perPage)->limit($perPage)->get()->map(function ($business) {
             $item = (array) $business;
             $item['subscription'] = $this->subscriptions->status((int) $business->id);
 
             return $item;
         })->all();
 
-        return ['items' => $items, 'total' => count($items)];
+        return ['items' => $items, 'total' => $total, 'page' => $page, 'per_page' => $perPage, 'last_page' => $lastPage,
+            'summary' => ['total' => array_sum($counts), 'access_counts' => $counts],
+            'activity_window_days' => 30, 'as_of' => now()->utc()->toISOString()];
     }
 
     public function show(int $businessId): array
@@ -202,6 +225,7 @@ class BusinessSubscriptionController extends Controller
     {
         $data = $request->validate([
             'subscription_plan_id' => ['required', Rule::exists('subscription_plans', 'id')->where('is_system', false)],
+            'record_financial' => ['sometimes', 'boolean'],
             'starts_at' => ['nullable', 'date'],
             'duration_days' => ['nullable', 'integer', 'between:1,3650'],
             'price_paid' => ['nullable', 'integer', 'min:0'],
@@ -352,6 +376,10 @@ class BusinessSubscriptionController extends Controller
 
     private function activate(int $businessId, int $planId, array $data): void
     {
+        if (! ($data['record_financial'] ?? true)) {
+            $data['price_paid'] = 0;
+            $data['note'] = trim(($data['note'] ?? '').' Gift assignment: no financial record. Admin #'.Auth::guard('office')->id().' at '.now()->utc()->toISOString());
+        }
         DB::transaction(function () use ($businessId, $planId, $data) {
             abort_if(! DB::table('businesses')->where('id', $businessId)->lockForUpdate()->first(['id']), 404, 'Business not found');
             $plan = DB::table('subscription_plans')->where('id', $planId)->first();
@@ -377,6 +405,9 @@ class BusinessSubscriptionController extends Controller
                 DB::table('business_subscriptions')->where('id', $duplicate->id)->update([
                     'starts_at' => DB::raw('starts_at'),
                     'ends_at' => Carbon::parse($duplicate->ends_at)->addDays($days),
+                    'note' => ! ($data['record_financial'] ?? true)
+                        ? trim(($duplicate->note ?? '')."\n".$data['note'].' Added '.$days.' days.')
+                        : $duplicate->note,
                     'updated_at' => $now,
                 ]);
                 $this->recordPayment($businessId, $planId, (int) $duplicate->id, $plan, $days, $data, 'renewal', $now);
@@ -427,6 +458,7 @@ class BusinessSubscriptionController extends Controller
         string $type,
         Carbon $paidAt
     ): void {
+        if (! ($data['record_financial'] ?? true)) return;
         DB::table('subscription_payments')->insert([
             'business_id' => $businessId,
             'subscription_plan_id' => $planId,

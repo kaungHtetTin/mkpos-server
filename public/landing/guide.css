@@ -1,0 +1,131 @@
+/* Compact product overview and documentation, layered over the landing theme. */
+.guide-page { display: grid; grid-template-columns: 210px minmax(0, 1fr); gap: 24px; padding-block: 32px; }
+.guide-sidebar { display: flex; flex-direction: column; gap: 4px; align-self: start; position: sticky; top: 84px; }
+.guide-sidebar a { padding: 12px; border-radius: 8px; font-size: 14px; }
+.guide-sidebar a[aria-current], .guide-link:hover { background: var(--lime-soft); }
+.guide-content { min-width: 0; }
+.guide-sidebar { max-height: calc(100vh - 100px); overflow-y: auto; }
+.manual-contents { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; margin-bottom: 14px; padding: 12px; border: 1px solid var(--line); border-radius: 6px; background: white; font-size: 13px; }
+.manual-contents strong { flex-basis: 100%; }
+.manual-contents a { text-decoration: underline; text-underline-offset: 3px; line-height: 1.6; }
+.manual-chapter h2 { font-size: 21px; line-height: 1.35; margin: 26px 0 10px; padding-top: 14px; border-top: 1px solid var(--line); scroll-margin-top: 90px; }
+.manual-chapter p, .manual-chapter li, .manual-chapter dd { font-size: 15px; line-height: 1.7; }
+.manual-chapter p { margin: 10px 0; }
+.manual-chapter dl { grid-template-columns: 140px minmax(0, 1fr); }
+.manual-chapter dt { line-height: 1.6; }
+.manual-chapter .manual-intro { margin-top: 0; color: var(--ink); }
+.manual-chapter a { text-decoration: underline; }
+@media(max-width: 760px) {
+    .guide-sidebar { max-height: none; overflow: visible; gap: 2px; }
+    .guide-sidebar a { padding: 7px 9px; font-size: 12px; }
+    .manual-chapter dl { grid-template-columns: 1fr; }
+    .manual-chapter h2 { font-size: 19px; scroll-margin-top: 16px; }
+}
+.guide-content h1, main.section h1 { font-size: 32px; margin: 12px 0 20px; }
+.guide-pagination { margin-top: 16px; justify-content: space-between; }
+.plan-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr)); gap: 14px; }
+.plan-card { display: flex; flex-direction: column; gap: 12px; }
+.plan-card h2 { font-size: 25px; }
+.plan-card .plan-price { font-size: 24px; font-weight: 800; color: var(--green); }
+.plan-price small { font-size: 13px; font-weight: 500; }
+.plan-card .button { margin-top: auto; }
+.plan-help { margin-top: 20px; }
+@media(max-width: 760px) { .guide-page { grid-template-columns: 1fr; gap: 16px; } .guide-sidebar { position: static; flex-direction: row; flex-wrap: wrap; } }
+.nav-wrap { min-height: 64px; gap: 20px; }
+.desktop-nav { gap: 18px; }
+.desktop-nav a[aria-current] { color: var(--green-3); }
+.desktop-nav a[aria-current]::after { width: 100%; height: 3px; }
+.mobile-nav a[aria-current] { color: var(--green); background: var(--lime-soft); box-shadow: inset 3px 0 var(--green-3); }
+.hero { padding: 38px 0; }
+.hero-grid { gap: 32px; grid-template-columns: 1fr 1fr; }
+.hero h1 { font-size: clamp(34px, 3.6vw, 48px); line-height: 1.08; margin: 14px 0; }
+.hero-lead { font-size: 15px; line-height: 1.6; }
+.hero-actions, .hero-assurances { margin-top: 18px; }
+.button { min-height: 42px; padding-inline: 16px; border-radius: 8px; }
+.product-stage { padding: 10px 0; }
+.dashboard-window { transform: none; border-radius: 12px; }
+.window-body { min-height: 300px; }
+.preview-content { padding: 14px; }
+.floating-card, .stage-orbit { display: none; }
+.section { padding: 42px 0; scroll-margin-top: 80px; }
+.section h2, .final-cta h2 { font-size: clamp(26px, 2.6vw, 34px); line-height: 1.15; margin: 10px 0; }
+.section-heading { gap: 28px; margin-bottom: 20px; align-items: center; }
+.section-heading p, .center-heading p { font-size: 14px; line-height: 1.6; }
+.center-heading { margin-bottom: 20px; }
+.feature-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.feature-card, .feature-card-large, .feature-card-wide { display: block; min-height: 0; padding: 22px; grid-row: auto; grid-column: auto; }
+.feature-card h3, .feature-card-large h3 { font-size: 21px; margin: 10px 0; }
+.feature-icon { width: 36px; height: 36px; margin-bottom: 14px; border-radius: 8px; }
+.mini-checkout, .stock-bars, .report-visual { display: none; }
+.feature-list { margin-top: 16px; gap: 8px; }
+.workflow-grid { gap: 36px; }
+.workflow-steps li { padding: 16px 0; }
+.platform-grid { gap: 12px; }
+.platform-grid article { min-height: 0; padding: 22px; display: flex; flex-direction: column; }
+.platform-grid article.featured { transform: none; }
+.platform-grid article > span { width: 42px; height: 42px; border-radius: 10px; }
+.platform-grid h3 { margin: 16px 0 8px; font-size: 22px; }
+.platform-action { position: static; padding-top: 20px; margin-top: auto; }
+.security-card { padding: 28px; gap: 26px; grid-template-columns: 80px 1fr .75fr; border-radius: 12px; }
+.security-mark { width: 76px; height: 76px; }
+.security-mark svg { width: 38px; height: 38px; }
+.final-cta { padding: 32px 0; }
+.cta-card { padding: 30px; gap: 30px; border-radius: 12px; }
+footer { padding-top: 32px; }
+.footer-main { padding-bottom: 24px; gap: 32px; }
+.docs-links { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 18px; }
+.docs-links a { padding: 9px 12px; border: 1px solid var(--line); border-radius: 7px; background: white; font-size: 13px; font-weight: 700; }
+a:focus-visible, summary:focus-visible, .docs-table-wrap:focus-visible { outline: 3px solid var(--green-3); outline-offset: 3px; }
+.docs-links a:hover { background: var(--lime-soft); }
+.docs-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.docs-card { min-width: 0; padding: 22px; border: 1px solid var(--line); border-radius: 12px; background: white; scroll-margin-top: 80px; }
+.docs-card-wide { grid-column: 1 / -1; }
+.docs-card h3 { margin: 8px 0 14px; font-size: 20px; line-height: 1.3; }
+.docs-card p, .docs-card li, .docs-card dd { font-size: 14px; line-height: 1.65; color: #496158; }
+.docs-card p { margin: 8px 0; }
+.documentation { padding-block: 24px; }
+.documentation .section-heading { margin-bottom: 12px; gap: 20px; }
+.documentation .section-heading h2 { font-size: 24px; margin-block: 6px; }
+.documentation .guide-link { padding: 12px 14px; border-radius: 6px; }
+.documentation .guide-link h3 { display: flex; justify-content: space-between; gap: 8px; margin: 0 0 5px; font-size: 15px; line-height: 1.35; }
+.documentation .guide-link h3 span { flex-shrink: 0; }
+.documentation .guide-link p { margin: 0; font-size: 13px; line-height: 1.45; }
+.docs-card ul, .docs-card ol { padding-left: 20px; margin: 0; }
+.docs-card li + li { margin-top: 7px; }
+.docs-card dl { display: grid; grid-template-columns: 105px minmax(0, 1fr); gap: 12px; margin: 0; }
+.docs-card dt { font-size: 14px; font-weight: 750; }
+.docs-card dd { margin: 0; }
+.docs-card .docs-note { padding: 12px; margin-top: 14px; border-left: 3px solid var(--green-3); background: var(--paper); }
+.docs-print-tips { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 20px; }
+.docs-print-tips h4 { margin: 14px 0 6px; font-size: 15px; }
+.docs-table-wrap { max-width: 100%; overflow-x: auto; }
+.docs-table { width: 100%; border-collapse: collapse; font-size: 14px; line-height: 1.6; }
+.docs-table caption { text-align: left; color: var(--muted); padding-bottom: 10px; }
+.docs-table th, .docs-table td { padding: 12px; border: 1px solid var(--line); text-align: left; vertical-align: top; }
+.docs-table thead { background: var(--paper); }
+.docs-table th:first-child { width: 16%; }
+@media (max-width: 1050px) {
+    .docs-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .hero-grid { grid-template-columns: 1fr; gap: 20px; }
+    .product-stage { max-width: 650px; width: 100%; margin: auto; }
+    .feature-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .security-card { grid-template-columns: 76px 1fr; }
+    .docs-print-tips { grid-template-columns: 1fr; gap: 0; }
+}
+@media (max-width: 760px) {
+    .container { width: calc(100% - 28px); }
+    .hero { padding: 28px 0; }
+    .hero-grid, .section-heading, .workflow-grid { grid-template-columns: 1fr; gap: 16px; }
+    .section { padding: 28px 0; }
+    .section-heading { margin-bottom: 16px; }
+    .feature-grid, .docs-grid { grid-template-columns: 1fr; }
+    .feature-card, .docs-card, .platform-grid article { padding: 18px; }
+    .docs-card dl { grid-template-columns: 1fr; gap: 5px; }
+    .docs-card dd { margin-bottom: 10px; }
+    .docs-table { min-width: 590px; }
+    .security-card { grid-template-columns: 1fr; padding: 22px; }
+    .security-mark { margin-bottom: 0; }
+    .cta-card { padding: 24px; }
+    .final-cta { padding: 24px 0; }
+    .footer-main { gap: 24px; }
+}

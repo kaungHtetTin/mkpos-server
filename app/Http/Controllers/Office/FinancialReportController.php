@@ -8,6 +8,13 @@ use Illuminate\Support\Facades\DB;
 
 class FinancialReportController extends Controller
 {
+    public function destroy(int $paymentId): array
+    {
+        abort_unless(DB::table('subscription_payments')->where('id', $paymentId)->delete(), 404, 'Financial record not found');
+
+        return ['ok' => true];
+    }
+
     public function index(Request $request): array
     {
         $data = $request->validate([

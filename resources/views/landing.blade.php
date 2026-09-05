@@ -1,67 +1,6 @@
-<!doctype html>
-<html lang="en">
-<head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="theme-color" content="#0b4a3b">
-    <meta name="description" content="MKPOS brings sales, stock, purchases, customer credit, supplier accounts and business reports into one clear point-of-sale workspace.">
-    <meta property="og:type" content="website">
-    <meta property="og:title" content="MKPOS — Simple point of sale. Complete business control.">
-    <meta property="og:description" content="Run sales, inventory, credit accounts and business reporting from one dependable workspace.">
-    <meta property="og:url" content="{{ url('/') }}">
-    <meta property="og:image" content="{{ asset('app/branding/mkicon.png') }}">
-    <link rel="canonical" href="{{ url('/') }}">
-    <link rel="icon" type="image/png" href="{{ asset('app/branding/mkicon.png') }}">
-    <link rel="apple-touch-icon" href="{{ asset('app/branding/mkicon.png') }}">
-    <link rel="stylesheet" href="{{ asset('landing/landing.css') }}">
-    <title>MKPOS — Simple point of sale. Complete business control.</title>
-</head>
-<body>
-    <svg class="svg-library" aria-hidden="true">
-        <symbol id="icon-arrow" viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></symbol>
-        <symbol id="icon-check" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></symbol>
-        <symbol id="icon-receipt" viewBox="0 0 24 24"><path d="M6 3h12v18l-3-2-3 2-3-2-3 2V3Z"/><path d="M9 8h6M9 12h6M9 16h3"/></symbol>
-        <symbol id="icon-box" viewBox="0 0 24 24"><path d="m12 3 8 4.5v9L12 21l-8-4.5v-9L12 3Z"/><path d="m4 7.5 8 4.5 8-4.5M12 12v9"/></symbol>
-        <symbol id="icon-users" viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></symbol>
-        <symbol id="icon-truck" viewBox="0 0 24 24"><path d="M3 5h11v12H3zM14 9h4l3 3v5h-7z"/><circle cx="7" cy="18" r="2"/><circle cx="18" cy="18" r="2"/></symbol>
-        <symbol id="icon-chart" viewBox="0 0 24 24"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></symbol>
-        <symbol id="icon-wallet" viewBox="0 0 24 24"><path d="M4 6h15a2 2 0 0 1 2 2v11H4a2 2 0 0 1-2-2V6a3 3 0 0 1 3-3h13"/><path d="M16 11h5v4h-5a2 2 0 0 1 0-4Z"/></symbol>
-        <symbol id="icon-shield" viewBox="0 0 24 24"><path d="M12 3 20 6v6c0 5-3.5 8-8 10-4.5-2-8-5-8-10V6l8-3Z"/><path d="m9 12 2 2 4-4"/></symbol>
-        <symbol id="icon-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a15 15 0 0 1 0 18M12 3a15 15 0 0 0 0 18"/></symbol>
-        <symbol id="icon-monitor" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8M12 17v4"/></symbol>
-        <symbol id="icon-phone" viewBox="0 0 24 24"><rect x="6" y="2" width="12" height="20" rx="2"/><path d="M10 18h4"/></symbol>
-    </svg>
-
-    <header class="site-header">
-        <div class="container nav-wrap">
-            <a class="brand" href="{{ url('/') }}" aria-label="MKPOS home">
-                <img src="{{ asset('app/branding/mktransparenticon.png') }}" alt="" width="44" height="44">
-                <span>MKPOS</span>
-            </a>
-            <nav class="desktop-nav" aria-label="Primary navigation">
-                <a href="#features">Features</a>
-                <a href="#platforms">Platforms</a>
-                <a href="#how-it-works">How it works</a>
-                <a href="#security">Security</a>
-            </nav>
-            <div class="nav-actions">
-                <a class="text-link" href="{{ url('/app') }}/#/login">Sign in</a>
-                <a class="button button-small" href="{{ url('/app') }}/#/signup">Start free trial</a>
-            </div>
-            <details class="mobile-nav">
-                <summary aria-label="Open navigation"><span></span><span></span><span></span></summary>
-                <div>
-                    <a href="#features">Features</a>
-                    <a href="#platforms">Platforms</a>
-                    <a href="#how-it-works">How it works</a>
-                    <a href="#security">Security</a>
-                    <a href="{{ url('/app') }}/#/login">Sign in</a>
-                    <a class="button" href="{{ url('/app') }}/#/signup">Start free trial</a>
-                </div>
-            </details>
-        </div>
-    </header>
-
+@extends('landing.layout')
+@section('title', 'MKPOS — Product overview')
+@section('content')
     <main>
         <section class="hero">
             <div class="hero-glow hero-glow-one"></div>
@@ -73,7 +12,7 @@
                     <p class="hero-lead">Sell faster, understand your stock, and keep customer and supplier credit clear—all from one dependable workspace.</p>
                     <div class="hero-actions">
                         <a class="button button-primary" href="{{ url('/app') }}/#/signup">Start your free trial <svg><use href="#icon-arrow"/></svg></a>
-                        <a class="button button-secondary" href="#product-preview">See how it works</a>
+                        <a class="button button-secondary" href="#documentation">Read documentation</a>
                     </div>
                     <div class="hero-assurances">
                         <span><svg><use href="#icon-check"/></svg>One-month free trial</span>
@@ -170,6 +109,13 @@
                         <p>Receive stock, capture changing unit costs, record amounts paid, and follow every supplier balance.</p>
                         <ul class="feature-list"><li><svg><use href="#icon-check"/></svg>Purchase-unit conversion</li><li><svg><use href="#icon-check"/></svg>Supplier payment records</li></ul>
                     </article>
+                    <article class="feature-card">
+                        <div class="feature-icon"><svg><use href="#icon-monitor"/></svg></div>
+                        <span>COUNTER & DEVICE TOOLS</span>
+                        <h3>Keep the counter ready to work.</h3>
+                        <p>Use native printer profiles, receipt customization and eligible offline sales. Give staff access to the tools their role needs.</p>
+                        <ul class="feature-list"><li><svg><use href="#icon-check"/></svg>Device-specific printer setup</li><li><svg><use href="#icon-check"/></svg>Pending-sale synchronization</li></ul>
+                    </article>
                     <article class="feature-card feature-card-wide report-card">
                         <div class="report-copy"><div class="feature-icon"><svg><use href="#icon-chart"/></svg></div><span>BUSINESS REPORTS</span><h3>Move from transactions to insight.</h3><p>Review sales, expenses, credit exposure, stock value and payment movement in a single business summary.</p></div>
                         <div class="report-visual" aria-hidden="true"><div><small>Net sales</small><strong>2.48M Ks</strong><span>+18.2%</span></div><svg viewBox="0 0 520 160" preserveAspectRatio="none"><path d="M0 142 C54 136 70 112 112 119 S177 80 221 92 S287 53 326 64 S407 18 520 24"/><circle cx="520" cy="24" r="7"/></svg><div class="report-columns"><i style="--h:34%"></i><i style="--h:48%"></i><i style="--h:44%"></i><i style="--h:66%"></i><i style="--h:60%"></i><i style="--h:81%"></i><i style="--h:92%"></i></div></div>
@@ -202,6 +148,13 @@
             </div>
         </section>
 
+        @include('landing.documentation-index')
+        <section class="section" id="tutorials"><div class="container">
+            <div class="tutorial-section-heading"><div><span class="section-kicker">Learn by watching</span><h2>MKPOS video tutorials</h2><p>Follow practical walkthroughs alongside our step-by-step documentation.</p></div><a class="button button-small" href="{{ route('tutorials.index') }}">All tutorials →</a></div>
+            @include('landing.tutorial-cards', ['tutorials' => $tutorials ?? collect(), 'compact' => true])
+        </div></section>
+<section class="section"><div class="container docs-card"><h2>Package plans</h2><p>Compare published prices, durations and features, starting with a one-month free trial.</p><a class="button button-primary" href="{{ route('plans.index') }}">View package plans</a></div></section>
+
         <section class="section security" id="security">
             <div class="container security-card">
                 <div class="security-mark"><svg><use href="#icon-shield"/></svg><i></i><i></i></div>
@@ -219,17 +172,4 @@
         </section>
     </main>
 
-    <footer>
-        <div class="container footer-main">
-            <div><a class="brand footer-brand" href="{{ url('/') }}"><img src="{{ asset('app/branding/mktransparenticon.png') }}" alt="" width="42" height="42"><span>MKPOS</span></a><p>A clear, connected point-of-sale workspace for modern local businesses.</p></div>
-            <nav aria-label="Footer navigation"><div><strong>Product</strong><a href="#features">Features</a><a href="#platforms">Downloads</a><a href="#security">Security</a></div><div><strong>Access</strong><a href="{{ url('/app') }}/#/signup">Start free trial</a><a href="{{ url('/app') }}/#/login">Business sign in</a></div></nav>
-        </div>
-        <div class="container footer-bottom"><span>© {{ date('Y') }} MKPOS. All rights reserved.</span><span>Made for businesses that keep moving.</span></div>
-    </footer>
-    <script>
-        if (window.location.hash.startsWith('#/')) {
-            window.location.replace(@json(rtrim(url('/app'), '/')) + '/' + window.location.hash);
-        }
-    </script>
-</body>
-</html>
+@endsection
