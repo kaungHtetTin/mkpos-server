@@ -14,6 +14,18 @@ class SupplierController extends ApiController
             $like = "%{$search}%";
             $query->where(fn ($q) => $q->where('s.name', 'like', $like)->orWhere('s.phone', 'like', $like)->orWhere('s.contact_person', 'like', $like)->orWhere('s.address', 'like', $like)->orWhere('s.note', 'like', $like));
         }
+        $balanceSql = $this->balanceSql();
+        match ($request->query('account_status', 'all')) {
+            'payable' => $query->whereRaw("({$balanceSql}) > 0"),
+            'credit' => $query->whereRaw("({$balanceSql}) < 0"),
+            'settled' => $query->whereRaw("({$balanceSql}) = 0"),
+            default => null,
+        };
+        match ($request->query('purchase_activity', 'all')) {
+            'with_purchases' => $query->whereExists(fn ($purchase) => $purchase->selectRaw('1')->from('purchases as p')->whereColumn('p.supplier_id', 's.id')->where('p.status', 'completed')),
+            'without_purchases' => $query->whereNotExists(fn ($purchase) => $purchase->selectRaw('1')->from('purchases as p')->whereColumn('p.supplier_id', 's.id')->where('p.status', 'completed')),
+            default => null,
+        };
         $result = $this->page($query->orderBy('s.name'), $request, 500, 500, true);
         if (isset($result['items'])) {
             $result['items'] = $this->stats($result['items']);

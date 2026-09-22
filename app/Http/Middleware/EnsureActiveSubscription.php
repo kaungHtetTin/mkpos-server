@@ -16,6 +16,12 @@ class EnsureActiveSubscription
     {
         $status = $this->subscriptions->status((int) $request->user('web')->business_id);
         if (! $status['is_valid']) {
+            if ($request->isMethodSafe()) {
+                $request->attributes->set('mkpos.subscription_entitlement', $status);
+
+                return $next($request);
+            }
+
             $maySyncQueuedTrialSale = $request->is('api/sales/offline-sync')
                 && $this->subscriptions->allowsOfflineTrialSync($status, $request->input('offline_created_at'));
             if ($maySyncQueuedTrialSale) {

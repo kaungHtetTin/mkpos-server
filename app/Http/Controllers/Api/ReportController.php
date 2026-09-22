@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Api;
 
+use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Symfony\Component\HttpFoundation\StreamedResponse;
@@ -55,6 +56,7 @@ class ReportController extends ApiController
         $accounts['payable_total'] += $supplierAccounts['payable_total'];
         $accounts['open_accounts'] += $supplierAccounts['open_accounts'];
         $inventoryValuation = $this->inventoryValuation();
+        $salesTrends = $this->salesTrends($end);
 
         return ['start' => $start ?: (DB::table('sales')->min(DB::raw('DATE(created_at)')) ?: now()->toDateString()), 'end' => $end ?: now()->toDateString(), 'all_time' => $allTime,
             'sales_count' => (clone $sales)->count(), 'sales_total' => $salesTotal, 'cash_total' => $cashTotal, 'credit_total' => $creditTotal,
@@ -67,7 +69,7 @@ class ReportController extends ApiController
                 'expected_cash_drawer' => $cashTotal + $debtCollected + $supplierRefunds - $shopPayouts - $purchasePaidTotal - $supplierPaid - $expenseTotal,
                 'net_movement' => $cashTotal + $debtCollected + $supplierRefunds - $shopPayouts - $purchasePaidTotal - $supplierPaid - $expenseTotal],
             'debt_total' => $accounts['receivable_total'], 'customers_with_debt' => $accounts['customers_owing'],
-            'current_accounts' => $accounts, 'inventory_valuation' => $inventoryValuation];
+            'current_accounts' => $accounts, 'inventory_valuation' => $inventoryValuation, 'sales_trends' => $salesTrends];
     }
 
     public function today(Request $request): array
@@ -177,6 +179,44 @@ class ReportController extends ApiController
             'investment_value' => $investmentValue,
             'potential_sales_value' => $potentialSalesValue,
             'potential_gross_profit' => $potentialSalesValue - $investmentValue,
+        ];
+    }
+
+    private function salesTrends(?string $anchorDate): array
+    {
+        $anchor = Carbon::parse($anchorDate ?: now()->toDateString());
+        $monthStart = $anchor->copy()->startOfMonth();
+        $monthEnd = $anchor->copy()->endOfMonth();
+        $yearStart = $anchor->copy()->startOfYear();
+        $yearEnd = $anchor->copy()->endOfYear();
+
+        $dailyTotals = DB::table('sales')->where('status', 'completed')
+            ->whereBetween('created_at', [$monthStart, $monthEnd])
+            ->get(['created_at', 'total'])
+            ->groupBy(fn ($sale) => Carbon::parse($sale->created_at)->day)
+            ->map(fn ($sales) => (int) $sales->sum('total'));
+
+        $monthlyTotals = DB::table('sales')->where('status', 'completed')
+            ->whereBetween('created_at', [$yearStart, $yearEnd])
+            ->get(['created_at', 'total'])
+            ->groupBy(fn ($sale) => Carbon::parse($sale->created_at)->month)
+            ->map(fn ($sales) => (int) $sales->sum('total'));
+
+        return [
+            'month' => [
+                'label' => $anchor->format('F Y'),
+                'items' => collect(range(1, $anchor->daysInMonth))->map(fn ($day) => [
+                    'label' => (string) $day,
+                    'total' => (int) ($dailyTotals->get($day) ?? 0),
+                ])->all(),
+            ],
+            'year' => [
+                'label' => (string) $anchor->year,
+                'items' => collect(range(1, 12))->map(fn ($month) => [
+                    'label' => Carbon::create(null, $month, 1)->format('M'),
+                    'total' => (int) ($monthlyTotals->get($month) ?? 0),
+                ])->all(),
+            ],
         ];
     }
 }

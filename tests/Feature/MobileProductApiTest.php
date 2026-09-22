@@ -3,7 +3,9 @@
 namespace Tests\Feature;
 
 use Illuminate\Foundation\Testing\DatabaseTransactions;
+use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Storage;
 use Tests\TestCase;
 
 class MobileProductApiTest extends TestCase
@@ -50,6 +52,22 @@ class MobileProductApiTest extends TestCase
             ->assertJsonPath('id', $product['id'])
             ->assertJsonPath('name', 'Paged Product');
 
+        Storage::fake('local');
+        $this->post('/api/products/'.$product['id'].'/photo', [
+            'photo' => UploadedFile::fake()->createWithContent('product.png', $this->png(240, 240)),
+        ])->assertOk()->assertJsonPath('photo_url', fn ($url) => str_starts_with($url, '/products/'.$product['id'].'/photo?v='));
+        $photoPath = DB::table('products')->where('id', $product['id'])->value('photo_path');
+        Storage::disk('local')->assertExists($photoPath);
+        $this->get('/api/products/'.$product['id'].'/photo')->assertOk()->assertHeader('X-Content-Type-Options', 'nosniff');
+        $this->post('/api/products/'.$product['id'].'/photo', [
+            'photo' => UploadedFile::fake()->createWithContent('too-large.png', $this->png(240, 240))->size(51),
+        ], ['Accept' => 'application/json'])->assertUnprocessable()->assertJsonValidationErrors('photo');
+        $this->post('/api/products/'.$product['id'].'/photo', [
+            'photo' => UploadedFile::fake()->createWithContent('not-square.png', $this->png(320, 240)),
+        ], ['Accept' => 'application/json'])->assertUnprocessable()->assertJsonValidationErrors('photo');
+        $this->deleteJson('/api/products/'.$product['id'].'/photo')->assertOk()->assertJsonPath('photo_url', null);
+        Storage::disk('local')->assertMissing($photoPath);
+
         $this->postJson('/api/products/'.$product['id'].'/adjust-stock?quantity=2&reason=First')->assertOk();
         $this->postJson('/api/products/'.$product['id'].'/adjust-stock?quantity=-1&reason=Second')->assertOk();
 
@@ -63,5 +81,18 @@ class MobileProductApiTest extends TestCase
         $this->getJson('/api/products/'.$product['id'].'/stock-movements')
             ->assertOk()
             ->assertJsonCount(3);
+    }
+
+    private function png(int $width, int $height): string
+    {
+        $chunk = static fn (string $type, string $data): string => pack('N', strlen($data))
+            .$type.$data.pack('N', crc32($type.$data));
+        $header = pack('NNCCCCC', $width, $height, 8, 2, 0, 0, 0);
+        $row = "\0".str_repeat("\x7f\x9f\x6f", $width);
+
+        return "\x89PNG\r\n\x1a\n"
+            .$chunk('IHDR', $header)
+            .$chunk('IDAT', gzcompress(str_repeat($row, $height)))
+            .$chunk('IEND', '');
     }
 }

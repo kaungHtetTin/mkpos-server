@@ -11,6 +11,7 @@ class AccessService
         'sell' => 'Sell',
         'products' => 'Products',
         'purchases' => 'Purchases',
+        'sales' => 'Sales',
         'suppliers' => 'Suppliers',
         'customers' => 'Customers',
         'expenses' => 'Expenses',

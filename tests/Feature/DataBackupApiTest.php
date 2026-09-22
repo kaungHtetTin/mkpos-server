@@ -65,15 +65,14 @@ class DataBackupApiTest extends TestCase
             'updated_at' => now(),
         ]);
 
-        $this->getJson('/api/data/status')->assertStatus(402)
-            ->assertJsonPath('subscription.is_valid', false);
+        $this->getJson('/api/data/status')->assertOk();
         $this->getJson('/api/data/export')->assertStatus(402)
             ->assertJsonPath('subscription.is_valid', false);
         $this->postJson('/api/data/restore-file')->assertStatus(402)
             ->assertJsonPath('subscription.is_valid', false);
     }
 
-    public function test_missing_and_cancelled_subscriptions_keep_402_on_paid_only_backup_routes(): void
+    public function test_missing_subscription_is_blocked_and_cancelled_trial_keeps_its_remaining_access(): void
     {
         $missing = $this->registerTrialOwner('Missing Backup Shop', 'missing-backup@example.com');
         DB::table('business_subscriptions')->where('business_id', $missing['business']['id'])->delete();
@@ -85,7 +84,16 @@ class DataBackupApiTest extends TestCase
             'starts_at' => now(),
             'updated_at' => now(),
         ]);
-        $this->assertPaidBackupRoutesRequireActiveSubscription('cancelled');
+        $this->getJson('/api/subscription')->assertOk()
+            ->assertJsonPath('is_valid', true)
+            ->assertJsonPath('reason', 'cancelled')
+            ->assertJsonPath('lifecycle_notice.stage', 'suspended');
+        $this->getJson('/api/data/export')->assertForbidden()
+            ->assertJsonPath('subscription.is_valid', true)
+            ->assertJsonPath('subscription.reason', 'cancelled');
+        $this->postJson('/api/data/restore-file')->assertForbidden()
+            ->assertJsonPath('subscription.is_valid', true)
+            ->assertJsonPath('subscription.reason', 'cancelled');
     }
 
     public function test_portable_trial_requests_cannot_bypass_capability_enforcement(): void
@@ -198,6 +206,55 @@ class DataBackupApiTest extends TestCase
         ])->assertUnprocessable()->assertJsonValidationErrors('backup');
         $this->assertDatabaseHas('products', ['id' => $product['id'], 'business_id' => $first['business']['id']]);
         $this->assertDatabaseMissing('products', ['business_id' => $second['business']['id'], 'name' => 'Protected Product']);
+    }
+
+    public function test_owner_can_reset_operational_data_while_preserving_account_and_subscription(): void
+    {
+        Storage::fake('local');
+        $session = $this->registerTrialOwner('Fresh Start Shop', 'fresh-start@example.com');
+        $businessId = (int) $session['business']['id'];
+        $ownerId = (int) $session['user']['id'];
+        DB::table('settings')->updateOrInsert(
+            ['business_id' => $businessId, 'key' => 'admin_pin_hash'],
+            ['value' => password_hash('2468', PASSWORD_DEFAULT)]
+        );
+
+        $product = $this->postJson('/api/products', [
+            'name' => 'Reset Product', 'sku' => 'RESET-1', 'barcode' => '', 'category' => 'Tests',
+            'price' => 2500, 'cost' => 1500, 'stock' => 5, 'low_stock_threshold' => 1,
+            'prices' => [['name' => 'Retail', 'price' => 2500]],
+        ])->assertOk()->json();
+        Storage::disk('local')->put('product-photos/'.$businessId.'/product.png', 'photo');
+        Storage::disk('local')->put('product-photos/'.$businessId.'/orphaned.png', 'orphaned photo');
+        Storage::disk('local')->put('business-logos/'.$businessId.'/logo.png', 'logo');
+        DB::table('products')->where('id', $product['id'])->update(['photo_path' => 'product-photos/'.$businessId.'/product.png']);
+        DB::table('settings')->updateOrInsert(
+            ['business_id' => $businessId, 'key' => 'receipt_logo_path'],
+            ['value' => 'business-logos/'.$businessId.'/logo.png']
+        );
+
+        $this->postJson('/api/data/reset', ['confirmation' => 'RESET', 'admin_pin' => 'wrong'])
+            ->assertForbidden();
+        $this->assertDatabaseHas('products', ['id' => $product['id'], 'business_id' => $businessId]);
+
+        $this->postJson('/api/data/reset', ['confirmation' => 'RESET', 'admin_pin' => '2468'])
+            ->assertOk()
+            ->assertJsonPath('ok', true)
+            ->assertJsonPath('safety_backup_created', true);
+
+        $this->assertDatabaseHas('businesses', ['id' => $businessId, 'name' => 'Fresh Start Shop']);
+        $this->assertDatabaseHas('users', ['id' => $ownerId, 'business_id' => $businessId, 'email' => 'fresh-start@example.com']);
+        $this->assertDatabaseHas('business_subscriptions', ['business_id' => $businessId]);
+        $this->assertDatabaseMissing('products', ['business_id' => $businessId]);
+        $this->assertDatabaseMissing('sales', ['business_id' => $businessId]);
+        $this->assertDatabaseHas('settings', ['business_id' => $businessId, 'key' => 'shop_name', 'value' => 'Fresh Start Shop']);
+        $this->assertDatabaseHas('settings', ['business_id' => $businessId, 'key' => 'price_types', 'value' => 'Retail']);
+        $this->assertDatabaseMissing('settings', ['business_id' => $businessId, 'key' => 'admin_pin_hash']);
+        $this->assertDatabaseHas('price_type_rules', ['business_id' => $businessId, 'name' => 'Retail', 'pricing_mode' => 'manual']);
+        Storage::disk('local')->assertMissing('product-photos/'.$businessId.'/product.png');
+        Storage::disk('local')->assertMissing('product-photos/'.$businessId.'/orphaned.png');
+        Storage::disk('local')->assertMissing('business-logos/'.$businessId.'/logo.png');
+        $this->assertCount(1, Storage::disk('local')->allFiles('business-backups/safety'));
     }
 
     private function registerOwner(string $businessName, string $email): array

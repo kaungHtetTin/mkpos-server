@@ -34,6 +34,12 @@ class SupplierCreditApiTest extends TestCase
             ->assertJsonPath('items.0.balance', 6000)
             ->assertJsonPath('account_summary.payable_total', 6000);
 
+        $this->getJson('/api/suppliers?with_total=true&account_status=payable&purchase_activity=with_purchases')->assertOk()
+            ->assertJsonPath('total', 1)
+            ->assertJsonPath('items.0.id', $supplier['id']);
+        $this->getJson('/api/suppliers?with_total=true&account_status=settled')->assertOk()
+            ->assertJsonPath('total', 0);
+
         $payment = $this->postJson('/api/suppliers/'.$supplier['id'].'/payments', [
             'direction' => 'shop_to_supplier', 'amount' => 2000, 'payment_method' => 'Cash', 'note' => 'Part payment',
         ])->assertOk()->assertJsonPath('balance', 4000)->json();

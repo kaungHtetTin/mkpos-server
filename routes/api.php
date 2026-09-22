@@ -42,7 +42,8 @@ Route::post('/auth/login', [AuthController::class, 'login'])->middleware('thrott
 
 Route::middleware(['auth:sanctum', 'business'])->group(function () {
     Route::get('/auth/me', [AuthController::class, 'me']);
-    Route::put('/auth/profile', [AuthController::class, 'updateProfile'])->middleware('throttle:10,1');
+    Route::put('/auth/profile', [AuthController::class, 'updateProfile'])
+        ->middleware(['throttle:10,1', 'subscription']);
     Route::post('/auth/logout', [AuthController::class, 'logout']);
     Route::get('/app-config', fn () => array_merge(config('mkpos'), [
         'business' => request()->user('web')->business->only(['id', 'name', 'slug', 'timezone', 'currency']),
@@ -64,12 +65,16 @@ Route::middleware(['auth:sanctum', 'business'])->group(function () {
             Route::get('/products/low-stock', [ProductController::class, 'lowStock']);
             Route::get('/products/summary', [ProductController::class, 'summary']);
             Route::get('/products/barcode/{barcode}', [ProductController::class, 'barcode']);
+            Route::get('/products/{id}/photo', [ProductController::class, 'photo'])->whereNumber('id');
             Route::get('/products/{id}', [ProductController::class, 'show'])->whereNumber('id');
         });
         Route::middleware('module:products')->group(function () {
+            Route::post('/products/internal-barcode', [ProductController::class, 'internalBarcode']);
             Route::post('/products', [ProductController::class, 'store']);
             Route::put('/products/{id}', [ProductController::class, 'update']);
             Route::delete('/products/{id}', [ProductController::class, 'destroy']);
+            Route::post('/products/{id}/photo', [ProductController::class, 'uploadPhoto'])->whereNumber('id');
+            Route::delete('/products/{id}/photo', [ProductController::class, 'deletePhoto'])->whereNumber('id');
             Route::post('/products/{id}/adjust-stock', [ProductController::class, 'adjustStock']);
             Route::get('/products/{id}/stock-movements', [ProductController::class, 'movements']);
         });
@@ -115,13 +120,15 @@ Route::middleware(['auth:sanctum', 'business'])->group(function () {
             Route::delete('/supplier-payments/{id}', [SupplierController::class, 'destroyPayment']);
         });
 
-        Route::middleware('module:sell,transactions')->group(function () {
-            Route::get('/sales/last/receipt', [SaleController::class, 'lastReceipt']);
-            Route::get('/sales', [SaleController::class, 'index']);
+        Route::get('/sales/last/receipt', [SaleController::class, 'lastReceipt'])->middleware('module:sell,sales');
+        Route::get('/sales', [SaleController::class, 'index'])->middleware('module:sales');
+        Route::middleware('module:sales,customers')->group(function () {
             Route::get('/sales/{id}', [SaleController::class, 'show']);
             Route::put('/sales/{id}', [SaleController::class, 'update']);
             Route::delete('/sales/{id}', [SaleController::class, 'destroy']);
             Route::post('/sales/{id}/void', [SaleController::class, 'destroy']);
+        });
+        Route::middleware('module:sell,sales,customers')->group(function () {
             Route::get('/sales/{id}/receipt', [SaleController::class, 'receipt']);
             Route::post('/sales/{id}/print', [SaleController::class, 'print']);
         });
@@ -166,18 +173,20 @@ Route::middleware(['auth:sanctum', 'business'])->group(function () {
             Route::put('/staff/{id}/password', [StaffController::class, 'resetPassword'])->middleware('throttle:10,1');
             Route::delete('/staff/{id}', [StaffController::class, 'destroy']);
 
-            Route::put('/settings', [SettingsController::class, 'update']);
-            Route::get('/settings/printers', [SettingsController::class, 'printers']);
-            Route::post('/settings/receipt-preview', [SettingsController::class, 'receiptPreview']);
-            Route::post('/settings/test-print', [SettingsController::class, 'testPrint']);
+            Route::post('/settings/logo', [SettingsController::class, 'uploadLogo']);
+            Route::delete('/settings/logo', [SettingsController::class, 'deleteLogo']);
             Route::get('/data/status', [DataBackupController::class, 'status']);
+            Route::post('/data/reset', [DataBackupController::class, 'reset'])->middleware('throttle:3,1');
         });
+        Route::put('/settings', [SettingsController::class, 'update']);
+        Route::get('/settings/printers', [SettingsController::class, 'printers']);
+        Route::post('/settings/receipt-preview', [SettingsController::class, 'receiptPreview']);
+        Route::post('/settings/test-print', [SettingsController::class, 'testPrint']);
         Route::get('/data/export', [DataBackupController::class, 'export'])
             ->middleware(['subscription.capability:data_export', 'owner']);
         Route::post('/data/restore-file', [DataBackupController::class, 'restore'])
             ->middleware(['subscription.capability:data_restore', 'owner']);
-        Route::get('/settings', [SettingsController::class, 'index'])
-            ->middleware('module:sell,products,purchases,suppliers,customers,expenses,transactions,reports');
+        Route::get('/settings', [SettingsController::class, 'index']);
     });
 });
 

@@ -15,8 +15,21 @@ class CustomerController extends ApiController
             $like = "%{$search}%";
             $query->where(fn ($q) => $q->where('c.name', 'like', $like)->orWhere('c.phone', 'like', $like)->orWhere('c.address', 'like', $like)->orWhere('c.note', 'like', $like));
         }
+        $balanceSql = $this->balanceSql();
+        match ($request->query('account_status', 'all')) {
+            'receivable' => $query->whereRaw("({$balanceSql}) > 0"),
+            'payable' => $query->whereRaw("({$balanceSql}) < 0"),
+            'settled' => $query->whereRaw("({$balanceSql}) = 0"),
+            default => null,
+        };
+        match ($request->query('sale_activity', 'all')) {
+            'with_sales' => $query->whereExists(fn ($sale) => $sale->selectRaw('1')->from('sales as s')->whereColumn('s.customer_id', 'c.id')->where('s.status', 'completed')),
+            'without_sales' => $query->whereNotExists(fn ($sale) => $sale->selectRaw('1')->from('sales as s')->whereColumn('s.customer_id', 'c.id')->where('s.status', 'completed')),
+            default => null,
+        };
         $result = $this->page($query->orderBy('c.name'), $request, 200, 500);
         if (isset($result['items'])) {
+            $result['items'] = $this->stats($result['items']);
             $result['account_summary'] = $this->accountSummary();
 
             return $result;
@@ -55,13 +68,26 @@ class CustomerController extends ApiController
         $paid = (int) DB::table('customer_payments')->where('customer_id', $id)->where('status', 'completed')->where('direction', 'customer_to_shop')->sum('amount');
         $payout = (int) DB::table('customer_payments')->where('customer_id', $id)->where('status', 'completed')->where('direction', 'shop_to_customer')->sum('amount');
 
-        return ['customer' => $customer, 'summary' => ['credit_total' => $credit, 'paid_total' => $paid, 'payout_total' => $payout, 'balance' => $credit - $paid + $payout]];
+        $sales = DB::table('sales')->where('customer_id', $id)->where('status', 'completed');
+
+        return ['customer' => $customer, 'summary' => ['total_sales' => (int) (clone $sales)->sum('total'), 'sale_count' => (clone $sales)->count(),
+            'last_sale' => $sales->max('created_at'), 'credit_total' => $credit, 'paid_total' => $paid, 'payout_total' => $payout, 'balance' => $credit - $paid + $payout]];
     }
 
     public function sales(Request $request, int $id)
     {
         abort_if(! DB::table('customers')->where('id', $id)->where('is_active', true)->exists(), 404, 'Customer not found');
-        $query = DB::table('sales')->where('customer_id', $id)->where('credit_amount', '>', 0);
+        $query = DB::table('sales')->where('customer_id', $id)->where('status', 'completed');
+        if ($search = trim((string) $request->query('q', ''))) {
+            $like = "%{$search}%";
+            $query->where(fn ($q) => $q->where('receipt_no', 'like', $like)->orWhere('payment_method', 'like', $like));
+        }
+        $saleType = $request->query('sale_type', 'all');
+        if ($saleType === 'credit') {
+            $query->where('credit_amount', '>', 0);
+        } elseif ($saleType === 'paid') {
+            $query->where('credit_amount', '<=', 0);
+        }
         $this->historyFilters($query, $request);
 
         return $this->page($query->orderByDesc('created_at')->orderByDesc('id'), $request, 25, 100);
@@ -100,6 +126,9 @@ class CustomerController extends ApiController
     public function allPayments(Request $request)
     {
         $query = DB::table('customer_payments as cp')->join('customers as c', 'c.id', '=', 'cp.customer_id')->select('cp.*', 'c.name as customer_name');
+        if ($request->filled('customer_id')) {
+            $query->where('cp.customer_id', (int) $request->query('customer_id'));
+        }
         if (($status = $request->query('status', 'all')) !== 'all') {
             $query->where('cp.status', $status);
         }
@@ -165,6 +194,18 @@ class CustomerController extends ApiController
     private function balanceSql(): string
     {
         return "CAST(COALESCE((SELECT SUM(s.credit_amount) FROM sales s WHERE s.customer_id=c.id AND s.status='completed'),0)-COALESCE((SELECT SUM(CASE WHEN cp.direction='customer_to_shop' THEN cp.amount ELSE -cp.amount END) FROM customer_payments cp WHERE cp.customer_id=c.id AND cp.status='completed'),0) AS SIGNED)";
+    }
+
+    private function stats(array $customers): array
+    {
+        foreach ($customers as &$customer) {
+            $sales = DB::table('sales')->where('customer_id', $customer['id'])->where('status', 'completed');
+            $customer['sale_count'] = (clone $sales)->count();
+            $customer['total_sales'] = (int) (clone $sales)->sum('total');
+            $customer['last_sale'] = $sales->max('created_at');
+        }
+
+        return $customers;
     }
 
     private function customer(int $id): array

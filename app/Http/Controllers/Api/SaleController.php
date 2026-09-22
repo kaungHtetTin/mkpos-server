@@ -166,7 +166,12 @@ class SaleController extends ApiController
         $sale = DB::table('sales')->leftJoin('customers', 'customers.id', '=', 'sales.customer_id')->where('sales.id', $id)->select('sales.*', 'customers.name as customer_name')->first();
         abort_if(! $sale, 404, 'Sale not found');
         $result = (array) $sale;
-        $result['items'] = DB::table('sale_items')->where('sale_id', $id)->orderBy('id')->get()->map(function ($row) {
+        $result['items'] = DB::table('sale_items as si')
+            ->leftJoin('products as p', 'p.id', '=', 'si.product_id')
+            ->where('si.sale_id', $id)
+            ->orderBy('si.id')
+            ->select('si.*', DB::raw("COALESCE(p.base_unit, 'Unit') as unit_name"))
+            ->get()->map(function ($row) {
             $item = (array) $row;
             $item['quantity'] = (float) $item['quantity'];
             $item['foc_quantity'] = (float) $item['foc_quantity'];
@@ -189,12 +194,12 @@ class SaleController extends ApiController
     public function receipt(int $id): array
     {
         $sale = $this->show($id);
-        $settings = array_merge([
+        $settings = \App\Support\BusinessLogo::addToSettings(array_merge([
             'shop_name' => 'MKPOS Shop', 'shop_title' => '', 'shop_address' => '', 'shop_phone' => '', 'currency' => 'Ks',
             'receipt_footer' => '', 'receipt_show_customer' => '1', 'receipt_show_payment_method' => '1', 'receipt_show_price_type' => '1',
             'receipt_paper_size' => '80mm', 'receipt_header_alignment' => 'center', 'receipt_margin_left' => '3', 'receipt_margin_right' => '3',
             'receipt_header_font_size' => '11', 'receipt_body_font_size' => '8.2', 'receipt_line_height' => '1.45',
-        ], DB::table('settings')->pluck('value', 'key')->all());
+        ], DB::table('settings')->pluck('value', 'key')->all()));
         return \App\Support\ReceiptRenderer::render($sale, $settings);
     }
 
@@ -223,10 +228,18 @@ class SaleController extends ApiController
 
     private function validated(Request $request): array
     {
-        return $request->validate(['items' => ['required', 'array', 'min:1'], 'items.*.product_id' => ['required', 'integer', 'exists:products,id'],
-            'items.*.product_name' => ['nullable', 'string', 'max:255'], 'items.*.price_type' => ['nullable', 'string', 'max:50'], 'items.*.quantity' => ['required', 'numeric', 'gt:0'], 'items.*.foc_quantity' => ['nullable', 'numeric', 'min:0'],
+        $data = $request->validate(['items' => ['required', 'array', 'min:1'], 'items.*.product_id' => ['required', 'integer', 'exists:products,id'],
+            'items.*.product_name' => ['nullable', 'string', 'max:255'], 'items.*.price_type' => ['nullable', 'string', 'max:50'], 'items.*.quantity' => ['required', 'numeric', 'min:0'], 'items.*.foc_quantity' => ['nullable', 'numeric', 'min:0'],
             'items.*.unit_price' => ['required', 'integer', 'min:0'], 'discount' => ['nullable', 'integer', 'min:0'], 'payment_type' => ['nullable', 'in:cash,credit'],
             'payment_method' => ['nullable', 'string'], 'paid_amount' => ['nullable', 'integer', 'min:0'], 'customer_id' => ['nullable', 'integer', 'exists:customers,id'], 'admin_pin' => ['nullable', 'string']]);
+
+        foreach ($data['items'] as $index => $item) {
+            if ((float) $item['quantity'] + (float) ($item['foc_quantity'] ?? 0) <= 0) {
+                throw ValidationException::withMessages(["items.{$index}.quantity" => ['Paid quantity or FOC quantity must be greater than zero.']]);
+            }
+        }
+
+        return $data;
     }
 
     private function save(?int $id, array $data, ?string $receiptNo = null, ?array $offline = null, array $editableArchivedProductIds = []): array
@@ -249,11 +262,13 @@ class SaleController extends ApiController
         $total = $subtotal - $discount;
         $paid = min(max((int) ($data['paid_amount'] ?? 0), 0), $total);
         $credit = max($total - $paid, 0);
+        $focOnly = collect($data['items'])->every(fn ($item) => (float) $item['quantity'] === 0.0)
+            && collect($data['items'])->contains(fn ($item) => (float) ($item['foc_quantity'] ?? 0) > 0.0);
         if ($offline && ($credit > 0 || ! empty($data['customer_id']) || ($data['payment_type'] ?? 'cash') !== 'cash' || strcasecmp((string) ($data['payment_method'] ?? ''), 'Credit') === 0)) {
             throw ValidationException::withMessages(['payment_type' => ['Offline sales must be fully paid and cannot use customer credit.']]);
         }
         abort_if($credit > 0 && empty($data['customer_id']), 400, 'Unpaid amount requires a customer');
-        $paymentMethod = $data['payment_method'] ?? 'Cash';
+        $paymentMethod = $focOnly ? 'FOC' : ($data['payment_method'] ?? 'Cash');
         if ($credit > 0 && $paid === 0 && $paymentMethod === 'Cash') {
             $paymentMethod = 'Credit';
         }

@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Validation\Rule;
 
 class ProductController extends ApiController
@@ -13,6 +14,15 @@ class ProductController extends ApiController
         $query = DB::table('products');
         if (! $request->boolean('include_inactive')) {
             $query->where('is_active', true);
+        }
+        if ($ids = trim((string) $request->query('ids', ''))) {
+            $productIds = collect(explode(',', $ids))
+                ->map(fn ($id) => (int) trim($id))
+                ->filter(fn ($id) => $id > 0)
+                ->unique()
+                ->values()
+                ->all();
+            $productIds ? $query->whereIn('id', $productIds) : $query->whereRaw('1 = 0');
         }
         if ($search = trim((string) $request->query('q', ''))) {
             $query->where(function ($q) use ($search) {
@@ -26,6 +36,9 @@ class ProductController extends ApiController
         }
         if ($barcode = trim((string) $request->query('barcode_q', ''))) {
             $query->where(fn ($q) => $q->where('barcode', 'like', "%{$barcode}%")->orWhere('sku', 'like', "%{$barcode}%"));
+        }
+        if ($request->boolean('has_barcode')) {
+            $query->whereNotNull('barcode')->where('barcode', '<>', '');
         }
         switch ($request->query('stock_status', 'all')) {
             case 'out_of_stock': $query->where('stock', '<=', 0);
@@ -76,8 +89,72 @@ class ProductController extends ApiController
         return $this->attachPrices([(array) $product])[0];
     }
 
+    public function internalBarcode()
+    {
+        for ($attempt = 0; $attempt < 20; $attempt++) {
+            $body = '20'.str_pad((string) random_int(0, 9999999999), 10, '0', STR_PAD_LEFT);
+            $sum = 0;
+            foreach (str_split($body) as $index => $digit) {
+                $sum += (int) $digit * ($index % 2 === 0 ? 1 : 3);
+            }
+            $barcode = $body.((10 - ($sum % 10)) % 10);
+            if (! DB::table('products')->where('barcode', $barcode)->where('is_active', true)->exists()) {
+                return ['barcode' => $barcode];
+            }
+        }
+
+        abort(503, 'Unable to generate a unique internal barcode. Please try again.');
+    }
+
     public function show(int $id)
     {
+        return $this->find($id);
+    }
+
+    public function photo(int $id)
+    {
+        $product = DB::table('products')->where('id', $id)->first(['photo_path']);
+        abort_if(! $product, 404, 'Product not found');
+        abort_unless($product->photo_path && Storage::disk('local')->exists($product->photo_path), 404, 'Product photo not found');
+
+        return response()->file(Storage::disk('local')->path($product->photo_path), [
+            'Cache-Control' => 'private, max-age=86400',
+            'X-Content-Type-Options' => 'nosniff',
+        ]);
+    }
+
+    public function uploadPhoto(Request $request, int $id)
+    {
+        $product = DB::table('products')->where('id', $id)->first(['id', 'business_id', 'photo_path']);
+        abort_if(! $product, 404, 'Product not found');
+        $data = $request->validate([
+            'photo' => ['required', 'image', 'mimes:jpeg,jpg,png,webp', 'max:50', 'dimensions:ratio=1/1'],
+        ]);
+        $path = $data['photo']->store('product-photos/'.$product->business_id, 'local');
+
+        try {
+            DB::table('products')->where('id', $id)->update(['photo_path' => $path, 'updated_at' => now()]);
+        } catch (\Throwable $error) {
+            Storage::disk('local')->delete($path);
+            throw $error;
+        }
+
+        if ($product->photo_path && $product->photo_path !== $path) {
+            Storage::disk('local')->delete($product->photo_path);
+        }
+
+        return $this->find($id);
+    }
+
+    public function deletePhoto(int $id)
+    {
+        $product = DB::table('products')->where('id', $id)->first(['id', 'photo_path']);
+        abort_if(! $product, 404, 'Product not found');
+        DB::table('products')->where('id', $id)->update(['photo_path' => null, 'updated_at' => now()]);
+        if ($product->photo_path) {
+            Storage::disk('local')->delete($product->photo_path);
+        }
+
         return $this->find($id);
     }
 
@@ -201,6 +278,9 @@ class ProductController extends ApiController
         $prices = DB::table('product_prices')->whereIn('product_id', $productIds)->orderBy('name')->get()->groupBy('product_id');
         foreach ($products as &$product) {
             unset($product['active_barcode']);
+            $photoPath = $product['photo_path'] ?? null;
+            unset($product['photo_path']);
+            $product['photo_url'] = $photoPath ? '/products/'.$product['id'].'/photo?v='.strtotime((string) ($product['updated_at'] ?? 'now')) : null;
             $product['stock'] = (float) $product['stock'];
             $product['low_stock_threshold'] = (float) $product['low_stock_threshold'];
             $product['purchase_conversion_factor'] = (float) $product['purchase_conversion_factor'];

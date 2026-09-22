@@ -51,11 +51,19 @@ class SubscriptionService
             ->orderByDesc('subscriptions.id')
             ->first();
 
-        $valid = $subscription
-            && $subscription->status === 'active'
+        $withinPeriod = $subscription
             && $now->greaterThanOrEqualTo($subscription->starts_at)
             && ($subscription->ends_at === null || $now->lessThan($subscription->ends_at));
-        $reason = $valid ? null : $this->reason($subscription, $now);
+        $cancelledWithinPaidPeriod = $subscription
+            && $subscription->status === 'cancelled'
+            && $subscription->ends_at !== null
+            && $withinPeriod;
+        $valid = $subscription
+            && ($subscription->status === 'active' || $cancelledWithinPaidPeriod)
+            && $withinPeriod;
+        $reason = $cancelledWithinPaidPeriod
+            ? 'cancelled'
+            : ($valid ? null : $this->reason($subscription, $now));
         $accessType = $this->accessType($subscription);
         $startsAt = $this->utcTimestamp($subscription?->starts_at);
         $endsAt = $this->utcTimestamp($subscription?->ends_at);
@@ -109,7 +117,9 @@ class SubscriptionService
             return 'no_subscription';
         }
         if ($subscription->status === 'cancelled') {
-            return 'cancelled';
+            return $subscription->ends_at !== null && $now->greaterThanOrEqualTo($subscription->ends_at)
+                ? 'expired'
+                : 'cancelled';
         }
         if ($subscription->status !== 'active') {
             return 'expired';
@@ -159,6 +169,10 @@ class SubscriptionService
 
     private function noticeCode(?string $accessType, bool $valid, ?string $reason, ?int $daysRemaining): ?string
     {
+        if ($reason === 'cancelled') {
+            return 'subscription_cancelled';
+        }
+
         if ($accessType === 'trial') {
             if ($valid) {
                 return $daysRemaining !== null && $daysRemaining <= 14 ? 'trial_ending' : 'trial_active';
@@ -210,6 +224,14 @@ class SubscriptionService
                 'label' => 'View billing',
             ],
         ];
+
+        if ($reason === 'cancelled' && $valid) {
+            $notice['stage'] = 'suspended';
+            $notice['title'] = 'Subscription suspended';
+            $notice['message'] = 'Your plan remains available until the paid-through date. Renew it to avoid interruption.';
+
+            return $notice;
+        }
 
         if ($accessType === 'trial' && $valid) {
             $stage = $daysRemaining !== null && $daysRemaining <= 3

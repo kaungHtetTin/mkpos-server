@@ -10,6 +10,96 @@ class PosApiTest extends TestCase
 {
     use DatabaseTransactions;
 
+    public function test_products_can_be_loaded_in_bulk_by_id_for_purchase_editing(): void
+    {
+        $this->registerOwner('Bulk Product Shop', 'bulk-products@example.com');
+
+        $first = $this->postJson('/api/products', [
+            'name' => 'Bulk First', 'sku' => 'BULK-1', 'barcode' => '', 'price' => 1000,
+        ])->assertOk()->json();
+        $second = $this->postJson('/api/products', [
+            'name' => 'Bulk Second', 'sku' => 'BULK-2', 'barcode' => '', 'price' => 2000,
+        ])->assertOk()->json();
+
+        $this->getJson('/api/products?with_total=true&ids='.$second['id'])
+            ->assertOk()
+            ->assertJsonPath('total', 1)
+            ->assertJsonCount(1, 'items')
+            ->assertJsonPath('items.0.id', $second['id'])
+            ->assertJsonMissing(['id' => $first['id']]);
+    }
+
+    public function test_product_internal_barcode_generator_returns_a_valid_unique_ean_13_code(): void
+    {
+        $this->registerOwner('Barcode Shop', 'barcode@example.com');
+
+        $first = $this->postJson('/api/products/internal-barcode')->assertOk()->json('barcode');
+        $this->assertMatchesRegularExpression('/^20\d{11}$/', $first);
+        $this->assertSame(0, $this->ean13Checksum($first));
+
+        $this->postJson('/api/products', [
+            'name' => 'Internal Barcode Product', 'barcode' => $first, 'price' => 1000,
+        ])->assertOk()->assertJsonPath('barcode', $first);
+        $this->postJson('/api/products', [
+            'name' => 'Product Without Barcode', 'barcode' => '', 'price' => 500,
+        ])->assertOk();
+
+        $this->getJson('/api/products?with_total=true&has_barcode=true&limit=1&offset=0')
+            ->assertOk()
+            ->assertJsonPath('total', 1)
+            ->assertJsonCount(1, 'items')
+            ->assertJsonPath('items.0.barcode', $first);
+
+        $second = $this->postJson('/api/products/internal-barcode')->assertOk()->json('barcode');
+        $this->assertNotSame($first, $second);
+        $this->assertSame(0, $this->ean13Checksum($second));
+    }
+
+    private function ean13Checksum(string $barcode): int
+    {
+        $sum = 0;
+        foreach (str_split($barcode) as $index => $digit) {
+            $sum += (int) $digit * ($index % 2 === 0 ? 1 : 3);
+        }
+
+        return $sum % 10;
+    }
+
+    public function test_sale_can_contain_only_foc_quantity_without_payment(): void
+    {
+        $this->registerOwner('FOC Shop', 'foc@example.com');
+
+        $product = $this->postJson('/api/products', [
+            'name' => 'Sample Gift', 'sku' => 'FOC-1', 'barcode' => '', 'category' => 'Tests',
+            'base_unit' => 'Piece', 'price' => 1500, 'cost' => 900, 'stock' => 5, 'low_stock_threshold' => 1,
+            'prices' => [['name' => 'Retail', 'price' => 1500]],
+        ])->assertOk()->json();
+
+        $this->postJson('/api/sales', [
+            'payment_method' => 'Cash', 'paid_amount' => 0, 'items' => [[
+                'product_id' => $product['id'], 'price_type' => 'Retail', 'quantity' => 0,
+                'foc_quantity' => 2, 'unit_price' => 1500,
+            ]],
+        ])->assertOk()
+            ->assertJsonPath('subtotal', 0)
+            ->assertJsonPath('total', 0)
+            ->assertJsonPath('paid_amount', 0)
+            ->assertJsonPath('credit_amount', 0)
+            ->assertJsonPath('payment_method', 'FOC')
+            ->assertJsonPath('items.0.quantity', 0)
+            ->assertJsonPath('items.0.foc_quantity', 2)
+            ->assertJsonPath('items.0.unit_name', 'Piece');
+
+        $this->assertDatabaseHas('products', ['id' => $product['id'], 'stock' => 3]);
+
+        $this->postJson('/api/sales', [
+            'items' => [[
+                'product_id' => $product['id'], 'price_type' => 'Retail', 'quantity' => 0,
+                'foc_quantity' => 0, 'unit_price' => 1500,
+            ]],
+        ])->assertUnprocessable()->assertJsonValidationErrors('items.0.quantity');
+    }
+
     public function test_product_purchase_sale_and_report_flow(): void
     {
         $session = $this->registerOwner('Flow Shop', 'flow@example.com');
@@ -346,6 +436,32 @@ class PosApiTest extends TestCase
             ->assertJsonPath('id', $payment['id'])
             ->assertJsonPath('customer_id', $customer['id'])
             ->assertJsonPath('amount', 500);
+    }
+
+    public function test_customer_sales_history_can_filter_all_credit_and_paid_sales(): void
+    {
+        $this->registerOwner('Customer Sales History Shop', 'customer-sales-history@example.com');
+        $customer = $this->postJson('/api/customers', ['name' => 'History Customer'])->assertOk()->json();
+        $product = $this->postJson('/api/products', [
+            'name' => 'History Product', 'sku' => 'HISTORY-1', 'barcode' => '', 'category' => 'Tests',
+            'price' => 2000, 'cost' => 1000, 'stock' => 10, 'low_stock_threshold' => 1,
+            'prices' => [['name' => 'Retail', 'price' => 2000]],
+        ])->assertOk()->json();
+        $items = [['product_id' => $product['id'], 'price_type' => 'Retail', 'quantity' => 1, 'foc_quantity' => 0, 'unit_price' => 2000]];
+
+        $this->postJson('/api/sales', [
+            'customer_id' => $customer['id'], 'payment_method' => 'Cash', 'paid_amount' => 2000, 'items' => $items,
+        ])->assertOk()->assertJsonPath('credit_amount', 0);
+        $this->postJson('/api/sales', [
+            'customer_id' => $customer['id'], 'payment_method' => 'Cash', 'paid_amount' => 500, 'items' => $items,
+        ])->assertOk()->assertJsonPath('credit_amount', 1500);
+
+        $basePath = '/api/customers/'.$customer['id'].'/sales?with_total=true';
+        $this->getJson($basePath)->assertOk()->assertJsonPath('total', 2)->assertJsonCount(2, 'items');
+        $this->getJson($basePath.'&sale_type=credit')->assertOk()
+            ->assertJsonPath('total', 1)->assertJsonPath('items.0.credit_amount', 1500);
+        $this->getJson($basePath.'&sale_type=paid')->assertOk()
+            ->assertJsonPath('total', 1)->assertJsonPath('items.0.credit_amount', 0);
     }
 
     public function test_expense_can_be_loaded_for_a_mobile_edit_deep_link(): void

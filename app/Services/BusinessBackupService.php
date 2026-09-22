@@ -37,6 +37,11 @@ class BusinessBackupService
         'products', 'customers', 'suppliers', 'settings',
     ];
 
+    private const FRESH_SETTINGS = [
+        'currency' => 'Ks',
+        'price_types' => 'Retail',
+    ];
+
     public function status(): array
     {
         $counts = [];
@@ -179,6 +184,56 @@ class BusinessBackupService
             'ok' => true,
             'restored_at' => now()->utc()->toIso8601String(),
             'records_restored' => $rowCount,
+            'safety_backup_created' => true,
+        ];
+    }
+
+    public function reset(int $businessId): array
+    {
+        $business = DB::table('businesses')->where('id', $businessId)->first();
+        if (! $business) {
+            throw new RuntimeException('Business not found.');
+        }
+
+        $safetyPath = 'business-backups/safety/business-'.$businessId.'-reset-'.now()->format('Ymd-His').'.mkpos-backup';
+        Storage::disk('local')->put($safetyPath, $this->export($businessId));
+
+        $productPhotos = DB::table('products')->whereNotNull('photo_path')->pluck('photo_path')->filter()->all();
+        $logoPath = (string) (DB::table('settings')->where('key', 'receipt_logo_path')->value('value') ?? '');
+        $recordsCleared = 0;
+
+        DB::transaction(function () use ($business, &$recordsCleared) {
+            foreach (self::DELETE_ORDER as $table) {
+                $recordsCleared += DB::table($table)->delete();
+            }
+
+            $settings = array_merge(self::FRESH_SETTINGS, [
+                'shop_name' => (string) $business->name,
+                'currency' => (string) ($business->currency ?: 'Ks'),
+            ]);
+            foreach ($settings as $key => $value) {
+                DB::table('settings')->insert(['key' => $key, 'value' => $value]);
+            }
+            DB::table('price_type_rules')->insert([
+                'name' => 'Retail',
+                'pricing_mode' => 'manual',
+                'markup_percent' => 0,
+                'rounding' => 1,
+                'minimum_profit' => 0,
+                'updated_at' => now(),
+            ]);
+        });
+
+        $files = array_values(array_unique(array_filter([...$productPhotos, $logoPath])));
+        if ($files) {
+            Storage::disk('local')->delete($files);
+        }
+        Storage::disk('local')->deleteDirectory('product-photos/'.$businessId);
+
+        return [
+            'ok' => true,
+            'reset_at' => now()->utc()->toIso8601String(),
+            'records_cleared' => $recordsCleared,
             'safety_backup_created' => true,
         ];
     }

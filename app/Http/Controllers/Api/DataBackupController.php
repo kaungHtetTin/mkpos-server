@@ -42,4 +42,15 @@ class DataBackupController extends ApiController
 
         return $this->backups->restore((int) $request->user('web')->business_id, $contents);
     }
+
+    public function reset(Request $request): array
+    {
+        $data = $request->validate([
+            'confirmation' => ['required', 'in:RESET'],
+            'admin_pin' => ['nullable', 'string'],
+        ]);
+        $this->requireAdminPin($data['admin_pin'] ?? '');
+
+        return $this->backups->reset((int) $request->user('web')->business_id);
+    }
 }

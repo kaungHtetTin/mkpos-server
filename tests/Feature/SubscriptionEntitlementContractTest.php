@@ -64,6 +64,43 @@ class SubscriptionEntitlementContractTest extends TestCase
         $this->assertNull($status['lifecycle_notice']);
     }
 
+    public function test_cancelled_paid_plan_stays_available_until_its_end_then_expires(): void
+    {
+        Carbon::setTestNow('2026-08-20 10:00:00 UTC');
+        $session = $this->registerBusiness('Suspended Paid Shop', 'entitlement-suspended@example.com');
+        $subscriptionId = $this->addSubscription(
+            $session['business']['id'],
+            'suspended-paid',
+            'cancelled',
+            '2026-08-01 10:00:00',
+            '2026-08-27 10:00:00'
+        );
+
+        $this->getJson('/api/subscription')->assertOk()
+            ->assertJsonPath('is_valid', true)
+            ->assertJsonPath('reason', 'cancelled')
+            ->assertJsonPath('notice_code', 'subscription_cancelled')
+            ->assertJsonPath('lifecycle_notice.stage', 'suspended')
+            ->assertJsonPath('lifecycle_notice.severity', 'danger')
+            ->assertJsonPath('days_remaining', 7);
+
+        $this->postJson('/api/products', [])->assertUnprocessable();
+
+        DB::table('business_subscriptions')->where('id', $subscriptionId)->update([
+            'ends_at' => '2026-08-20 10:00:00',
+        ]);
+
+        $this->getJson('/api/subscription')->assertOk()
+            ->assertJsonPath('is_valid', false)
+            ->assertJsonPath('reason', 'expired')
+            ->assertJsonPath('notice_code', 'subscription_expired')
+            ->assertJsonPath('lifecycle_notice.stage', 'blocked')
+            ->assertJsonPath('lifecycle_notice.title', 'Subscription expired');
+
+        $this->postJson('/api/products', [])->assertStatus(402)
+            ->assertJsonPath('subscription.reason', 'expired');
+    }
+
     public function test_active_trial_uses_server_countdown_and_restricts_data_capabilities(): void
     {
         Carbon::setTestNow('2026-08-20 10:00:00 UTC');
@@ -137,7 +174,8 @@ class SubscriptionEntitlementContractTest extends TestCase
             ->assertJsonPath('lifecycle_notice.severity', 'danger')
             ->assertJsonPath('lifecycle_notice.action.target', 'billing');
 
-        $this->getJson('/api/products')->assertStatus(402)
+        $this->getJson('/api/products')->assertOk();
+        $this->postJson('/api/products', [])->assertStatus(402)
             ->assertJsonPath('subscription.reason', 'expired')
             ->assertJsonPath('subscription.days_remaining', 0);
 
@@ -150,7 +188,8 @@ class SubscriptionEntitlementContractTest extends TestCase
             'is_active' => true,
         ]);
         $this->actingAs($staff, 'web');
-        $this->getJson('/api/products')->assertStatus(402)
+        $this->getJson('/api/products')->assertForbidden();
+        $this->postJson('/api/products', [])->assertStatus(402)
             ->assertJsonPath('subscription.access_type', 'trial')
             ->assertJsonPath('subscription.reason', 'expired');
     }
