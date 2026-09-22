@@ -341,6 +341,49 @@ class BusinessSubscriptionController extends Controller
         return $this->subscriptions->status($businessId);
     }
 
+    public function setStatus(Request $request, int $businessId): array
+    {
+        $data = $request->validate([
+            'status' => ['required', Rule::in(['active', 'suspended'])],
+        ]);
+
+        DB::transaction(function () use ($businessId, $data) {
+            abort_if(! DB::table('businesses')->where('id', $businessId)->lockForUpdate()->first(['id']), 404, 'Business not found');
+
+            $entitlement = $this->subscriptions->status($businessId);
+            $subscriptionId = (int) ($entitlement['subscription']['id'] ?? 0);
+            abort_if($subscriptionId === 0, 404, 'Business has no subscription to update');
+
+            $subscription = DB::table('business_subscriptions')
+                ->where('id', $subscriptionId)
+                ->where('business_id', $businessId)
+                ->lockForUpdate()
+                ->first();
+            abort_if(! $subscription, 404, 'Subscription not found');
+
+            if ($data['status'] === 'active') {
+                abort_if(
+                    $subscription->ends_at !== null && Carbon::parse($subscription->ends_at)->lessThanOrEqualTo(now()),
+                    409,
+                    'An expired subscription cannot be reactivated. Renew or assign a plan instead.'
+                );
+                abort_if(
+                    Carbon::parse($subscription->starts_at)->isFuture(),
+                    409,
+                    'A scheduled subscription cannot be activated before its start date.'
+                );
+            }
+
+            DB::table('business_subscriptions')->where('id', $subscriptionId)->update([
+                'status' => $data['status'] === 'suspended' ? 'cancelled' : 'active',
+                'starts_at' => DB::raw('starts_at'),
+                'updated_at' => now(),
+            ]);
+        });
+
+        return $this->subscriptions->status($businessId);
+    }
+
     public function approve(Request $request, int $requestId): array
     {
         $data = $request->validate(['admin_note' => ['nullable', 'string'], 'price_paid' => ['nullable', 'integer', 'min:0']]);

@@ -70,6 +70,7 @@ class SubscriptionService
         $daysRemaining = $this->daysRemaining($subscription?->ends_at, $now);
         $isTrial = $accessType === 'trial';
         $noticeCode = $this->noticeCode($accessType, (bool) $valid, $reason, $daysRemaining);
+        $canMutate = (bool) $valid && $reason !== 'cancelled';
 
         $pending = DB::table('subscription_requests as requests')
             ->join('subscription_plans as plans', 'plans.id', '=', 'requests.subscription_plan_id')
@@ -86,6 +87,7 @@ class SubscriptionService
 
         return [
             'is_valid' => (bool) $valid,
+            'can_mutate' => $canMutate,
             'reason' => $reason,
             'subscription' => $subscription ? $this->subscriptionArray($subscription) : null,
             'pending_request' => $pending ? (array) $pending : null,
@@ -228,7 +230,8 @@ class SubscriptionService
         if ($reason === 'cancelled' && $valid) {
             $notice['stage'] = 'suspended';
             $notice['title'] = 'Subscription suspended';
-            $notice['message'] = 'Your plan remains available until the paid-through date. Renew it to avoid interruption.';
+            $notice['message'] = 'You can view existing data until the paid-through date, but changes are disabled. Reactivate or renew the plan to continue working.';
+            $notice['restrictions'] = ['mutations'];
 
             return $notice;
         }

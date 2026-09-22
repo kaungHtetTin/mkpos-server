@@ -25,6 +25,7 @@ class SubscriptionEntitlementContractTest extends TestCase
         $session = $this->registerBusiness('No Plan Shop', 'entitlement-none@example.com');
 
         $this->assertSame(false, $session['subscription']['is_valid']);
+        $this->assertSame(false, $session['subscription']['can_mutate']);
         $this->assertSame('no_subscription', $session['subscription']['reason']);
         $this->assertSame(null, $session['subscription']['access_type']);
         $this->assertSame(false, $session['subscription']['is_trial']);
@@ -51,6 +52,7 @@ class SubscriptionEntitlementContractTest extends TestCase
         $status = $this->getJson('/api/subscription')->assertOk()->json();
 
         $this->assertTrue($status['is_valid']);
+        $this->assertTrue($status['can_mutate']);
         $this->assertNull($status['reason']);
         $this->assertIsArray($status['subscription']);
         $this->assertArrayHasKey('pending_request', $status);
@@ -78,13 +80,20 @@ class SubscriptionEntitlementContractTest extends TestCase
 
         $this->getJson('/api/subscription')->assertOk()
             ->assertJsonPath('is_valid', true)
+            ->assertJsonPath('can_mutate', false)
             ->assertJsonPath('reason', 'cancelled')
             ->assertJsonPath('notice_code', 'subscription_cancelled')
             ->assertJsonPath('lifecycle_notice.stage', 'suspended')
             ->assertJsonPath('lifecycle_notice.severity', 'danger')
             ->assertJsonPath('days_remaining', 7);
 
-        $this->postJson('/api/products', [])->assertUnprocessable();
+        $this->getJson('/api/products')->assertOk();
+        $this->postJson('/api/products', [])->assertStatus(402)
+            ->assertJsonPath('code', 'subscription_suspended')
+            ->assertJsonPath('subscription.is_valid', true)
+            ->assertJsonPath('subscription.can_mutate', false)
+            ->assertJsonPath('subscription.reason', 'cancelled')
+            ->assertJsonPath('subscription.lifecycle_notice.restrictions.0', 'mutations');
 
         DB::table('business_subscriptions')->where('id', $subscriptionId)->update([
             'ends_at' => '2026-08-20 10:00:00',

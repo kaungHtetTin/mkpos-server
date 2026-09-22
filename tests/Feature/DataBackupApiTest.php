@@ -91,8 +91,10 @@ class DataBackupApiTest extends TestCase
         $this->getJson('/api/data/export')->assertForbidden()
             ->assertJsonPath('subscription.is_valid', true)
             ->assertJsonPath('subscription.reason', 'cancelled');
-        $this->postJson('/api/data/restore-file')->assertForbidden()
+        $this->postJson('/api/data/restore-file')->assertStatus(402)
+            ->assertJsonPath('code', 'subscription_suspended')
             ->assertJsonPath('subscription.is_valid', true)
+            ->assertJsonPath('subscription.can_mutate', false)
             ->assertJsonPath('subscription.reason', 'cancelled');
     }
 

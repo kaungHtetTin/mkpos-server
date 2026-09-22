@@ -15,6 +15,7 @@ use App\Http\Controllers\Api\StaffController;
 use App\Http\Controllers\Api\SubscriptionController;
 use App\Http\Controllers\Api\SupplierController;
 use App\Http\Controllers\Office\AppReleaseController;
+use App\Models\AppRelease;
 use App\Http\Controllers\Office\BusinessSubscriptionController;
 use App\Http\Controllers\Office\FinancialReportController;
 use App\Http\Controllers\Office\OfficeAuthController;
@@ -22,6 +23,7 @@ use App\Http\Controllers\Office\PaymentMethodController;
 use App\Http\Controllers\Office\PlanController;
 use App\Http\Controllers\Office\TutorialController;
 use App\Services\AccessService;
+use App\Support\BusinessLogo;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Route;
 
@@ -46,7 +48,14 @@ Route::middleware(['auth:sanctum', 'business'])->group(function () {
         ->middleware(['throttle:10,1', 'subscription']);
     Route::post('/auth/logout', [AuthController::class, 'logout']);
     Route::get('/app-config', fn () => array_merge(config('mkpos'), [
-        'business' => request()->user('web')->business->only(['id', 'name', 'slug', 'timezone', 'currency']),
+        'business' => array_merge(
+            request()->user('web')->business->only(['id', 'name', 'slug', 'timezone', 'currency']),
+            [
+                'logo_data_url' => BusinessLogo::dataUrl((string) (DB::table('settings')
+                    ->where('key', BusinessLogo::SETTING_KEY)
+                    ->value('value') ?? '')),
+            ],
+        ),
         'permissions' => app(AccessService::class)->permissions(request()->user('web')),
         'language' => DB::table('settings')->where('key', 'language')->value('value') ?: 'en',
     ]));
@@ -202,7 +211,7 @@ Route::middleware('office.auth')->prefix('office')->group(function () {
     Route::post('/auth/logout', [OfficeAuthController::class, 'logout']);
     Route::get('/app-releases', [AppReleaseController::class, 'index']);
     Route::put('/app-releases/{platform}', [AppReleaseController::class, 'store'])
-        ->whereIn('platform', ['windows', 'android'])
+        ->whereIn('platform', AppRelease::PLATFORMS)
         ->middleware('throttle:12,1');
     Route::get('/plans', [PlanController::class, 'index']);
     Route::post('/plans', [PlanController::class, 'store']);
@@ -221,6 +230,7 @@ Route::middleware('office.auth')->prefix('office')->group(function () {
     Route::put('/businesses/{businessId}/subscription', [BusinessSubscriptionController::class, 'assign']);
     Route::post('/businesses/{businessId}/subscription/renew', [BusinessSubscriptionController::class, 'renew']);
     Route::post('/businesses/{businessId}/subscription/trial/extend', [BusinessSubscriptionController::class, 'extendTrial']);
+    Route::patch('/businesses/{businessId}/subscription/status', [BusinessSubscriptionController::class, 'setStatus']);
     Route::delete('/businesses/{businessId}/subscription', [BusinessSubscriptionController::class, 'cancel']);
     Route::post('/subscription-requests/{requestId}/approve', [BusinessSubscriptionController::class, 'approve']);
     Route::post('/subscription-requests/{requestId}/reject', [BusinessSubscriptionController::class, 'reject']);

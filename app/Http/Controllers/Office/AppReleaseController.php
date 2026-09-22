@@ -37,7 +37,7 @@ class AppReleaseController extends Controller
             'release_notes' => ['nullable', 'string', 'max:2000'],
         ]);
 
-        $expectedExtension = $platform === 'windows' ? 'exe' : 'apk';
+        $expectedExtension = AppRelease::isWindows($platform) ? 'exe' : 'apk';
         $extension = Str::lower(pathinfo($data['original_name'], PATHINFO_EXTENSION));
         if ($extension !== $expectedExtension) {
             throw ValidationException::withMessages([
@@ -59,7 +59,7 @@ class AppReleaseController extends Controller
             ]);
         }
 
-        $mimeType = $platform === 'windows'
+        $mimeType = AppRelease::isWindows($platform)
             ? 'application/vnd.microsoft.portable-executable'
             : 'application/vnd.android.package-archive';
         $checksum = hash_file('sha256', Storage::disk('local')->path($storedPath));

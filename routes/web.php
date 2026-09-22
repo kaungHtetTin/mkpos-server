@@ -2,6 +2,7 @@
 
 use App\Http\Controllers\DownloadController;
 use App\Http\Controllers\LandingController;
+use App\Models\AppRelease;
 use Illuminate\Support\Facades\Route;
 
 /*
@@ -22,7 +23,7 @@ Route::get('/plans', [LandingController::class, 'plans'])->name('plans.index');
 Route::get('/tutorials', [LandingController::class, 'tutorials'])->name('tutorials.index');
 Route::get('/tutorials/{tutorial}/thumbnail', [LandingController::class, 'tutorialThumbnail'])->whereNumber('tutorial')->name('tutorials.thumbnail');
 Route::get('/downloads/{platform}', [DownloadController::class, 'show'])
-    ->whereIn('platform', ['windows', 'android'])
+    ->whereIn('platform', AppRelease::PLATFORMS)
     ->name('downloads.show');
 
 Route::get('/office/{path?}', function () {

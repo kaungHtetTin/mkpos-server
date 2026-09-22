@@ -138,12 +138,35 @@
         <section class="section platforms" id="platforms">
             <div class="container">
                 <div class="center-heading"><span class="section-kicker">Work your way</span><h2>One business. Every screen you need.</h2><p>Use MKPOS where the work happens—from the counter to the stockroom to your desk.</p></div>
+                @php($windowsRelease = $releases->get('windows'))
+                @php($windows32Release = $releases->get('windows32'))
+                @php($androidRelease = $releases->get('android'))
                 <div class="platform-grid">
-                    <article><span><svg><use href="#icon-globe"/></svg></span><h3>Web application</h3><p>Open your workspace in a modern browser and manage the full business from anywhere.</p><div class="platform-action"><small>Always current</small><a class="platform-download-button secondary" href="{{ url('/app') }}/#/login">Open web app <svg><use href="#icon-arrow"/></svg></a></div></article>
-                    @php($windowsRelease = $releases->get('windows'))
-                    <article class="featured"><span><svg><use href="#icon-monitor"/></svg></span><h3>Windows desktop</h3><p>A focused checkout experience with support for eligible offline cash sales and later synchronization.</p><div class="platform-action">@if($windowsRelease)<small>Version {{ $windowsRelease->version }} · {{ number_format($windowsRelease->file_size / 1048576, 1) }} MB</small><a class="platform-download-button" href="{{ route('downloads.show', ['platform' => 'windows']) }}">Download for Windows <svg><use href="#icon-arrow"/></svg></a>@else<small>Desktop download coming soon</small><span class="platform-download-unavailable">Not yet published</span>@endif</div></article>
-                    @php($androidRelease = $releases->get('android'))
-                    <article><span><svg><use href="#icon-phone"/></svg></span><h3>Android mobile</h3><p>Carry products, purchases, accounts and reports with you in a mobile-first application.</p><div class="platform-action">@if($androidRelease)<small>Version {{ $androidRelease->version }} · {{ number_format($androidRelease->file_size / 1048576, 1) }} MB</small><a class="platform-download-button secondary" href="{{ route('downloads.show', ['platform' => 'android']) }}">Download Android APK <svg><use href="#icon-arrow"/></svg></a>@else<small>Android download coming soon</small><span class="platform-download-unavailable">Not yet published</span>@endif</div></article>
+                    <article>
+                        <span><svg><use href="#icon-globe"/></svg></span>
+                        <div class="platform-copy"><small class="platform-type">Browser</small><h3>Web desktop</h3><p>Full workspace for desktop and laptop browsers.</p></div>
+                        <div class="platform-action"><small>Always current</small><a class="platform-download-button secondary" href="{{ url('/app') }}/#/login">Open desktop web <svg><use href="#icon-arrow"/></svg></a></div>
+                    </article>
+                    <article>
+                        <span><svg><use href="#icon-phone"/></svg></span>
+                        <div class="platform-copy"><small class="platform-type">Browser</small><h3>Web mobile</h3><p>Touch-friendly mobile access without an installation.</p></div>
+                        <div class="platform-action"><small>Mobile optimized</small><a class="platform-download-button secondary" href="{{ url('/mobile') }}/#/login">Open mobile web <svg><use href="#icon-arrow"/></svg></a></div>
+                    </article>
+                    <article>
+                        <span><svg><use href="#icon-phone"/></svg></span>
+                        <div class="platform-copy"><small class="platform-type">Install</small><h3>Android</h3><p>Native mobile access with camera and barcode support.</p></div>
+                        <div class="platform-action">@if($androidRelease)<small>Version {{ $androidRelease->version }} · {{ number_format($androidRelease->file_size / 1048576, 1) }} MB</small><a class="platform-download-button secondary" href="{{ route('downloads.show', ['platform' => 'android']) }}">Download APK <svg><use href="#icon-arrow"/></svg></a>@else<small>Android download coming soon</small><span class="platform-download-unavailable">Not yet published</span>@endif</div>
+                    </article>
+                    <article class="featured">
+                        <span><svg><use href="#icon-monitor"/></svg></span>
+                        <div class="platform-copy"><small class="platform-type">Recommended</small><h3>Windows 64-bit</h3><p>Desktop checkout for modern 64-bit Windows computers.</p></div>
+                        <div class="platform-action">@if($windowsRelease)<small>Version {{ $windowsRelease->version }} · {{ number_format($windowsRelease->file_size / 1048576, 1) }} MB</small><a class="platform-download-button" href="{{ route('downloads.show', ['platform' => 'windows']) }}">Download 64-bit <svg><use href="#icon-arrow"/></svg></a>@else<small>64-bit download coming soon</small><span class="platform-download-unavailable">Not yet published</span>@endif</div>
+                    </article>
+                    <article>
+                        <span><svg><use href="#icon-monitor"/></svg></span>
+                        <div class="platform-copy"><small class="platform-type">Legacy support</small><h3>Windows 32-bit</h3><p>Compatible desktop build for older x86 Windows computers.</p></div>
+                        <div class="platform-action">@if($windows32Release)<small>Version {{ $windows32Release->version }} · {{ number_format($windows32Release->file_size / 1048576, 1) }} MB</small><a class="platform-download-button secondary" href="{{ route('downloads.show', ['platform' => 'windows32']) }}">Download 32-bit <svg><use href="#icon-arrow"/></svg></a>@else<small>32-bit download coming soon</small><span class="platform-download-unavailable">Not yet published</span>@endif</div>
+                    </article>
                 </div>
             </div>
         </section>

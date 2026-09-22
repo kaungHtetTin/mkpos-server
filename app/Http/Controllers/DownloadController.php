@@ -28,8 +28,12 @@ class DownloadController extends Controller
 
     private function downloadName(AppRelease $release): string
     {
-        $platform = $release->platform === 'windows' ? 'Windows' : 'Android';
-        $extension = $release->platform === 'windows' ? 'exe' : 'apk';
+        $platform = match ($release->platform) {
+            'windows' => 'Windows',
+            'windows32' => 'Windows-32bit',
+            default => 'Android',
+        };
+        $extension = AppRelease::isWindows($release->platform) ? 'exe' : 'apk';
         $version = preg_replace('/[^A-Za-z0-9._-]+/', '-', $release->version);
 
         return "MKPOS-{$platform}-{$version}.{$extension}";

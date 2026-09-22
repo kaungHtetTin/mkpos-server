@@ -42,17 +42,42 @@ class OfficeAppReleaseTest extends TestCase
         Storage::fake('local');
         $this->actingAs($this->createAdmin(), 'office');
         $this->upload('/api/office/app-releases/windows', '0.3.0', 'MKPOS.exe', 'windows-installer')->assertOk();
+        $this->upload('/api/office/app-releases/windows32', '0.3.0', 'MKPOS-ia32.exe', 'windows-32-installer')
+            ->assertOk()
+            ->assertJsonPath('release.platform', 'windows32');
 
         $this->get('/')
             ->assertOk()
             ->assertSee('Version 0.3.0')
-            ->assertSee(route('downloads.show', ['platform' => 'windows']), false);
+            ->assertSee('Web desktop')
+            ->assertSee('Web mobile')
+            ->assertSee('Windows 64-bit')
+            ->assertSee('Windows 32-bit')
+            ->assertSee('Download 64-bit')
+            ->assertSee('Download 32-bit')
+            ->assertSee(route('downloads.show', ['platform' => 'windows']), false)
+            ->assertSee(route('downloads.show', ['platform' => 'windows32']), false);
 
         $this->get('/downloads/windows')
             ->assertOk()
             ->assertDownload('MKPOS-Windows-0.3.0.exe');
+        $this->get('/downloads/windows32')
+            ->assertOk()
+            ->assertDownload('MKPOS-Windows-32bit-0.3.0.exe');
 
         $this->assertSame(1, AppRelease::where('platform', 'windows')->value('download_count'));
+        $this->assertSame(1, AppRelease::where('platform', 'windows32')->value('download_count'));
+    }
+
+    public function test_office_release_catalog_exposes_separate_windows_architectures(): void
+    {
+        $this->actingAs($this->createAdmin('release-catalog@example.com'), 'office');
+
+        $this->getJson('/api/office/app-releases')
+            ->assertOk()
+            ->assertJsonPath('items.0.platform', 'windows')
+            ->assertJsonPath('items.1.platform', 'windows32')
+            ->assertJsonPath('items.2.platform', 'android');
     }
 
     public function test_release_upload_requires_office_authentication_and_correct_file_extension(): void
@@ -62,6 +87,9 @@ class OfficeAppReleaseTest extends TestCase
 
         $this->actingAs($this->createAdmin('release-extension@example.com'), 'office');
         $this->upload('/api/office/app-releases/android', '1.0.0', 'MKPOS.exe', 'not-an-apk')
+            ->assertUnprocessable()
+            ->assertJsonValidationErrors('file');
+        $this->upload('/api/office/app-releases/windows32', '1.0.0', 'MKPOS.apk', 'not-an-exe')
             ->assertUnprocessable()
             ->assertJsonValidationErrors('file');
     }

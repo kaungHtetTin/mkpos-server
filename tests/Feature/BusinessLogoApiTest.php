@@ -22,6 +22,8 @@ class BusinessLogoApiTest extends TestCase
         ])->assertOk()->json();
 
         $this->assertStringStartsWith('data:image/png;base64,', $settings['receipt_logo_data_url']);
+        $this->getJson('/api/app-config')->assertOk()
+            ->assertJsonPath('business.logo_data_url', fn ($logo) => is_string($logo) && str_starts_with($logo, 'data:image/png;base64,'));
         $path = DB::table('settings')->where('business_id', $first['business']['id'])->where('key', 'receipt_logo_path')->value('value');
         Storage::disk('local')->assertExists($path);
         $this->postJson('/api/settings/receipt-preview', [])->assertOk()
@@ -44,6 +46,7 @@ class BusinessLogoApiTest extends TestCase
         $this->postJson('/api/auth/logout')->assertOk();
         $this->registerOwner('Other Shop', 'other-logo-shop@example.com');
         $this->getJson('/api/settings')->assertOk()->assertJsonPath('receipt_logo_data_url', '');
+        $this->getJson('/api/app-config')->assertOk()->assertJsonPath('business.logo_data_url', '');
 
         $this->postJson('/api/auth/login', ['email' => 'logo-shop@example.com', 'password' => 'password123'])->assertOk();
         $this->deleteJson('/api/settings/logo')->assertOk()->assertJsonPath('receipt_logo_data_url', '');
