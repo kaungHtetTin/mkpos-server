@@ -17,6 +17,7 @@ use App\Http\Controllers\Api\SupplierController;
 use App\Http\Controllers\Office\AppReleaseController;
 use App\Models\AppRelease;
 use App\Http\Controllers\Office\BusinessSubscriptionController;
+use App\Http\Controllers\Office\ContactSettingsController;
 use App\Http\Controllers\Office\FinancialReportController;
 use App\Http\Controllers\Office\OfficeAuthController;
 use App\Http\Controllers\Office\PaymentMethodController;
@@ -41,6 +42,7 @@ use Illuminate\Support\Facades\Route;
 Route::get('/health', fn () => ['ok' => DB::selectOne('SELECT 1') !== null, 'backend' => 'laravel', 'database' => 'mysql']);
 Route::post('/auth/register', [AuthController::class, 'register'])->middleware('throttle:10,1');
 Route::post('/auth/login', [AuthController::class, 'login'])->middleware('throttle:10,1');
+Route::get('/contact-settings', [ContactSettingsController::class, 'show']);
 
 Route::middleware(['auth:sanctum', 'business'])->group(function () {
     Route::get('/auth/me', [AuthController::class, 'me']);
@@ -96,8 +98,8 @@ Route::middleware(['auth:sanctum', 'business'])->group(function () {
         });
 
         Route::get('/customers', [CustomerController::class, 'index'])->middleware('module:customers,sell,transactions');
+        Route::post('/customers', [CustomerController::class, 'store'])->middleware('module:customers,sell');
         Route::middleware('module:customers')->group(function () {
-            Route::post('/customers', [CustomerController::class, 'store']);
             Route::put('/customers/{id}', [CustomerController::class, 'update']);
             Route::delete('/customers/{id}', [CustomerController::class, 'destroy']);
         });
@@ -210,6 +212,8 @@ Route::middleware('office.auth')->prefix('office')->group(function () {
     Route::put('/auth/profile', [OfficeAuthController::class, 'updateProfile'])->middleware('throttle:10,1');
     Route::post('/auth/logout', [OfficeAuthController::class, 'logout']);
     Route::get('/app-releases', [AppReleaseController::class, 'index']);
+    Route::get('/contact-settings', [ContactSettingsController::class, 'show']);
+    Route::put('/contact-settings', [ContactSettingsController::class, 'update'])->middleware('throttle:10,1');
     Route::put('/app-releases/{platform}', [AppReleaseController::class, 'store'])
         ->whereIn('platform', AppRelease::PLATFORMS)
         ->middleware('throttle:12,1');
@@ -222,9 +226,11 @@ Route::middleware('office.auth')->prefix('office')->group(function () {
     Route::put('/payment-methods/{id}', [PaymentMethodController::class, 'update']);
     Route::delete('/payment-methods/{id}', [PaymentMethodController::class, 'destroy']);
     Route::get('/businesses', [BusinessSubscriptionController::class, 'index']);
+    Route::delete('/businesses', [BusinessSubscriptionController::class, 'destroyBusinesses'])->middleware('throttle:10,1');
     Route::get('/businesses/{businessId}', [BusinessSubscriptionController::class, 'show']);
     Route::put('/businesses/{businessId}/owner-password', [BusinessSubscriptionController::class, 'resetOwnerPassword'])->middleware('throttle:10,1');
     Route::get('/subscription-requests', [BusinessSubscriptionController::class, 'requests']);
+    Route::get('/subscription-payments', [FinancialReportController::class, 'payments']);
     Route::get('/financial-report', [FinancialReportController::class, 'index']);
     Route::delete('/financial-records/{paymentId}', [FinancialReportController::class, 'destroy'])->whereNumber('paymentId');
     Route::put('/businesses/{businessId}/subscription', [BusinessSubscriptionController::class, 'assign']);

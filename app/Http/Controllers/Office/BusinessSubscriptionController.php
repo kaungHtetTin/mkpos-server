@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Office;
 use App\Http\Controllers\Controller;
 use App\Services\SubscriptionService;
 use App\Services\OfficeBusinessIndex;
+use App\Services\OfficeBusinessDeletion;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -30,6 +31,7 @@ class BusinessSubscriptionController extends Controller
             'access' => ['sometimes', Rule::in(['all', 'trial', 'paid', 'expired', 'cancelled', 'scheduled', 'none'])],
             'prospect' => ['sometimes', Rule::in(['all', 'requested', 'engaged', 'setup', 'early', 'paid'])],
             'sort' => ['sometimes', Rule::in(['newest', 'potential', 'activity'])],
+            'deletion_candidate' => ['sometimes', Rule::in(['all', 'suggested'])],
         ]);
         $all = DB::query()->fromSub(app(OfficeBusinessIndex::class)->query(), 'business_index');
         $counts = (clone $all)->select('access_state')->selectRaw('COUNT(*) as total')->groupBy('access_state')->pluck('total', 'access_state')->map(fn ($value) => (int) $value)->all();
@@ -42,6 +44,21 @@ class BusinessSubscriptionController extends Controller
         }
         foreach (['access' => 'access_state', 'prospect' => 'prospect'] as $parameter => $column) {
             if ($request->query($parameter, 'all') !== 'all') $query->where($column, $request->query($parameter));
+        }
+        if ($request->query('deletion_candidate', 'all') === 'suggested') {
+            $cutoff = now()->subDays(30);
+            $query->where('business_index.created_at', '<', $cutoff)
+                ->whereNotExists(function ($subquery) {
+                    $subquery->selectRaw('1')->from('business_subscriptions')
+                        ->whereColumn('business_subscriptions.business_id', 'business_index.id');
+                });
+            foreach (['sales', 'purchases', 'customer_payments', 'supplier_payments', 'expenses', 'stock_movements'] as $table) {
+                $query->whereNotExists(function ($subquery) use ($table, $cutoff) {
+                    $subquery->selectRaw('1')->from($table)
+                        ->whereColumn("{$table}.business_id", 'business_index.id')
+                        ->where("{$table}.created_at", '>=', $cutoff);
+                });
+            }
         }
         $total = (clone $query)->count();
         $perPage = (int) $request->query('per_page', 25);
@@ -62,6 +79,17 @@ class BusinessSubscriptionController extends Controller
         return ['items' => $items, 'total' => $total, 'page' => $page, 'per_page' => $perPage, 'last_page' => $lastPage,
             'summary' => ['total' => array_sum($counts), 'access_counts' => $counts],
             'activity_window_days' => 30, 'as_of' => now()->utc()->toISOString()];
+    }
+
+    public function destroyBusinesses(Request $request, OfficeBusinessDeletion $deletion): array
+    {
+        $data = $request->validate([
+            'ids' => ['required', 'array', 'min:1', 'max:100'],
+            'ids.*' => ['required', 'integer', 'min:1', 'distinct'],
+            'confirmation' => ['required', Rule::in(['DELETE'])],
+        ]);
+
+        return $deletion->delete($data['ids']);
     }
 
     public function show(int $businessId): array

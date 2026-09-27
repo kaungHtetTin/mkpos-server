@@ -5,9 +5,54 @@ namespace App\Http\Controllers\Office;
 use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Validation\Rule;
 
 class FinancialReportController extends Controller
 {
+    public function payments(Request $request): array
+    {
+        $data = $request->validate([
+            'page' => ['sometimes', 'integer', 'min:1'],
+            'per_page' => ['sometimes', 'integer', 'min:1', 'max:100'],
+            'q' => ['nullable', 'string', 'max:200'],
+            'currency' => ['nullable', 'string', 'max:20'],
+            'type' => ['sometimes', Rule::in(['all', 'assignment', 'renewal'])],
+        ]);
+
+        $query = DB::table('subscription_payments as payments')
+            ->join('businesses', 'businesses.id', '=', 'payments.business_id')
+            ->join('subscription_plans as plans', 'plans.id', '=', 'payments.subscription_plan_id')
+            ->leftJoin('platform_admins as admins', 'admins.id', '=', 'payments.created_by_admin_id')
+            ->where('payments.amount', '>', 0);
+        if ($search = trim($data['q'] ?? '')) {
+            $query->where(function ($filter) use ($search) {
+                $filter->where('businesses.name', 'like', "%{$search}%")
+                    ->orWhere('plans.name', 'like', "%{$search}%")
+                    ->orWhere('admins.name', 'like', "%{$search}%");
+            });
+        }
+        if ($currency = ($data['currency'] ?? '')) $query->where('payments.currency', $currency);
+        if (($data['type'] ?? 'all') !== 'all') $query->where('payments.type', $data['type']);
+
+        $total = (clone $query)->count();
+        $perPage = (int) ($data['per_page'] ?? 25);
+        $lastPage = max(1, (int) ceil($total / $perPage));
+        $page = min((int) ($data['page'] ?? 1), $lastPage);
+        $items = $query->select(
+            'payments.id', 'payments.business_id', 'payments.type', 'payments.amount',
+            'payments.currency', 'payments.duration_days', 'payments.note', 'payments.paid_at',
+            'businesses.name as business_name', 'plans.name as plan_name',
+            'admins.name as created_by_name'
+        )->orderByDesc('payments.paid_at')->orderByDesc('payments.id')
+            ->offset(($page - 1) * $perPage)->limit($perPage)->get()->all();
+
+        return [
+            'items' => $items, 'total' => $total, 'page' => $page,
+            'per_page' => $perPage, 'last_page' => $lastPage,
+            'currencies' => DB::table('subscription_payments')->where('amount', '>', 0)->distinct()->orderBy('currency')->pluck('currency')->all(),
+        ];
+    }
+
     public function destroy(int $paymentId): array
     {
         abort_unless(DB::table('subscription_payments')->where('id', $paymentId)->delete(), 404, 'Financial record not found');

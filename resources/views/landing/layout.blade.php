@@ -4,10 +4,10 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="theme-color" content="#0b4a3b">
-    <meta name="description" content="MKPOS brings sales, stock, purchases, customer credit, supplier accounts and business reports into one clear point-of-sale workspace.">
+    <meta name="description" content="MKPOS is a point-of-sale app for local shops. Record sales, manage stock, track credit and see reports in one place.">
     <meta property="og:type" content="website">
-    <meta property="og:title" content="MKPOS — Simple point of sale. Complete business control.">
-    <meta property="og:description" content="Run sales, inventory, credit accounts and business reporting from one dependable workspace.">
+    <meta property="og:title" content="MKPOS — Sales, stock and credit in one place">
+    <meta property="og:description" content="A simple point-of-sale app for local shops. Sell, manage stock and track what you are owed.">
     <meta property="og:url" content="{{ url('/') }}">
     <meta property="og:image" content="{{ asset('app/branding/mkicon.png') }}">
     <link rel="canonical" href="{{ url()->current() }}">
@@ -41,11 +41,11 @@
                 <span>MKPOS</span>
             </a>
             <nav class="desktop-nav" aria-label="Primary navigation">
-                <a href="{{ route('landing') }}#features">Features</a>
-                <a href="{{ route('landing') }}#platforms">Platforms</a>
                 <a href="{{ route('landing') }}#how-it-works">How it works</a>
-                <a href="{{ route('documentation.index') }}">Documentation</a><a href="{{ route('tutorials.index') }}">Tutorials</a><a href="{{ route('plans.index') }}">Plans</a>
-                <a href="{{ route('landing') }}#security">Security</a>
+                <a href="{{ route('landing') }}#features">Features</a>
+                <a href="{{ route('landing') }}#platforms">Downloads</a>
+                <a href="{{ route('plans.index') }}">Pricing</a>
+                <a href="{{ route('landing') }}#contact">Contact</a>
             </nav>
             <div class="nav-actions">
                 <a class="text-link" href="{{ url('/app') }}/#/login">Sign in</a>
@@ -54,10 +54,14 @@
             <details class="mobile-nav">
                 <summary aria-label="Open navigation"><span></span><span></span><span></span></summary>
                 <div>
-                    <a href="{{ route('landing') }}#features">Features</a>
-                    <a href="{{ route('landing') }}#platforms">Platforms</a>
                     <a href="{{ route('landing') }}#how-it-works">How it works</a>
-                    <a href="{{ route('documentation.index') }}">Documentation</a><a href="{{ route('tutorials.index') }}">Tutorials</a><a href="{{ route('plans.index') }}">Plans</a>
+                    <a href="{{ route('landing') }}#features">Features</a>
+                    <a href="{{ route('landing') }}#platforms">Downloads</a>
+                    <a href="{{ route('plans.index') }}">Pricing</a>
+                    <a href="{{ route('landing') }}#contact">Contact</a>
+                    <span class="mobile-nav-label">Learn more</span>
+                    <a href="{{ route('documentation.index') }}">Documentation</a>
+                    <a href="{{ route('tutorials.index') }}">Tutorials</a>
                     <a href="{{ route('landing') }}#security">Security</a>
                     <a href="{{ url('/app') }}/#/login">Sign in</a>
                     <a class="button" href="{{ url('/app') }}/#/signup">Start free trial</a>
@@ -67,10 +71,28 @@
     </header>
 
 @yield('content')
-    <footer>
+    @php($contacts = \App\Support\PlatformContacts::all())
+    <footer id="contact">
         <div class="container footer-main">
-            <div><a class="brand footer-brand" href="{{ url('/') }}"><img src="{{ asset('app/branding/mktransparenticon.png') }}" alt="" width="42" height="42"><span>MKPOS</span></a><p>A clear, connected point-of-sale workspace for modern local businesses.</p></div>
-            <nav aria-label="Footer navigation"><div><strong>Product</strong><a href="{{ route('landing') }}#features">Features</a><a href="{{ route('landing') }}#platforms">Downloads</a><a href="{{ route('landing') }}#security">Security</a></div><div><strong>Access</strong><a href="{{ url('/app') }}/#/signup">Start free trial</a><a href="{{ url('/app') }}/#/login">Business sign in</a></div></nav>
+            <div><a class="brand footer-brand" href="{{ url('/') }}"><img src="{{ asset('app/branding/mktransparenticon.png') }}" alt="" width="42" height="42"><span>MKPOS</span></a><p>Sales, stock and credit in one app for local shops.</p></div>
+            <nav aria-label="Footer navigation">
+                <div><strong>Product</strong><a href="{{ route('landing') }}#how-it-works">How it works</a><a href="{{ route('landing') }}#features">Features</a><a href="{{ route('landing') }}#platforms">Downloads</a><a href="{{ route('plans.index') }}">Pricing</a></div>
+                <div><strong>Resources</strong><a href="{{ route('documentation.index') }}">Documentation</a><a href="{{ route('tutorials.index') }}">Tutorials</a><a href="{{ route('landing') }}#security">Security</a></div>
+                <div><strong>Access</strong><a href="{{ url('/app') }}/#/signup">Start free trial</a><a href="{{ url('/app') }}/#/login">Business sign in</a></div>
+                @if($contacts['phone_numbers'] || $contacts['viber_numbers'] || $contacts['telegram_url'] || $contacts['email'] || $contacts['community_url'])
+                    <div><strong>Contact & community</strong>
+                        @foreach($contacts['phone_numbers'] as $phone)
+                            <a href="tel:{{ preg_replace('/[^+0-9]/', '', $phone) }}">{{ $phone }}</a>
+                        @endforeach
+                        @foreach($contacts['viber_numbers'] as $phone)
+                            <a href="{{ \App\Support\PlatformContacts::viberUrl($phone) }}">Viber {{ $phone }}</a>
+                        @endforeach
+                        @if($contacts['telegram_url'])<a href="{{ $contacts['telegram_url'] }}" target="_blank" rel="noopener noreferrer">Telegram</a>@endif
+                        @if($contacts['email'])<a href="mailto:{{ $contacts['email'] }}">{{ $contacts['email'] }}</a>@endif
+                        @if($contacts['community_url'])<a href="{{ $contacts['community_url'] }}" target="_blank" rel="noopener noreferrer">{{ $contacts['community_label'] ?: 'Community' }}</a>@endif
+                    </div>
+                @endif
+            </nav>
         </div>
         <div class="container footer-bottom"><span>© {{ date('Y') }} MKPOS. All rights reserved.</span><span>Made for businesses that keep moving.</span></div>
     </footer>

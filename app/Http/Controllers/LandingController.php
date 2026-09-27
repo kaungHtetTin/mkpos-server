@@ -50,7 +50,7 @@ class LandingController extends Controller
         return view('landing', [
             'releases' => AppRelease::query()->get()->keyBy('platform'),
             'topics' => self::TOPICS,
-            'tutorials' => Tutorial::where('is_published', true)->orderBy('sort_order')->orderByDesc('id')->limit(6)->get(),
+            'tutorials' => Tutorial::where('is_published', true)->orderBy('sort_order')->orderByDesc('id')->limit(3)->get(),
         ]);
     }
 
