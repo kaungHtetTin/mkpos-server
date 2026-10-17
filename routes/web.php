@@ -47,9 +47,16 @@ Route::get('/mobile/{path?}', function () {
     return response()->file($index);
 })->where('path', '.*');
 
+Route::get('/shop/{path?}', function () {
+    $index = public_path('shop/index.html');
+    abort_unless(is_file($index), 404, 'Customer shop build not found. Run npm run build:laravel in shop.');
+
+    return response()->file($index);
+})->where('path', '.*');
+
 Route::get('/{path?}', function () {
     $index = public_path('app/index.html');
     abort_unless(is_file($index), 404, 'React build not found. Run npm run build:laravel in frontend.');
 
     return response()->file($index);
-})->where('path', '^(?!api(?:/|$)|app(?:/|$)|office(?:/|$)|mobile(?:/|$)).*');
+})->where('path', '^(?!api(?:/|$)|app(?:/|$)|office(?:/|$)|mobile(?:/|$)|shop(?:/|$)).*');

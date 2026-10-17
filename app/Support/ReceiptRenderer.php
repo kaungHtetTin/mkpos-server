@@ -25,6 +25,10 @@ class ReceiptRenderer
         $rows = '';
         $tableRows = '';
         foreach ($sale['items'] as $item) {
+            if (isset($item['ecommerce_quantity'])) {
+                $item['quantity'] = $item['ecommerce_quantity'];
+                $item['unit_price'] = $item['ecommerce_unit_price'];
+            }
             $itemQuantity = $quantity($item['quantity']);
             $lines[] = $item['product_name'].' x '.$itemQuantity.'  '.number_format($item['line_total']).' '.$settings['currency'];
             if ($showPriceType) {
@@ -46,6 +50,7 @@ class ReceiptRenderer
             $lines[] = 'Discount: -'.number_format($sale['discount']).' '.$settings['currency'];
         }
         $lines[] = 'Total: '.number_format($sale['total']).' '.$settings['currency'];
+        if (! empty($sale['delivery_fee'])) $lines[] = 'Delivery: '.number_format($sale['delivery_fee']).' '.$settings['currency'];
         if (trim((string) $settings['receipt_footer']) !== '') {
             $lines[] = $settings['receipt_footer'];
         }
@@ -61,6 +66,7 @@ class ReceiptRenderer
             .'<table class="receipt-items-table"><thead><tr><th>Product</th><th>Type</th><th class="numeric">Qty</th><th class="numeric">FOC</th><th class="numeric">Unit price</th><th class="numeric">Amount</th></tr></thead><tbody>'.$tableRows.'</tbody></table>'
             .'<div class="receipt-rule"></div><div class="receipt-totals">'
             .'<div class="receipt-row"><span>Subtotal</span><strong>'.number_format($sale['subtotal']).' '.$escape($settings['currency']).'</strong></div>'
+            .(! empty($sale['delivery_fee']) ? '<div class="receipt-row"><span>Delivery</span><strong>'.number_format($sale['delivery_fee']).' '.$escape($settings['currency']).'</strong></div>' : '')
             .((int) $sale['discount'] > 0 ? '<div class="receipt-row"><span>Discount</span><strong>-'.number_format($sale['discount']).' '.$escape($settings['currency']).'</strong></div>' : '')
             .'<div class="receipt-row receipt-total"><span>Total</span><strong>'.number_format($sale['total']).' '.$escape($settings['currency']).'</strong></div>'
             .'<div class="receipt-row"><span>Paid</span><strong>'.number_format($sale['paid_amount']).' '.$escape($settings['currency']).'</strong></div>'

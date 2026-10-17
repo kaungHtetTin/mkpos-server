@@ -29,6 +29,15 @@ class SetBusinessContext
         abort_if(! $user->is_active, 403, 'This user account is inactive.');
         abort_if(! $user->business || $user->business->status !== 'active', 403, 'This business account is not active.');
 
+        // All business routes, including shop-admin, share session revocation.
+        if (! $tokenAuthenticated && $request->hasSession() && $user->password_reset_at
+            && !hash_equals(hash('sha256', $user->password), (string) $request->session()->get('password_reset_version'))) {
+            Auth::guard('web')->logout();
+            $request->session()->invalidate();
+            $request->session()->regenerateToken();
+            abort(401, 'Your password changed. Please sign in again.');
+        }
+
         $this->context->set($businessId);
         try {
             return $next($request);

@@ -69,10 +69,7 @@ class StaffController extends Controller
         $businessId = (int) $request->user('web')->business_id;
         $data = $request->validate(['password' => ['required', 'confirmed', Password::min(8)]]);
         $staff = $this->staff($businessId, $id);
-        $staff->forceFill([
-            'password' => Hash::make($data['password']),
-            'remember_token' => Str::random(60),
-        ])->save();
+        app(\App\Services\PasswordSecurity::class)->change($staff, $data['password']);
 
         return ['ok' => true];
     }

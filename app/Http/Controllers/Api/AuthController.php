@@ -82,6 +82,7 @@ class AuthController extends Controller
 
         Auth::guard('web')->login($user);
         $request->session()->regenerate();
+        $request->session()->put('password_reset_version', hash('sha256', Auth::guard('web')->user()->password));
         return response()->json($this->payload($user, $business), 201);
     }
 
@@ -115,6 +116,7 @@ class AuthController extends Controller
         }
 
         $request->session()->regenerate();
+        $request->session()->put('password_reset_version', hash('sha256', Auth::guard('web')->user()->password));
         $user = Auth::guard('web')->user()->load('business');
         if (! $user->business || $user->business->status !== 'active') {
             Auth::guard('web')->logout();
@@ -151,10 +153,19 @@ class AuthController extends Controller
         $user->name = trim($data['name']);
         $user->email = Str::lower(trim($data['email']));
         if (! empty($data['password'])) {
-            $user->password = Hash::make($data['password']);
-            $user->remember_token = Str::random(60);
+            return DB::transaction(function () use ($user, $data, $request) {
+                app(\App\Services\PasswordSecurity::class)->change($user, $data['password']);
+                if ($request->hasSession()) {
+                    $request->session()->regenerate();
+                    $request->session()->put('password_reset_version', hash('sha256', $user->password));
+                }
+                return $request->bearerToken()
+                    ? $this->tokenPayload($user, $user->business, $request)
+                    : $this->payload($user, $user->business);
+            });
         }
         $user->save();
+        if ($request->hasSession()) $request->session()->put('password_reset_version', hash('sha256', $user->password));
 
         return $this->payload($user->fresh(), $user->business);
     }
@@ -196,7 +207,7 @@ class AuthController extends Controller
     private function tokenPayload(User $user, Business $business, Request $request): array
     {
         $client = preg_replace('/[^a-z0-9._-]+/i', '-', (string) $request->header('X-MKPOS-Client', 'portable')) ?: 'portable';
-        $token = $user->createToken('mkpos-'.$client, ['*']);
+        $token = $user->createToken('mkpos-'.$client, ['*'], now()->addMinutes((int) config('sanctum.expiration')));
 
         return array_merge($this->payload($user, $business), [
             'access_token' => $token->plainTextToken,

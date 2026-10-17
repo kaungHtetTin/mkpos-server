@@ -171,11 +171,19 @@ class ReportController extends ApiController
             ->first();
         $investmentValue = (int) round((float) ($row->investment_value ?? 0));
         $potentialSalesValue = (int) round((float) ($row->potential_sales_value ?? 0));
+        $businessId = app(\App\Tenancy\TenantContext::class)->requireId();
+        $reservations = DB::table('ecommerce_stock_reservations as r')->join('ecommerce_orders as o', 'o.id', '=', 'r.order_id')
+            ->where('r.business_id', $businessId)->where('r.status', 'active');
+        $reserved = (float) (clone $reservations)->sum('r.quantity');
+        $dispatched = (float) (clone $reservations)->whereIn('o.status', ['dispatched', 'return_pending'])->sum('r.quantity');
 
         return [
             'as_of' => now()->toDateString(),
             'product_count' => (int) ($row->product_count ?? 0),
             'stock_units' => (float) ($row->stock_units ?? 0),
+            'reserved_units' => $reserved,
+            'dispatched_units' => $dispatched,
+            'available_units' => (float) ($row->stock_units ?? 0) - $reserved,
             'investment_value' => $investmentValue,
             'potential_sales_value' => $potentialSalesValue,
             'potential_gross_profit' => $potentialSalesValue - $investmentValue,

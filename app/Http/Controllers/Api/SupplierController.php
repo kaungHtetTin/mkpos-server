@@ -26,7 +26,7 @@ class SupplierController extends ApiController
             'without_purchases' => $query->whereNotExists(fn ($purchase) => $purchase->selectRaw('1')->from('purchases as p')->whereColumn('p.supplier_id', 's.id')->where('p.status', 'completed')),
             default => null,
         };
-        $result = $this->page($query->orderBy('s.name'), $request, 500, 500, true);
+        $result = $this->page($query->orderBy('s.name', $request->query('sort') === 'name_desc' ? 'desc' : 'asc')->orderBy('s.id'), $request, 500, 500, true);
         if (isset($result['items'])) {
             $result['items'] = $this->stats($result['items']);
             $result['account_summary'] = $this->accountSummary();
@@ -114,7 +114,19 @@ class SupplierController extends ApiController
         }
         $this->historyFilters($query, $request, 'sp.created_at', false);
 
-        return $this->page($query->orderByDesc('sp.created_at')->orderByDesc('sp.id'), $request, 25, 100);
+        $summaryRow = (clone $query)->select([])->selectRaw("COALESCE(SUM(CASE WHEN sp.direction='supplier_to_shop' THEN sp.amount ELSE 0 END),0) AS incoming, COALESCE(SUM(CASE WHEN sp.direction='shop_to_supplier' THEN sp.amount ELSE 0 END),0) AS outgoing, SUM(CASE WHEN sp.direction='supplier_to_shop' THEN 1 ELSE 0 END) AS incoming_count, SUM(CASE WHEN sp.direction='shop_to_supplier' THEN 1 ELSE 0 END) AS outgoing_count")->first();
+        $sort = $request->query('sort', 'newest');
+        match ($sort) {
+            'oldest' => $query->orderBy('sp.created_at')->orderBy('sp.id'),
+            'amount_desc' => $query->orderByDesc('sp.amount')->orderByDesc('sp.id'),
+            'amount_asc' => $query->orderBy('sp.amount')->orderBy('sp.id'),
+            default => $query->orderByDesc('sp.created_at')->orderByDesc('sp.id'),
+        };
+        $result = $this->page($query, $request, 25, 100);
+        if (isset($result['items'])) {
+            $result['summary'] = array_map(fn ($value) => (int) $value, (array) $summaryRow);
+        }
+        return $result;
     }
 
     public function showPayment(int $id): array
@@ -244,6 +256,7 @@ class SupplierController extends ApiController
         abort_if(! $row, 404, 'Supplier payment not found');
         $result = (array) $row;
         $result['balance'] = $this->accountTotals((int) $row->supplier_id)['balance'];
+        $result['supplier_name'] = DB::table('suppliers')->where('id', $row->supplier_id)->value('name');
 
         return $result;
     }

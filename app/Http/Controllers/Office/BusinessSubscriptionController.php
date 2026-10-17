@@ -10,7 +10,6 @@ use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
@@ -119,6 +118,9 @@ class BusinessSubscriptionController extends Controller
             )->orderByDesc('subscriptions.starts_at')->orderByDesc('subscriptions.id')->get()
             ->map(function ($item) {
                 $result = (array) $item;
+                foreach (['starts_at', 'ends_at', 'created_at'] as $field) {
+                    $result[$field] = $item->$field ? Carbon::parse($item->$field)->utc()->toISOString() : null;
+                }
                 $result['billing_status'] = $item->status === 'active' && $item->ends_at && Carbon::parse($item->ends_at)->isPast()
                     ? 'expired'
                     : $item->status;
@@ -126,11 +128,22 @@ class BusinessSubscriptionController extends Controller
                 return $result;
             })->all();
 
+        $location = DB::table('shop_owner_locations')->where('business_id', $businessId)->first();
+
         return [
             'business' => (array) $business,
             'billing' => $this->subscriptions->status($businessId),
             'business_summary' => $this->businessSummary($businessId),
+            'shop_location' => $location ? [
+                'latitude' => (float) $location->latitude,
+                'longitude' => (float) $location->longitude,
+                'accuracy' => (float) $location->accuracy,
+                'captured_at' => Carbon::parse($location->captured_at)->utc()->toISOString(),
+            ] : null,
             'billing_history' => $history,
+            'storefront' => DB::table('storefront_settings')->where('business_id', $businessId)->first([
+                'slug', 'display_name', 'storefront_enabled', 'marketplace_enabled', 'marketplace_suspended', 'marketplace_suspension_reason',
+            ]),
         ];
     }
 
@@ -207,11 +220,7 @@ class BusinessSubscriptionController extends Controller
         $owner = DB::table('users')->where('business_id', $businessId)->where('role', 'owner')->first();
         abort_if(! $owner, 404, 'Business owner not found');
 
-        DB::table('users')->where('id', $owner->id)->update([
-            'password' => Hash::make($data['password']),
-            'remember_token' => Str::random(60),
-            'updated_at' => now(),
-        ]);
+        app(\App\Services\PasswordSecurity::class)->change(\App\Models\User::findOrFail($owner->id), $data['password']);
 
         return ['ok' => true, 'owner' => ['id' => $owner->id, 'name' => $owner->name, 'email' => $owner->email]];
     }
@@ -247,6 +256,46 @@ class BusinessSubscriptionController extends Controller
             'payment-proof-'.$requestId.'.'.pathinfo($subscriptionRequest->payment_screenshot_path, PATHINFO_EXTENSION),
             ['Cache-Control' => 'private, no-store']
         );
+    }
+
+    public function updatePeriod(Request $request, int $businessId, int $subscriptionId): array
+    {
+        $data = $request->validate([
+            'starts_at' => ['required', 'date'],
+            'ends_at' => ['present', 'nullable', 'date', 'after:starts_at'],
+            'original_starts_at' => ['required', 'date'],
+            'original_ends_at' => ['present', 'nullable', 'date'],
+        ]);
+        DB::transaction(function () use ($businessId, $subscriptionId, $data) {
+            abort_unless(DB::table('businesses')->where('id', $businessId)->lockForUpdate()->first(['id']), 404, 'Business not found.');
+            $row = DB::table('business_subscriptions')->where('business_id', $businessId)->where('id', $subscriptionId)->lockForUpdate()->first();
+            abort_unless($row, 404, 'Subscription not found for this business.');
+            $originalStart = Carbon::parse($data['original_starts_at']);
+            $originalEnd = $data['original_ends_at'] ? Carbon::parse($data['original_ends_at']) : null;
+            abort_if(!Carbon::parse($row->starts_at)->equalTo($originalStart)
+                || ($row->ends_at === null) !== ($originalEnd === null)
+                || ($row->ends_at && !Carbon::parse($row->ends_at)->equalTo($originalEnd)), 409, 'This billing period changed. Cancel and reopen the editor after refreshing the business.');
+            $start = Carbon::parse($data['starts_at'])->setTimezone(config('app.timezone'));
+            $end = $data['ends_at'] ? Carbon::parse($data['ends_at'])->setTimezone(config('app.timezone')) : null;
+            abort_if($row->access_type === 'trial' && !$end, 422, 'A free trial must have an end date.');
+            if ($row->status === 'active') {
+                $overlap = DB::table('business_subscriptions')->where('business_id', $businessId)->where('id', '<>', $subscriptionId)
+                    ->where('status', 'active')->where(fn ($query) => $query->whereNull('ends_at')->orWhere('ends_at', '>', $start));
+                if ($end) $overlap->where('starts_at', '<', $end);
+                abort_if($overlap->exists(), 409, 'This period overlaps another active subscription.');
+            }
+            if ($start->equalTo(Carbon::parse($row->starts_at)) && (($end === null && $row->ends_at === null)
+                || ($end && $row->ends_at && $end->equalTo(Carbon::parse($row->ends_at))))) return;
+            $format = fn ($date) => $date ? Carbon::parse($date)->utc()->format('Y-m-d H:i:s').' UTC' : 'no expiry';
+            $audit = 'Billing period changed by '.Auth::guard('office')->user()->name.' on '.now()->utc()->format('Y-m-d H:i:s').' UTC: '
+                .$format($row->starts_at).' to '.$format($row->ends_at).' → '.$format($start).' to '.$format($end).'.';
+            DB::table('business_subscriptions')->where('id', $subscriptionId)->update([
+                'starts_at' => $start, 'ends_at' => $end, 'note' => trim(($row->note ? $row->note."\n" : '').$audit), 'updated_at' => now(),
+            ]);
+            app(\App\Services\RealtimeActivity::class)->subscription($businessId, 'subscription.changed');
+        });
+
+        return $this->show($businessId);
     }
 
     public function assign(Request $request, int $businessId): array
@@ -293,6 +342,7 @@ class BusinessSubscriptionController extends Controller
                 'ends_at' => $base->copy()->addDays($days), 'updated_at' => $now,
             ]);
             $this->recordPayment($businessId, (int) $plan->id, (int) $current->id, $plan, $days, $data, 'renewal', $now);
+            app(\App\Services\RealtimeActivity::class)->subscription($businessId, 'subscription.changed');
         });
 
         return $this->subscriptions->status($businessId);
@@ -346,6 +396,7 @@ class BusinessSubscriptionController extends Controller
                 'updated_at' => $now,
             ]);
 
+            app(\App\Services\RealtimeActivity::class)->subscription($businessId, 'subscription.changed');
             return [
                 'days_added' => $days,
                 'previous_ends_at' => $previousEnd?->copy()->utc()->toISOString(),
@@ -363,8 +414,11 @@ class BusinessSubscriptionController extends Controller
 
     public function cancel(int $businessId): array
     {
-        DB::table('business_subscriptions')->where('business_id', $businessId)->where('status', 'active')
-            ->update(['status' => 'cancelled', 'starts_at' => DB::raw('starts_at'), 'updated_at' => now()]);
+        DB::transaction(function () use ($businessId) {
+            $changed = DB::table('business_subscriptions')->where('business_id', $businessId)->where('status', 'active')
+                ->update(['status' => 'cancelled', 'starts_at' => DB::raw('starts_at'), 'updated_at' => now()]);
+            if ($changed) app(\App\Services\RealtimeActivity::class)->subscription($businessId, 'subscription.cancelled');
+        });
 
         return $this->subscriptions->status($businessId);
     }
@@ -402,11 +456,14 @@ class BusinessSubscriptionController extends Controller
                 );
             }
 
+            $nextStatus = $data['status'] === 'suspended' ? 'cancelled' : 'active';
+            if ($subscription->status === $nextStatus) return;
             DB::table('business_subscriptions')->where('id', $subscriptionId)->update([
                 'status' => $data['status'] === 'suspended' ? 'cancelled' : 'active',
                 'starts_at' => DB::raw('starts_at'),
                 'updated_at' => now(),
             ]);
+            app(\App\Services\RealtimeActivity::class)->subscription($businessId, $data['status'] === 'suspended' ? 'subscription.suspended' : 'subscription.restored');
         });
 
         return $this->subscriptions->status($businessId);
@@ -422,11 +479,36 @@ class BusinessSubscriptionController extends Controller
                 ->lockForUpdate()
                 ->first();
             abort_if(! $subscriptionRequest, 404, 'Pending request not found');
-            $this->activate((int) $subscriptionRequest->business_id, (int) $subscriptionRequest->subscription_plan_id, $data);
+            $this->activate((int) $subscriptionRequest->business_id, (int) $subscriptionRequest->subscription_plan_id, $data, false);
             DB::table('subscription_requests')->where('id', $requestId)->update([
                 'status' => 'approved', 'admin_note' => $data['admin_note'] ?? '',
                 'reviewed_by_admin_id' => Auth::guard('office')->id(), 'reviewed_at' => now(), 'updated_at' => now(),
             ]);
+
+            $eventId = DB::table('subscription_approval_events')->insertGetId([
+                'business_id' => $subscriptionRequest->business_id,
+                'subscription_request_id' => $requestId,
+                'plan_name' => DB::table('subscription_plans')->where('id', $subscriptionRequest->subscription_plan_id)->value('name'),
+                'created_at' => now(),
+            ]);
+            DB::afterCommit(fn () => app(\App\Services\ShopChatRealtime::class)->publish(
+                ['private-shop.subscription.business.'.$subscriptionRequest->business_id],
+                'subscription.approved', ['event_id' => (int) $eventId]));
+            app(\App\Services\RealtimeActivity::class)->subscription((int) $subscriptionRequest->business_id, 'subscription.approved', null, 'subscription-approval:'.$eventId);
+
+            $business = DB::table('businesses')->where('id', $subscriptionRequest->business_id)->first();
+            $plan = DB::table('subscription_plans')->where('id', $subscriptionRequest->subscription_plan_id)->first();
+            $subscription = $this->subscriptions->status((int) $subscriptionRequest->business_id)['subscription'];
+            $emailDetails = [
+                'business_name' => $business->name, 'timezone' => $business->timezone ?: 'UTC',
+                'plan_name' => $plan->name, 'currency' => $plan->currency,
+                'amount_paid' => (int) ($data['price_paid'] ?? $plan->price),
+                'starts_at' => $subscription['starts_at'], 'ends_at' => $subscription['ends_at'],
+                'approved_at' => now()->toISOString(), 'reference' => 'REQ-'.$requestId,
+            ];
+            $adminId = (int) Auth::guard('office')->id();
+            DB::afterCommit(fn () => app(\App\Services\SubscriptionApprovalEmail::class)->send(
+                (int) $eventId, (int) $subscriptionRequest->business_id, $adminId, $emailDetails));
 
             return (int) $subscriptionRequest->business_id;
         });
@@ -436,22 +518,28 @@ class BusinessSubscriptionController extends Controller
 
     public function reject(Request $request, int $requestId): array
     {
-        $data = $request->validate(['admin_note' => ['nullable', 'string']]);
-        abort_if(! DB::table('subscription_requests')->where('id', $requestId)->where('status', 'pending')->update([
-            'status' => 'rejected', 'admin_note' => $data['admin_note'] ?? '',
-            'reviewed_by_admin_id' => Auth::guard('office')->id(), 'reviewed_at' => now(), 'updated_at' => now(),
-        ]), 404, 'Pending request not found');
+        $data = $request->validate(['admin_note' => ['required', 'string', 'min:5', 'max:2000']]);
+        abort_if(mb_strlen(trim($data['admin_note'])) < 5, 422, 'Please provide a rejection reason for the business owner.');
+        DB::transaction(function () use ($requestId, $data) {
+            $row = DB::table('subscription_requests')->where('id', $requestId)->where('status', 'pending')->lockForUpdate()->first();
+            abort_unless($row, 404, 'Pending request not found');
+            DB::table('subscription_requests')->where('id', $requestId)->update([
+                'status' => 'rejected', 'admin_note' => $data['admin_note'] ?? '',
+                'reviewed_by_admin_id' => Auth::guard('office')->id(), 'reviewed_at' => now(), 'updated_at' => now(),
+            ]);
+            app(\App\Services\RealtimeActivity::class)->subscription((int) $row->business_id, 'subscription.rejected', $data['admin_note'] ?? null, 'subscription-rejection:'.$requestId);
+        });
 
         return ['ok' => true];
     }
 
-    private function activate(int $businessId, int $planId, array $data): void
+    private function activate(int $businessId, int $planId, array $data, bool $notify = true): void
     {
         if (! ($data['record_financial'] ?? true)) {
             $data['price_paid'] = 0;
             $data['note'] = trim(($data['note'] ?? '').' Gift assignment: no financial record. Admin #'.Auth::guard('office')->id().' at '.now()->utc()->toISOString());
         }
-        DB::transaction(function () use ($businessId, $planId, $data) {
+        DB::transaction(function () use ($businessId, $planId, $data, $notify) {
             abort_if(! DB::table('businesses')->where('id', $businessId)->lockForUpdate()->first(['id']), 404, 'Business not found');
             $plan = DB::table('subscription_plans')->where('id', $planId)->first();
             abort_if(! $plan, 404, 'Plan not found');
@@ -482,6 +570,7 @@ class BusinessSubscriptionController extends Controller
                     'updated_at' => $now,
                 ]);
                 $this->recordPayment($businessId, $planId, (int) $duplicate->id, $plan, $days, $data, 'renewal', $now);
+                if ($notify) app(\App\Services\RealtimeActivity::class)->subscription($businessId, 'subscription.changed');
 
                 return;
             }
@@ -516,6 +605,7 @@ class BusinessSubscriptionController extends Controller
                 'updated_at' => $now,
             ]);
             $this->recordPayment($businessId, $planId, $subscriptionId, $plan, $days, $data, 'assignment', $now);
+            if ($notify) app(\App\Services\RealtimeActivity::class)->subscription($businessId, 'subscription.changed');
         });
     }
 

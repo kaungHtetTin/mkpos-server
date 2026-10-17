@@ -3,6 +3,8 @@
 namespace App\Http\Controllers\Api;
 
 use App\Support\BusinessLogo;
+use App\Services\BusinessProfile;
+use App\Tenancy\TenantContext;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
@@ -38,7 +40,7 @@ class SettingsController extends ApiController
     public function index(): array
     {
         $stored = DB::table('settings')->where('key', '<>', 'admin_pin_hash')->pluck('value', 'key')->all();
-        $settings = BusinessLogo::addToSettings(array_merge(self::DEFAULTS, $stored));
+        $settings = BusinessLogo::addToSettings(array_merge(self::DEFAULTS, $stored, app(BusinessProfile::class)->read(app(TenantContext::class)->requireId())));
         $pinHash = (string) (DB::table('settings')->where('key', 'admin_pin_hash')->value('value') ?? '');
         $settings['admin_pin_set'] = trim($pinHash) !== '' ? '1' : '0';
 
@@ -76,6 +78,7 @@ class SettingsController extends ApiController
             foreach ($data as $key => $value) {
                 DB::table('settings')->updateOrInsert(['key' => $key], ['value' => (string) ($value ?? '')]);
             }
+            app(BusinessProfile::class)->update(app(TenantContext::class)->requireId(), $data);
             if ($pin !== '') {
                 DB::table('settings')->updateOrInsert(['key' => 'admin_pin_hash'], ['value' => password_hash($pin, PASSWORD_DEFAULT)]);
             }

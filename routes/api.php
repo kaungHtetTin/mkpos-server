@@ -23,10 +23,13 @@ use App\Http\Controllers\Office\OfficeAuthController;
 use App\Http\Controllers\Office\PaymentMethodController;
 use App\Http\Controllers\Office\PlanController;
 use App\Http\Controllers\Office\TutorialController;
+use App\Http\Controllers\Office\PlatformUserController;
 use App\Services\AccessService;
 use App\Support\BusinessLogo;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Route;
+
+require __DIR__.'/ecommerce.php';
 
 /*
 |--------------------------------------------------------------------------
@@ -42,9 +45,11 @@ use Illuminate\Support\Facades\Route;
 Route::get('/health', fn () => ['ok' => DB::selectOne('SELECT 1') !== null, 'backend' => 'laravel', 'database' => 'mysql']);
 Route::post('/auth/register', [AuthController::class, 'register'])->middleware('throttle:10,1');
 Route::post('/auth/login', [AuthController::class, 'login'])->middleware('throttle:10,1');
+Route::post('/auth/forgot-password', [\App\Http\Controllers\PasswordResetController::class, 'requestCode'])->middleware('throttle:5,1');
+Route::post('/auth/reset-password', [\App\Http\Controllers\PasswordResetController::class, 'reset'])->middleware('throttle:10,1');
 Route::get('/contact-settings', [ContactSettingsController::class, 'show']);
 
-Route::middleware(['auth:sanctum', 'business'])->group(function () {
+Route::middleware(['auth:sanctum', \App\Http\Middleware\VerifyPasswordReset::class, 'business'])->group(function () {
     Route::get('/auth/me', [AuthController::class, 'me']);
     Route::put('/auth/profile', [AuthController::class, 'updateProfile'])
         ->middleware(['throttle:10,1', 'subscription']);
@@ -63,6 +68,12 @@ Route::middleware(['auth:sanctum', 'business'])->group(function () {
     ]));
     Route::get('/subscription', [SubscriptionController::class, 'status']);
     Route::middleware('owner')->group(function () {
+        Route::get('/activity-alerts', [\App\Http\Controllers\ActivityAlertController::class, 'index']);
+        Route::get('/activity-alerts/config', [\App\Http\Controllers\ActivityAlertController::class, 'config']);
+        Route::post('/activity-alerts/auth', [\App\Http\Controllers\ActivityAlertController::class, 'auth']);
+        Route::get('/subscription/alerts', [\App\Http\Controllers\Api\SubscriptionAlertController::class, 'index']);
+        Route::get('/subscription/alerts/config', [\App\Http\Controllers\Api\SubscriptionAlertController::class, 'config']);
+        Route::post('/subscription/alerts/auth', [\App\Http\Controllers\Api\SubscriptionAlertController::class, 'auth']);
         Route::get('/subscription/plans', [SubscriptionController::class, 'plans']);
         Route::get('/subscription/payment-methods', [SubscriptionController::class, 'paymentMethods']);
         Route::get('/subscription/billing-history', [SubscriptionController::class, 'billingHistory']);
@@ -72,6 +83,7 @@ Route::middleware(['auth:sanctum', 'business'])->group(function () {
     Route::middleware('subscription')->group(function () {
         Route::middleware('module:products,sell,purchases')->group(function () {
             Route::get('/products', [ProductController::class, 'index']);
+            Route::get('/products/marketplace-categories', [ProductController::class, 'marketplaceCategories']);
             Route::get('/categories', [ProductController::class, 'categories']);
             Route::get('/products/low-stock', [ProductController::class, 'lowStock']);
             Route::get('/products/summary', [ProductController::class, 'summary']);
@@ -82,6 +94,7 @@ Route::middleware(['auth:sanctum', 'business'])->group(function () {
         Route::middleware('module:products')->group(function () {
             Route::post('/products/internal-barcode', [ProductController::class, 'internalBarcode']);
             Route::post('/products', [ProductController::class, 'store']);
+            Route::post('/products/bulk-delete', [ProductController::class, 'destroyMany']);
             Route::put('/products/{id}', [ProductController::class, 'update']);
             Route::delete('/products/{id}', [ProductController::class, 'destroy']);
             Route::post('/products/{id}/photo', [ProductController::class, 'uploadPhoto'])->whereNumber('id');
@@ -203,7 +216,35 @@ Route::middleware(['auth:sanctum', 'business'])->group(function () {
 
 Route::post('/office/auth/login', [OfficeAuthController::class, 'login'])->middleware('throttle:10,1');
 Route::middleware('office.auth')->prefix('office')->group(function () {
+    Route::get('/activity-alerts', [\App\Http\Controllers\ActivityAlertController::class, 'index']);
+    Route::get('/activity-alerts/config', [\App\Http\Controllers\ActivityAlertController::class, 'config']);
+    Route::post('/activity-alerts/auth', [\App\Http\Controllers\ActivityAlertController::class, 'auth']);
+    Route::post('/businesses/{businessId}/email', [\App\Http\Controllers\Office\BusinessOwnerEmailController::class, 'storeOwner'])->whereNumber('businessId')->middleware('throttle:10,1');
+    Route::post('/platform-users/{platformUser}/email', [\App\Http\Controllers\Office\PlatformUserEmailController::class, 'store'])->whereNumber('platformUser')->middleware('throttle:10,1');
+    Route::apiResource('platform-users', PlatformUserController::class)->parameters(['platform-users' => 'platformUser'])->whereNumber('platformUser');
+    Route::get('/product-reviews', [\App\Http\Controllers\Office\ProductReviewController::class, 'index']);
+    Route::get('/product-reviews/options', [\App\Http\Controllers\Office\ProductReviewController::class, 'options']);
+    Route::post('/product-reviews', [\App\Http\Controllers\Office\ProductReviewController::class, 'store'])->middleware('throttle:30,1');
+    Route::get('/product-reviews/{review}', [\App\Http\Controllers\Office\ProductReviewController::class, 'show'])->whereNumber('review');
+    Route::put('/product-reviews/{review}', [\App\Http\Controllers\Office\ProductReviewController::class, 'update'])->whereNumber('review')->middleware('throttle:30,1');
+    Route::delete('/product-reviews/{review}', [\App\Http\Controllers\Office\ProductReviewController::class, 'destroy'])->whereNumber('review')->middleware('throttle:30,1');
+    Route::get('/shop-reviews', [\App\Http\Controllers\Office\ShopReviewController::class, 'index']);
+    Route::get('/shop-reviews/options', [\App\Http\Controllers\Office\ShopReviewController::class, 'options']);
+    Route::post('/shop-reviews', [\App\Http\Controllers\Office\ShopReviewController::class, 'store'])->middleware('throttle:30,1');
+    Route::get('/shop-reviews/{review}', [\App\Http\Controllers\Office\ShopReviewController::class, 'show'])->whereNumber('review');
+    Route::put('/shop-reviews/{review}', [\App\Http\Controllers\Office\ShopReviewController::class, 'update'])->whereNumber('review')->middleware('throttle:30,1');
+    Route::delete('/shop-reviews/{review}', [\App\Http\Controllers\Office\ShopReviewController::class, 'destroy'])->whereNumber('review')->middleware('throttle:30,1');
     Route::get('/tutorials', [TutorialController::class, 'index']);
+    Route::get('/marketplace-products', [\App\Http\Controllers\Office\MarketplaceProductController::class, 'index']);
+    Route::get('/marketplace-products/shops', [\App\Http\Controllers\Office\MarketplaceProductController::class, 'shops']);
+    Route::post('/marketplace-products/link', [\App\Http\Controllers\Office\MarketplaceProductController::class, 'link'])->middleware('throttle:30,1');
+    Route::get('/marketplace-products/{id}', [\App\Http\Controllers\Office\MarketplaceProductController::class, 'show'])->whereNumber('id');
+    Route::get('/marketplace-categories', [\App\Http\Controllers\Office\MarketplaceCategoryController::class, 'index']);
+    Route::get('/marketplace-categories/options', [\App\Http\Controllers\Office\MarketplaceCategoryController::class, 'options']);
+    Route::get('/marketplace-categories/{id}', [\App\Http\Controllers\Office\MarketplaceCategoryController::class, 'show'])->whereNumber('id');
+    Route::post('/marketplace-categories', [\App\Http\Controllers\Office\MarketplaceCategoryController::class, 'store'])->middleware('throttle:30,1');
+    Route::put('/marketplace-categories/{id}', [\App\Http\Controllers\Office\MarketplaceCategoryController::class, 'update'])->whereNumber('id')->middleware('throttle:30,1');
+    Route::delete('/marketplace-categories/{id}', [\App\Http\Controllers\Office\MarketplaceCategoryController::class, 'destroy'])->whereNumber('id')->middleware('throttle:30,1');
     Route::post('/tutorials', [TutorialController::class, 'store']);
     Route::put('/tutorials/{tutorial}', [TutorialController::class, 'update'])->whereNumber('tutorial');
     Route::delete('/tutorials/{tutorial}', [TutorialController::class, 'destroy'])->whereNumber('tutorial');
@@ -232,8 +273,14 @@ Route::middleware('office.auth')->prefix('office')->group(function () {
     Route::get('/subscription-requests', [BusinessSubscriptionController::class, 'requests']);
     Route::get('/subscription-payments', [FinancialReportController::class, 'payments']);
     Route::get('/financial-report', [FinancialReportController::class, 'index']);
+    Route::get('/financial-book', [\App\Http\Controllers\Office\FinancialBookController::class, 'index']);
+    Route::put('/financial-book/founders', [\App\Http\Controllers\Office\FinancialBookController::class, 'updateFounders'])->middleware('throttle:30,1');
+    Route::post('/financial-book/entries', [\App\Http\Controllers\Office\FinancialBookController::class, 'store'])->middleware('throttle:30,1');
+    Route::patch('/financial-book/entries/{entry}/bank-book', [\App\Http\Controllers\Office\FinancialBookController::class, 'assignBank'])->whereNumber('entry')->middleware('throttle:30,1');
+    Route::post('/financial-book/entries/{entry}/void', [\App\Http\Controllers\Office\FinancialBookController::class, 'void'])->whereNumber('entry')->middleware('throttle:30,1');
     Route::delete('/financial-records/{paymentId}', [FinancialReportController::class, 'destroy'])->whereNumber('paymentId');
     Route::put('/businesses/{businessId}/subscription', [BusinessSubscriptionController::class, 'assign']);
+    Route::patch('/businesses/{businessId}/subscriptions/{subscriptionId}/period', [BusinessSubscriptionController::class, 'updatePeriod'])->whereNumber(['businessId', 'subscriptionId'])->middleware('throttle:30,1');
     Route::post('/businesses/{businessId}/subscription/renew', [BusinessSubscriptionController::class, 'renew']);
     Route::post('/businesses/{businessId}/subscription/trial/extend', [BusinessSubscriptionController::class, 'extendTrial']);
     Route::patch('/businesses/{businessId}/subscription/status', [BusinessSubscriptionController::class, 'setStatus']);

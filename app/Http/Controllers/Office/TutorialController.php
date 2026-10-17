@@ -12,13 +12,18 @@ class TutorialController extends Controller
 {
     public function index(Request $request): array
     {
-        $request->validate(['page' => ['sometimes', 'integer', 'min:1'], 'q' => ['nullable', 'string', 'max:200']]);
+        $request->validate(['page' => ['sometimes', 'integer', 'min:1'], 'q' => ['nullable', 'string', 'max:200'],
+            'per_page' => ['sometimes', 'integer', 'in:10,20,25,50,100'], 'status' => ['sometimes', 'in:all,published,draft']]);
         $query = Tutorial::query();
+        if (in_array($request->query('status'), ['published', 'draft'], true)) {
+            $query->where('is_published', $request->query('status') === 'published');
+        }
         if ($q = trim($request->query('q', ''))) $query->where('title', 'like', '%'.$q.'%');
         $total = $query->count();
-        $page = min((int) $request->query('page', 1), max(1, (int) ceil($total / 20)));
-        return ['items' => $query->orderBy('sort_order')->orderByDesc('id')->offset(($page - 1) * 20)->limit(20)->get(),
-            'total' => $total, 'page' => $page, 'last_page' => max(1, (int) ceil($total / 20))];
+        $perPage = (int) $request->query('per_page', 20);
+        $page = min((int) $request->query('page', 1), max(1, (int) ceil($total / $perPage)));
+        return ['items' => $query->orderBy('sort_order')->orderByDesc('id')->offset(($page - 1) * $perPage)->limit($perPage)->get(),
+            'total' => $total, 'page' => $page, 'per_page' => $perPage, 'last_page' => max(1, (int) ceil($total / $perPage))];
     }
 
     public function store(Request $request) { return response()->json($this->save($request, new Tutorial()), 201); }

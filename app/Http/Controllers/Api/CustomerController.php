@@ -13,7 +13,7 @@ class CustomerController extends ApiController
             ->select('c.*')->selectRaw($this->balanceSql().' as balance');
         if ($search = trim((string) $request->query('q', ''))) {
             $like = "%{$search}%";
-            $query->where(fn ($q) => $q->where('c.name', 'like', $like)->orWhere('c.phone', 'like', $like)->orWhere('c.address', 'like', $like)->orWhere('c.note', 'like', $like));
+            $query->where(fn ($q) => $q->where('c.name', 'like', $like)->orWhere('c.phone', 'like', $like)->orWhere('c.email', 'like', $like)->orWhere('c.address', 'like', $like)->orWhere('c.note', 'like', $like));
         }
         $balanceSql = $this->balanceSql();
         match ($request->query('account_status', 'all')) {
@@ -90,7 +90,25 @@ class CustomerController extends ApiController
         }
         $this->historyFilters($query, $request);
 
-        return $this->page($query->orderByDesc('created_at')->orderByDesc('id'), $request, 25, 100);
+        $result = $this->page($query->orderByDesc('created_at')->orderByDesc('id'), $request, 25, 100);
+        if ($request->boolean('with_items') && isset($result['items'])) {
+            $saleIds = array_map(fn ($sale) => is_array($sale) ? $sale['id'] : $sale->id, $result['items']);
+            $items = DB::table('sale_items as si')->leftJoin('products as p', 'p.id', '=', 'si.product_id')
+                ->whereIn('si.sale_id', $saleIds)->orderBy('si.id')
+                ->select('si.*', 'p.photo_path', 'p.updated_at as product_updated_at', DB::raw("COALESCE(p.base_unit, 'Unit') as unit_name"))
+                ->get()->groupBy('sale_id');
+            $result['items'] = array_map(function ($sale) use ($items) {
+                $sale = (array) $sale;
+                $sale['items'] = ($items->get($sale['id']) ?? collect())->map(function ($row) {
+                    $item = (array) $row;
+                    $item['photo_url'] = $item['photo_path'] ? '/products/'.$item['product_id'].'/photo?v='.strtotime((string) $item['product_updated_at']) : null;
+                    unset($item['photo_path'], $item['product_updated_at']);
+                    return $item;
+                })->all();
+                return $sale;
+            }, $result['items']);
+        }
+        return $result;
     }
 
     public function payments(Request $request, int $id)
@@ -136,6 +154,12 @@ class CustomerController extends ApiController
             $like = "%{$search}%";
             $query->where(fn ($q) => $q->where('c.name', 'like', $like)->orWhere('cp.note', 'like', $like)->orWhere('cp.payment_method', 'like', $like));
         }
+        if (($direction = $request->query('direction', 'all')) !== 'all') {
+            $query->where('cp.direction', $direction);
+        }
+        if ($method = trim((string) $request->query('payment_method', ''))) {
+            $query->where('cp.payment_method', $method);
+        }
         if ($request->query('start', $request->query('date_from'))) {
             $query->whereDate('cp.created_at', '>=', $request->query('start', $request->query('date_from')));
         }
@@ -143,7 +167,19 @@ class CustomerController extends ApiController
             $query->whereDate('cp.created_at', '<=', $request->query('end', $request->query('date_to')));
         }
 
-        return $this->page($query->orderByDesc('cp.created_at')->orderByDesc('cp.id'), $request, 25, 100);
+        $summaryRow = (clone $query)->select([])->selectRaw("COALESCE(SUM(CASE WHEN cp.direction='customer_to_shop' THEN cp.amount ELSE 0 END),0) AS incoming, COALESCE(SUM(CASE WHEN cp.direction='shop_to_customer' THEN cp.amount ELSE 0 END),0) AS outgoing, SUM(CASE WHEN cp.direction='customer_to_shop' THEN 1 ELSE 0 END) AS incoming_count, SUM(CASE WHEN cp.direction='shop_to_customer' THEN 1 ELSE 0 END) AS outgoing_count")->first();
+        $sort = $request->query('sort', 'newest');
+        match ($sort) {
+            'oldest' => $query->orderBy('cp.created_at')->orderBy('cp.id'),
+            'amount_desc' => $query->orderByDesc('cp.amount')->orderByDesc('cp.id'),
+            'amount_asc' => $query->orderBy('cp.amount')->orderBy('cp.id'),
+            default => $query->orderByDesc('cp.created_at')->orderByDesc('cp.id'),
+        };
+        $result = $this->page($query, $request, 25, 100);
+        if (isset($result['items'])) {
+            $result['summary'] = array_map(fn ($value) => (int) $value, (array) $summaryRow);
+        }
+        return $result;
     }
 
     public function showPayment(int $id)
@@ -170,7 +206,8 @@ class CustomerController extends ApiController
 
     private function validatedCustomer(Request $request): array
     {
-        $data = $request->validate(['name' => ['required', 'string', 'max:255'], 'phone' => ['nullable', 'string', 'max:255'], 'address' => ['nullable', 'string'], 'note' => ['nullable', 'string']]);
+        $data = $request->validate(['name' => ['required', 'string', 'max:255'], 'phone' => ['nullable', 'string', 'max:255'], 'email' => ['nullable', 'email', 'max:255'], 'address' => ['nullable', 'string'], 'note' => ['nullable', 'string']]);
+        if (array_key_exists('email', $data)) $data['email'] = ! empty($data['email']) ? strtolower(trim($data['email'])) : null;
         foreach (['phone', 'address', 'note'] as $field) {
             $data[$field] = $data[$field] ?? '';
         }
@@ -243,7 +280,9 @@ class CustomerController extends ApiController
         $row = DB::table('customer_payments')->where('id', $id)->first();
         abort_if(! $row, 404, 'Payment not found');
         $result = (array) $row;
-        $result['balance'] = $this->customer((int) $row->customer_id)['balance'];
+        $account = $this->customer((int) $row->customer_id);
+        $result['balance'] = $account['balance'];
+        $result['customer_name'] = $account['name'];
 
         return $result;
     }

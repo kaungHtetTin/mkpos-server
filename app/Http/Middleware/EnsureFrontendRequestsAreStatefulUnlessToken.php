@@ -10,6 +10,11 @@ class EnsureFrontendRequestsAreStatefulUnlessToken
 {
     public function handle(Request $request, Closure $next)
     {
+        // Customer APIs are stateless and never use the staff session. This also
+        // permits guest checkout from an unrelated domain without staff CSRF cookies.
+        if ($request->is('api/ecommerce/*')) {
+            return $next($request);
+        }
         if ($request->header('X-MKPOS-Auth') === 'token') {
             return $next($request);
         }

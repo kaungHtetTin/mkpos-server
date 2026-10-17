@@ -106,6 +106,31 @@ class OfficeTutorialTest extends TestCase
         $this->getJson('/api/office/tutorials?q='.urlencode($prefix))->assertOk()->assertJsonPath('total', 25)->assertJsonCount(20, 'items')->assertJsonPath('items.0.title', $prefix.' 0');
         $this->getJson('/api/office/tutorials?q='.urlencode($prefix).'&page=999')->assertOk()->assertJsonPath('page', 2)->assertJsonCount(5, 'items')->assertJsonPath('items.0.title', $prefix.' 20');
         $this->get('/tutorials')->assertOk()->assertViewHas('tutorials', fn ($rows) => $rows->count() === 12 && $rows->hasMorePages());
-        $this->get('/')->assertOk()->assertViewHas('tutorials', fn ($rows) => $rows->count() === 6);
+        $this->get('/')->assertOk()->assertViewHas('tutorials', fn ($rows) => $rows->count() === 3);
+    }
+
+    public function test_office_table_page_sizes(): void
+    {
+        $this->login();
+        $prefix = 'QA '.Str::uuid();
+        for ($i = 0; $i < 25; $i++) Tutorial::create(['title' => $prefix.' '.$i, 'description' => 'Guide', 'youtube_id' => 'abcdefghijk', 'sort_order' => $i]);
+        $this->getJson('/api/office/tutorials?q='.urlencode($prefix).'&per_page=25')->assertOk()->assertJsonPath('per_page', 25)->assertJsonCount(25, 'items');
+        $this->getJson('/api/office/tutorials?q='.urlencode($prefix).'&per_page=100')->assertOk()->assertJsonPath('last_page', 1)->assertJsonCount(25, 'items');
+        $this->getJson('/api/office/tutorials?q='.urlencode($prefix).'&per_page=10&page=2')->assertOk()->assertJsonPath('page', 2)->assertJsonCount(10, 'items')->assertJsonPath('items.0.title', $prefix.' 10');
+        $this->getJson('/api/office/tutorials?per_page=999')->assertUnprocessable();
+    }
+
+    public function test_office_publication_status_filter(): void
+    {
+        $this->login();
+        $prefix = 'QA '.Str::uuid();
+        foreach ([true, false] as $published) Tutorial::create(['title' => $prefix.' '.($published ? 'published' : 'draft'),
+            'description' => 'Guide', 'youtube_id' => 'abcdefghijk', 'is_published' => $published]);
+        foreach (['published' => true, 'draft' => false] as $status => $published) {
+            $this->getJson('/api/office/tutorials?q='.urlencode($prefix).'&status='.$status)->assertOk()
+                ->assertJsonPath('total', 1)->assertJsonPath('items.0.is_published', $published);
+        }
+        $this->getJson('/api/office/tutorials?q='.urlencode($prefix).'&status=all')->assertOk()->assertJsonPath('total', 2);
+        $this->getJson('/api/office/tutorials?status=invalid')->assertUnprocessable();
     }
 }

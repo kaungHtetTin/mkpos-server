@@ -1,6 +1,18 @@
 <?php
 
+// Unset action settings inherit MAIL_*; explicit null values can disable SMTP
+// authentication or encryption for a specific action.
+$actions = [];
+foreach (['auth' => 'AUTH', 'subscription' => 'SUBSCRIPTION', 'messages' => 'MESSAGES'] as $action => $prefix) {
+    $actions[$action] = [];
+    foreach (['host', 'port', 'username', 'password', 'encryption', 'from_address', 'from_name'] as $field) {
+        $value = env('MAIL_'.$prefix.'_'.strtoupper($field), '__MKPOS_INHERIT__');
+        if ($value !== '__MKPOS_INHERIT__') $actions[$action][$field] = $value;
+    }
+}
+
 return [
+    'actions' => $actions,
 
     /*
     |--------------------------------------------------------------------------

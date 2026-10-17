@@ -43,6 +43,7 @@ class OfficeAuthController extends Controller
         }
 
         $request->session()->regenerate();
+        $request->session()->put('office_password_reset_version', hash('sha256', Auth::guard('office')->user()->password));
 
         return $this->payload();
     }
@@ -72,15 +73,18 @@ class OfficeAuthController extends Controller
         $admin->email = Str::lower(trim($data['email']));
         $passwordChanged = ! empty($data['password']);
         if ($passwordChanged) {
-            $admin->password = Hash::make($data['password']);
-            $admin->setRememberToken(Str::random(60));
+            app(\App\Services\PasswordSecurity::class)->change($admin, $data['password']);
+        } else {
+            $admin->save();
         }
-        $admin->save();
 
         $token = null;
         if ($passwordChanged && $request->bearerToken()) {
-            $admin->tokens()->delete();
             $token = $this->issueToken($request, $admin);
+        }
+        if ($request->hasSession()) {
+            if ($passwordChanged) $request->session()->regenerate();
+            $request->session()->put('office_password_reset_version', hash('sha256', $admin->password));
         }
 
         return $this->payload($admin, $token);
@@ -122,6 +126,6 @@ class OfficeAuthController extends Controller
     {
         $client = preg_replace('/[^a-z0-9_-]+/i', '-', (string) $request->header('X-MKPOS-Client', 'office'));
 
-        return $admin->createToken('office-'.trim($client, '-'), ['office'])->plainTextToken;
+        return $admin->createToken('office-'.trim($client, '-'), ['office'], now()->addMinutes((int) config('sanctum.expiration')))->plainTextToken;
     }
 }

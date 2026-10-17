@@ -11,7 +11,8 @@ class SaleController extends ApiController
 {
     public function index(Request $request)
     {
-        $query = DB::table('sales')->leftJoin('customers', 'customers.id', '=', 'sales.customer_id')->select('sales.*', 'customers.name as customer_name');
+        $query = DB::table('sales')->leftJoin('customers', 'customers.id', '=', 'sales.customer_id')->select('sales.*', 'customers.name as customer_name')
+            ->selectRaw('(SELECT COUNT(*) FROM sale_items WHERE sale_items.sale_id = sales.id) as item_count');
         if ($request->query('start')) {
             $query->whereDate('sales.created_at', '>=', $request->query('start'));
         }
@@ -20,6 +21,12 @@ class SaleController extends ApiController
         }
         if (($status = $request->query('status', 'all')) !== 'all') {
             $query->where('sales.status', $status);
+        }
+        $saleChannel = $request->validate(['sale_channel' => ['sometimes', 'in:all,online,pos']])['sale_channel'] ?? 'all';
+        if ($saleChannel === 'online') {
+            $query->where('sales.source', 'ecommerce');
+        } elseif ($saleChannel === 'pos') {
+            $query->where(fn ($q) => $q->whereNull('sales.source')->orWhere('sales.source', '!=', 'ecommerce'));
         }
         if (($type = $request->query('payment_type', 'all')) !== 'all') {
             $query->where('sales.payment_type', $type);
@@ -73,6 +80,7 @@ class SaleController extends ApiController
             $sale = DB::table('sales')->where('id', $id)->lockForUpdate()->first();
             abort_if(! $sale, 404, 'Sale not found');
             abort_if($sale->status === 'voided', 400, 'Voided sale cannot be edited');
+            abort_if($sale->source === 'ecommerce', 409, 'Online order sales cannot be edited. Use the controlled void workflow.');
             $existingItems = DB::table('sale_items')->where('sale_id', $id)->get();
             $productIdMap = $this->saleEditProductIdMap($existingItems, $data['items']);
             foreach ($data['items'] as &$item) {
@@ -163,19 +171,21 @@ class SaleController extends ApiController
 
     public function show(int $id): array
     {
-        $sale = DB::table('sales')->leftJoin('customers', 'customers.id', '=', 'sales.customer_id')->where('sales.id', $id)->select('sales.*', 'customers.name as customer_name')->first();
+        $sale = DB::table('sales')->leftJoin('customers', 'customers.id', '=', 'sales.customer_id')->where('sales.id', $id)->select('sales.*', 'customers.name as customer_name', 'customers.phone as customer_phone')->first();
         abort_if(! $sale, 404, 'Sale not found');
         $result = (array) $sale;
         $result['items'] = DB::table('sale_items as si')
             ->leftJoin('products as p', 'p.id', '=', 'si.product_id')
             ->where('si.sale_id', $id)
             ->orderBy('si.id')
-            ->select('si.*', DB::raw("COALESCE(p.base_unit, 'Unit') as unit_name"))
+            ->select('si.*', 'p.sku', 'p.photo_path', 'p.updated_at as product_updated_at', DB::raw("COALESCE(p.base_unit, 'Unit') as unit_name"))
             ->get()->map(function ($row) {
             $item = (array) $row;
             $item['quantity'] = (float) $item['quantity'];
             $item['foc_quantity'] = (float) $item['foc_quantity'];
             $item['line_type'] = 'product';
+            $item['photo_url'] = $item['photo_path'] ? '/products/'.$item['product_id'].'/photo?v='.strtotime((string) $item['product_updated_at']) : null;
+            unset($item['photo_path'], $item['product_updated_at']);
 
             return $item;
         })->all();
@@ -219,6 +229,10 @@ class SaleController extends ApiController
                 DB::table('products')->where('id', $item->product_id)->increment('stock', $item->quantity + $item->foc_quantity, ['updated_at' => now()]);
                 $this->insertMovement($item->product_id, $item->product_name, 'sale_delete', (float) ($item->quantity + $item->foc_quantity), 'sale', $id, $sale->receipt_no);
             }
+            DB::table('ecommerce_orders')->where('business_id', app(\App\Tenancy\TenantContext::class)->requireId())->where('sale_id', $id)
+                ->update(['sale_voided' => true, 'payment_status' => 'refund_pending', 'updated_at' => now()]);
+            $onlineOrder = DB::table('ecommerce_orders')->where('business_id', app(\App\Tenancy\TenantContext::class)->requireId())->where('sale_id', $id)->first();
+            if ($onlineOrder) app(\App\Services\EcommerceService::class)->event($onlineOrder->business_id, $onlineOrder->id, 'sale_voided', request()->user('web')->id);
             DB::table('sale_items')->where('sale_id', $id)->delete();
             DB::table('sales')->where('id', $id)->delete();
 
@@ -244,100 +258,7 @@ class SaleController extends ApiController
 
     private function save(?int $id, array $data, ?string $receiptNo = null, ?array $offline = null, array $editableArchivedProductIds = []): array
     {
-        $products = DB::table('products')
-            ->whereIn('id', collect($data['items'])->pluck('product_id'))
-            ->where(function ($query) use ($editableArchivedProductIds) {
-                $query->where('is_active', true);
-                if ($editableArchivedProductIds !== []) {
-                    $query->orWhereIn('id', $editableArchivedProductIds);
-                }
-            })
-            ->lockForUpdate()->get()->keyBy('id');
-        abort_if($products->count() !== collect($data['items'])->pluck('product_id')->unique()->count(), 404, 'One or more products were not found');
-        if ($offline) {
-            $this->validateOfflineItems($data['items'], $products);
-        }
-        $subtotal = (int) round(collect($data['items'])->sum(fn ($item) => $item['quantity'] * $item['unit_price']));
-        $discount = min((int) ($data['discount'] ?? 0), $subtotal);
-        $total = $subtotal - $discount;
-        $paid = min(max((int) ($data['paid_amount'] ?? 0), 0), $total);
-        $credit = max($total - $paid, 0);
-        $focOnly = collect($data['items'])->every(fn ($item) => (float) $item['quantity'] === 0.0)
-            && collect($data['items'])->contains(fn ($item) => (float) ($item['foc_quantity'] ?? 0) > 0.0);
-        if ($offline && ($credit > 0 || ! empty($data['customer_id']) || ($data['payment_type'] ?? 'cash') !== 'cash' || strcasecmp((string) ($data['payment_method'] ?? ''), 'Credit') === 0)) {
-            throw ValidationException::withMessages(['payment_type' => ['Offline sales must be fully paid and cannot use customer credit.']]);
-        }
-        abort_if($credit > 0 && empty($data['customer_id']), 400, 'Unpaid amount requires a customer');
-        $paymentMethod = $focOnly ? 'FOC' : ($data['payment_method'] ?? 'Cash');
-        if ($credit > 0 && $paid === 0 && $paymentMethod === 'Cash') {
-            $paymentMethod = 'Credit';
-        }
-        $receiptNo = $receiptNo ?: $this->nextReceipt();
-        $values = ['customer_id' => $data['customer_id'] ?? null, 'payment_type' => $credit > 0 ? 'credit' : 'cash', 'payment_method' => $paymentMethod,
-            'subtotal' => $subtotal, 'discount' => $discount, 'total' => $total, 'paid_amount' => $paid, 'credit_amount' => $credit, 'status' => 'completed'];
-        if ($id) {
-            DB::table('sales')->where('id', $id)->update($values);
-        } else {
-            $id = DB::table('sales')->insertGetId($values + [
-                'receipt_no' => $receiptNo,
-                'source' => $offline ? 'offline' : 'online',
-                'offline_sale_uuid' => $offline['offline_sale_uuid'] ?? null,
-                'offline_created_at' => $offline['offline_created_at'] ?? null,
-                'created_at' => $offline['offline_created_at'] ?? now(),
-            ]);
-        }
-        foreach ($data['items'] as $item) {
-            $product = $products[$item['product_id']];
-            $foc = (float) ($item['foc_quantity'] ?? 0);
-            $quantity = (float) $item['quantity'];
-            $line = (int) round($quantity * $item['unit_price']);
-            DB::table('sale_items')->insert(['sale_id' => $id, 'product_id' => $product->id, 'product_name' => $product->name, 'price_type' => $item['price_type'] ?? 'Retail',
-                'quantity' => $quantity, 'foc_quantity' => $foc, 'unit_price' => $item['unit_price'], 'unit_cost' => $product->cost, 'line_total' => $line]);
-            DB::table('products')->where('id', $product->id)->decrement('stock', $quantity + $foc, ['updated_at' => now()]);
-            $this->insertMovement($product->id, $product->name, 'sale', -($quantity + $foc), 'sale', $id, $receiptNo);
-        }
-
+        $id = app(\App\Services\SalePostingService::class)->save($id, $data, $receiptNo, $offline, $editableArchivedProductIds);
         return $this->show($id);
-    }
-
-    private function validateOfflineItems(array $items, $products): void
-    {
-        $requiredStock = [];
-        foreach ($items as $index => $item) {
-            $product = $products[$item['product_id']];
-            if (trim((string) ($item['product_name'] ?? '')) !== $product->name) {
-                throw ValidationException::withMessages(["items.{$index}.product_name" => ["{$product->name} has changed since it was downloaded."]]);
-            }
-
-            $priceType = trim((string) ($item['price_type'] ?? 'Retail')) ?: 'Retail';
-            $currentPrice = DB::table('product_prices')->where('product_id', $product->id)->where('name', $priceType)->value('price');
-            if ($currentPrice === null && strcasecmp($priceType, 'Retail') === 0) {
-                $currentPrice = $product->price;
-            }
-            if ($currentPrice === null || (int) $currentPrice !== (int) $item['unit_price']) {
-                throw ValidationException::withMessages(["items.{$index}.unit_price" => ["The {$priceType} price for {$product->name} has changed."]]);
-            }
-
-            $requiredStock[$product->id] = ($requiredStock[$product->id] ?? 0)
-                + (float) $item['quantity'] + (float) ($item['foc_quantity'] ?? 0);
-        }
-
-        foreach ($requiredStock as $productId => $quantity) {
-            $product = $products[$productId];
-            if ((float) $product->stock + 0.0005 < $quantity) {
-                throw ValidationException::withMessages(['stock' => ["Not enough stock for {$product->name}. Required {$quantity}, available {$product->stock}."]]);
-            }
-        }
-    }
-
-    private function nextReceipt(): string
-    {
-        $prefix = 'R'.now()->format('ymd');
-        $sequence = DB::table('sales')->where('receipt_no', 'like', $prefix.'-%')->count() + 1;
-        do {
-            $receipt = sprintf('%s-%04d', $prefix, $sequence++);
-        } while (DB::table('sales')->where('receipt_no', $receipt)->exists());
-
-        return $receipt;
     }
 }

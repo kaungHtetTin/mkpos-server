@@ -16,6 +16,8 @@ class OfficeBusinessDeletion
         sort($ids);
 
         $screenshotPaths = DB::transaction(function () use ($ids) {
+            DB::table('storefront_settings')->whereIn('business_id', $ids)->orderBy('id')->lockForUpdate()->get();
+            foreach ($ids as $businessId) app(EcommerceInventory::class)->assertMaintenanceAllowed((int) $businessId);
             $found = DB::table('businesses')->whereIn('id', $ids)->orderBy('id')->lockForUpdate()->pluck('id')
                 ->map(fn ($id) => (int) $id)->all();
             abort_if($found !== $ids, 404, 'One or more businesses were not found. Refresh the list and try again.');

@@ -54,6 +54,26 @@ class OfficeBusinessSummaryTest extends TestCase
             ->assertJsonPath('business_summary.expense_total', 500);
     }
 
+    public function test_business_detail_returns_only_the_requested_shop_gps_position(): void
+    {
+        $first = $this->registerBusiness('GPS First');
+        $second = $this->registerBusiness('GPS Second');
+        $admin = PlatformAdmin::create(['name' => 'GPS Admin', 'email' => 'gps-'.Str::uuid().'@example.com', 'password' => Hash::make('password123'), 'is_active' => true]);
+        DB::table('shop_owner_locations')->insert([
+            'business_id' => $second, 'owner_id' => DB::table('users')->where('business_id', $second)->where('role', 'owner')->value('id'),
+            'latitude' => 0, 'longitude' => 96.1234567, 'accuracy' => 12,
+            'captured_at' => now(), 'created_at' => now(), 'updated_at' => now(),
+        ]);
+        $this->actingAs($admin, 'office')->getJson('/api/office/businesses/'.$first)->assertOk()->assertJsonPath('shop_location', null);
+        $response = $this->getJson('/api/office/businesses/'.$second)->assertOk()
+            ->assertJsonPath('shop_location.longitude', 96.1234567)
+            ->assertJsonStructure(['shop_location' => ['latitude', 'longitude', 'accuracy', 'captured_at']]);
+        $this->assertEquals(0, $response->json('shop_location.latitude'));
+        $this->assertEquals(12, $response->json('shop_location.accuracy'));
+        $this->assertStringEndsWith('Z', $response->json('shop_location.captured_at'));
+        $this->assertArrayNotHasKey('owner_id', $response->json('shop_location'));
+    }
+
     private function registerBusiness(string $name): int
     {
         $email = Str::slug($name).'-'.Str::uuid().'@example.com';

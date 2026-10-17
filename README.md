@@ -7,6 +7,30 @@
 <a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/l/laravel/framework" alt="License"></a>
 </p>
 
+## Demo shops
+
+Run `php artisan db:seed --class=DemoShopSeeder` from this directory after migrations.
+This opt-in seeder runs only in local/testing environments and creates 10 shops,
+each with 20 published products and 10 POS customers (200 products and 100 POS
+customers total), plus 10 shared marketplace customer accounts. Shops have owner
+locations, active demo subscriptions, stocked inventory and cash on delivery.
+
+Owners: `demo.shop01@example.com` through `demo.shop10@example.com`.
+Customers: `demo.customer01@example.com` through `demo.customer10@example.com`.
+All demo accounts initially use password `Demo12345!`.
+Storefront slugs: `demo-shop-01` through `demo-shop-10`.
+
+Images use public placeholder URLs such as
+`https://picsum.photos/seed/mkpos-product-1/600/600.jpg` and
+`https://picsum.photos/seed/mkpos-shop-1/600/600.jpg`.
+They are generic photos, not product photographs. The first run needs internet
+access and caches 30 images in local storage to work with the existing photo APIs.
+Source URLs are saved in each shop's settings as `demo_logo_source_url` and
+`demo_product_source_url_1` through `demo_product_source_url_20`.
+Image download errors stop seeding before any database inserts. Re-running reuses
+cached images and existing demo records, preserving edited stock and passwords.
+The normal `DatabaseSeeder` does not automatically load demo data.
+
 ## About Laravel
 
 Laravel is a web application framework with expressive, elegant syntax. We believe development must be an enjoyable and creative experience to be truly fulfilling. Laravel takes the pain out of development by easing common tasks used in many web projects, such as:

@@ -14,7 +14,10 @@ class Kernel extends ConsoleKernel
      */
     protected function schedule(Schedule $schedule)
     {
-        // $schedule->command('inspire')->hourly();
+        // Shop orders have no automatic processing deadline.
+        $schedule->command('shop-chat:expire-images')->everyMinute()->withoutOverlapping();
+        $schedule->command('shop:notify-restocks')->everyMinute()->withoutOverlapping();
+        $schedule->call(fn () => \Illuminate\Support\Facades\DB::table('password_reset_otps')->where('expires_at', '<', now()->subDay())->delete())->daily()->name('password-reset:prune')->withoutOverlapping();
     }
 
     /**

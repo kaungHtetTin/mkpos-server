@@ -17,6 +17,13 @@ class PurchaseController extends ApiController
         if ($request->query('supplier')) {
             $query->where('supplier_name', 'like', '%'.$request->query('supplier').'%');
         }
+        if ($request->query('payment_status') === 'paid') {
+            $query->where('credit_amount', '<=', 0);
+        } elseif ($request->query('payment_status') === 'partial') {
+            $query->where('credit_amount', '>', 0)->where('paid_amount', '>', 0);
+        } elseif ($request->query('payment_status') === 'unpaid') {
+            $query->where('credit_amount', '>', 0)->where('paid_amount', '<=', 0);
+        }
         if ($search = trim((string) $request->query('q', ''))) {
             $like = "%{$search}%";
             $query->where(function ($q) use ($like) {
@@ -24,9 +31,9 @@ class PurchaseController extends ApiController
             });
         }
         if ($request->query('date_from')) {
-            $query->whereDate('created_at', '>=', $request->query('date_from'));
+            $query->whereDate(DB::raw('COALESCE(purchase_date, created_at)'), '>=', $request->query('date_from'));
         } if ($request->query('date_to')) {
-            $query->whereDate('created_at', '<=', $request->query('date_to'));
+            $query->whereDate(DB::raw('COALESCE(purchase_date, created_at)'), '<=', $request->query('date_to'));
         }
 
         return $this->page($query->orderByDesc('created_at')->orderByDesc('id'), $request, 25, 100);
@@ -69,6 +76,8 @@ class PurchaseController extends ApiController
             abort_if($purchase->status === 'voided', 400, 'Voided purchase cannot be edited');
             $affected = [];
             $existingItems = DB::table('purchase_items')->where('purchase_id', $id)->get();
+            DB::table('products')->whereIn('id', array_unique(array_merge($existingItems->pluck('product_id')->all(), array_column($data['items'], 'product_id'))))
+                ->orderBy('id')->lockForUpdate()->get();
             foreach ($existingItems as $item) {
                 $affected[] = $item->product_id;
                 $received = (float) $item->base_quantity + (float) $item->base_foc_quantity;
@@ -78,6 +87,9 @@ class PurchaseController extends ApiController
             DB::table('purchase_items')->where('purchase_id', $id)->delete();
             $saved = $this->save($id, $data, $existingItems->keyBy('id'));
             $this->refreshCosts(array_unique(array_merge($affected, array_column($data['items'], 'product_id'))));
+            foreach (DB::table('products')->whereIn('id', $affected)->get() as $product) {
+                app(\App\Services\EcommerceInventory::class)->assertRemaining($product, (float) $product->stock);
+            }
 
             return $saved;
         });
@@ -94,6 +106,8 @@ class PurchaseController extends ApiController
             foreach (DB::table('purchase_items')->where('purchase_id', $id)->get() as $item) {
                 $affected[] = $item->product_id;
                 $received = (float) $item->base_quantity + (float) $item->base_foc_quantity;
+                $reservedProduct = DB::table('products')->where('id', $item->product_id)->lockForUpdate()->first();
+                app(\App\Services\EcommerceInventory::class)->assertRemaining($reservedProduct, (float) $reservedProduct->stock - $received);
                 DB::table('products')->where('id', $item->product_id)->decrement('stock', $received, ['updated_at' => now()]);
                 $this->insertMovement($item->product_id, $item->product_name, 'purchase_delete', -$received, 'purchase', $id, $purchase->supplier_name);
             }
@@ -108,6 +122,7 @@ class PurchaseController extends ApiController
     private function validated(Request $request): array
     {
         return $request->validate(['supplier_id' => ['nullable', 'integer', 'exists:suppliers,id'], 'supplier_name' => ['nullable', 'string', 'max:255'], 'note' => ['nullable', 'string'],
+            'reference_no' => ['nullable', 'string', 'max:255'], 'purchase_date' => ['nullable', 'date_format:Y-m-d'], 'expected_delivery' => ['nullable', 'date_format:Y-m-d'],
             'payment_method' => ['nullable', 'string', 'max:255'], 'paid_amount' => ['nullable', 'integer', 'min:0'],
             'items' => ['required', 'array', 'min:1'], 'items.*.id' => ['nullable', 'integer'], 'items.*.product_id' => ['required', 'integer', 'exists:products,id'], 'items.*.unit_name' => ['nullable', 'string', 'max:50'], 'items.*.quantity' => ['required', 'numeric', 'gt:0'],
             'items.*.foc_quantity' => ['nullable', 'numeric', 'min:0'], 'items.*.unit_cost' => ['required', 'integer', 'min:0']]);
@@ -148,6 +163,9 @@ class PurchaseController extends ApiController
             'status' => 'completed',
             'updated_at' => now(),
         ];
+        foreach (['reference_no', 'purchase_date', 'expected_delivery'] as $field) {
+            if (array_key_exists($field, $data)) $values[$field] = $data[$field];
+        }
         if ($id) {
             DB::table('purchases')->where('id', $id)->update($values);
         } else {

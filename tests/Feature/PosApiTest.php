@@ -88,7 +88,13 @@ class PosApiTest extends TestCase
             ->assertJsonPath('payment_method', 'FOC')
             ->assertJsonPath('items.0.quantity', 0)
             ->assertJsonPath('items.0.foc_quantity', 2)
-            ->assertJsonPath('items.0.unit_name', 'Piece');
+            ->assertJsonPath('items.0.unit_name', 'Piece')
+            ->assertJsonPath('items.0.sku', 'FOC-1')
+            ->assertJsonPath('items.0.photo_url', null)
+            ->assertJsonMissingPath('items.0.photo_path');
+
+        $this->getJson('/api/sales?with_total=true')->assertOk()
+            ->assertJsonPath('total', 1)->assertJsonPath('items.0.item_count', 1);
 
         $this->assertDatabaseHas('products', ['id' => $product['id'], 'stock' => 3]);
 
@@ -462,6 +468,13 @@ class PosApiTest extends TestCase
             ->assertJsonPath('total', 1)->assertJsonPath('items.0.credit_amount', 1500);
         $this->getJson($basePath.'&sale_type=paid')->assertOk()
             ->assertJsonPath('total', 1)->assertJsonPath('items.0.credit_amount', 0);
+        $this->getJson($basePath.'&sale_type=credit&with_items=true&limit=1')->assertOk()
+            ->assertJsonPath('total', 1)->assertJsonCount(1, 'items')
+            ->assertJsonCount(1, 'items.0.items')
+            ->assertJsonPath('items.0.items.0.product_id', $product['id'])
+            ->assertJsonPath('items.0.items.0.unit_price', 2000)
+            ->assertJsonPath('items.0.items.0.photo_url', null)
+            ->assertJsonMissingPath('items.0.items.0.photo_path');
     }
 
     public function test_expense_can_be_loaded_for_a_mobile_edit_deep_link(): void

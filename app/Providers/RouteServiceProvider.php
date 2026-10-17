@@ -45,8 +45,15 @@ class RouteServiceProvider extends ServiceProvider
      */
     protected function configureRateLimiting()
     {
+        foreach (['shop-public' => 120, 'shop-quote' => 30, 'shop-checkout' => 10, 'shop-tracking' => 30, 'shop-proofs' => 5] as $name => $attempts) {
+            RateLimiter::for($name, fn (Request $request) => Limit::perMinute($attempts)->by($request->ip()));
+        }
         RateLimiter::for('api', function (Request $request) {
-            return Limit::perMinute(60)->by($request->user()?->id ?: $request->ip());
+            $identity = $request->user()?->id ?: $request->ip();
+            $chatBackground = $request->is('api/shop-admin/chat', 'api/shop-admin/chat/*') &&
+                ($request->isMethod('GET') || $request->is('api/shop-admin/chat/presence', 'api/shop-admin/chat/auth', 'api/shop-admin/chat/*/read'));
+            if ($chatBackground) return Limit::perMinute(120)->by('chat-background:'.$identity);
+            return Limit::perMinute($request->is('api/ecommerce/*') ? 120 : 60)->by($identity);
         });
     }
 }

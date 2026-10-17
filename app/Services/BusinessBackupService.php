@@ -120,6 +120,7 @@ class BusinessBackupService
 
     public function restore(int $businessId, string $archive): array
     {
+        app(EcommerceInventory::class)->assertMaintenanceAllowed($businessId);
         $payload = $this->decode($archive);
         if ((int) ($payload['business']['id'] ?? 0) !== $businessId) {
             throw ValidationException::withMessages([
@@ -149,7 +150,9 @@ class BusinessBackupService
         Storage::disk('local')->put($safetyPath, $this->export($businessId));
 
         $adminPinHash = DB::table('settings')->where('key', 'admin_pin_hash')->value('value');
-        DB::transaction(function () use ($tables, $adminPinHash) {
+        DB::transaction(function () use ($tables, $adminPinHash, $businessId) {
+            DB::table('storefront_settings')->where('business_id', $businessId)->lockForUpdate()->get();
+            app(EcommerceInventory::class)->assertMaintenanceAllowed($businessId);
             foreach (self::DELETE_ORDER as $table) {
                 DB::table($table)->delete();
             }
@@ -190,6 +193,7 @@ class BusinessBackupService
 
     public function reset(int $businessId): array
     {
+        app(EcommerceInventory::class)->assertMaintenanceAllowed($businessId);
         $business = DB::table('businesses')->where('id', $businessId)->first();
         if (! $business) {
             throw new RuntimeException('Business not found.');
@@ -202,7 +206,9 @@ class BusinessBackupService
         $logoPath = (string) (DB::table('settings')->where('key', 'receipt_logo_path')->value('value') ?? '');
         $recordsCleared = 0;
 
-        DB::transaction(function () use ($business, &$recordsCleared) {
+        DB::transaction(function () use ($business, &$recordsCleared, $businessId) {
+            DB::table('storefront_settings')->where('business_id', $businessId)->lockForUpdate()->get();
+            app(EcommerceInventory::class)->assertMaintenanceAllowed($businessId);
             foreach (self::DELETE_ORDER as $table) {
                 $recordsCleared += DB::table($table)->delete();
             }

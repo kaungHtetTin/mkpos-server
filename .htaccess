@@ -1,0 +1,4 @@
+# Defense in depth when the Laravel folder is deployed below a shared web root.
+Options -Indexes
+RewriteEngine On
+RewriteRule !^public(?:/|$) - [F,L]

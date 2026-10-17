@@ -1,4 +1,4 @@
-const CACHE_NAME = 'mkpos-mobile-shell-v1';
+const CACHE_NAME = 'mkpos-mobile-shell-v2';
 const scopeUrl = new URL(self.registration.scope);
 const appShellUrl = scopeUrl.href;
 
@@ -29,12 +29,20 @@ self.addEventListener('fetch', (event) => {
 
   const url = new URL(request.url);
   if (url.origin !== scopeUrl.origin || url.pathname.includes('/api/') || url.pathname.includes('/sanctum/')) return;
+  // Vite development modules must always come from the development server.
+  if (url.pathname.startsWith('/src/') || url.pathname.startsWith('/node_modules/') || url.pathname.startsWith('/@') || url.pathname === '/__vite_ping') return;
+
+  function cacheResponse(key, response) {
+    // Clone before returning the response; the browser may consume it immediately.
+    const copy = response.clone();
+    event.waitUntil(caches.open(CACHE_NAME).then(cache => cache.put(key, copy)).catch(() => undefined));
+  }
 
   if (request.mode === 'navigate') {
     event.respondWith(
       fetch(request)
         .then((response) => {
-          if (response.ok) void caches.open(CACHE_NAME).then((cache) => cache.put(appShellUrl, response.clone()));
+          if (response.ok) cacheResponse(appShellUrl, response);
           return response;
         })
         .catch(() => caches.match(appShellUrl)),
@@ -45,7 +53,7 @@ self.addEventListener('fetch', (event) => {
   event.respondWith(
     caches.match(request).then((cached) => cached || fetch(request).then((response) => {
       if (response.ok && ['script', 'style', 'font', 'image'].includes(request.destination)) {
-        void caches.open(CACHE_NAME).then((cache) => cache.put(request, response.clone()));
+        cacheResponse(request, response);
       }
       return response;
     })),

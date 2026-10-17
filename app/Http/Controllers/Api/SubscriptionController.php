@@ -94,7 +94,7 @@ class SubscriptionController extends Controller
                 DB::table('subscription_requests')->where('business_id', $businessId)->where('status', 'pending')
                     ->update(['status' => 'rejected', 'admin_note' => 'Replaced by a newer request', 'reviewed_at' => now(), 'updated_at' => now()]);
 
-                return DB::table('subscription_requests')->insertGetId([
+                $requestId = DB::table('subscription_requests')->insertGetId([
                     'business_id' => $businessId,
                     'subscription_plan_id' => $data['subscription_plan_id'],
                     'payment_method_id' => $paymentMethod->id,
@@ -107,6 +107,11 @@ class SubscriptionController extends Controller
                     'created_at' => now(),
                     'updated_at' => now(),
                 ]);
+                app(\App\Services\RealtimeActivity::class)->record('office', $businessId, 'subscription.requested', [
+                    'title' => 'New subscription request', 'message' => DB::table('businesses')->where('id', $businessId)->value('name'),
+                    'target' => 'subscription-request', 'entity_id' => (int) $requestId,
+                ], 'subscription-request:'.$requestId);
+                return $requestId;
             });
         } catch (\Throwable $error) {
             Storage::disk('local')->delete($screenshotPath);

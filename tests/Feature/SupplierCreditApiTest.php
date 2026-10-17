@@ -11,6 +11,16 @@ class SupplierCreditApiTest extends TestCase
 {
     use DatabaseTransactions;
 
+    public function test_supplier_directory_name_sort_is_stable_and_whitelisted(): void
+    {
+        $this->registerOwner();
+        $alpha = $this->postJson('/api/suppliers', ['name' => 'Alpha'])->assertOk()->json();
+        $zulu = $this->postJson('/api/suppliers', ['name' => 'Zulu'])->assertOk()->json();
+        $this->getJson('/api/suppliers?with_total=true&sort=name_desc')->assertOk()->assertJsonPath('items.0.id', $zulu['id']);
+        $this->getJson('/api/suppliers?with_total=true&sort=unknown')->assertOk()->assertJsonPath('items.0.id', $alpha['id']);
+        $this->getJson('/api/suppliers?with_total=true&q=Alpha&sort=name_desc&account_status=settled')->assertOk()->assertJsonPath('total', 1)->assertJsonPath('items.0.id', $alpha['id']);
+    }
+
     public function test_partial_credit_purchase_payments_refunds_and_reports_share_one_supplier_balance(): void
     {
         $this->registerOwner();

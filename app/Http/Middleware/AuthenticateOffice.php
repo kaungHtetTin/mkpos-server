@@ -25,8 +25,18 @@ class AuthenticateOffice
                 throw new AuthenticationException('Unauthenticated.', ['office']);
             }
             Auth::guard('office')->setUser($admin);
-        } elseif (! Auth::guard('office')->check()) {
-            throw new AuthenticationException('Unauthenticated.', ['office']);
+        } else {
+            $admin = Auth::guard('office')->user();
+            $passwordChanged = $admin && $request->hasSession() && $admin->password_reset_at
+                && !hash_equals(hash('sha256', $admin->password), (string) $request->session()->get('office_password_reset_version'));
+            if (! $admin || ! $admin->is_active || $passwordChanged) {
+                Auth::guard('office')->logout();
+                if ($request->hasSession()) {
+                    $request->session()->invalidate();
+                    $request->session()->regenerateToken();
+                }
+                throw new AuthenticationException('Unauthenticated.', ['office']);
+            }
         }
 
         try {

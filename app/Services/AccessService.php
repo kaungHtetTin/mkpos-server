@@ -17,12 +17,19 @@ class AccessService
         'expenses' => 'Expenses',
         'transactions' => 'Transactions',
         'reports' => 'Reports',
+        'ecommerce_settings' => 'Shop settings',
+        'ecommerce_catalog' => 'Online catalog',
+        'ecommerce_orders' => 'Online orders',
+        'ecommerce_process' => 'Process online orders',
+        'ecommerce_payments' => 'Confirm online payments',
+        'ecommerce_refunds' => 'Record online refunds',
     ];
 
     public function permissions(User $user): array
     {
         if ($user->role === 'owner') {
-            return array_values(array_unique([...config('mkpos.enabled_modules', []), 'access']));
+            return array_values(array_unique([...config('mkpos.enabled_modules', []),
+                ...array_filter(array_keys(self::ASSIGNABLE_MODULES), fn ($p) => str_starts_with($p, 'ecommerce_')), 'access']));
         }
 
         if ($user->role !== 'staff' || ! $user->access_role_id) {
@@ -35,10 +42,12 @@ class AccessService
             ->first();
         $permissions = $role ? json_decode($role->permissions, true) : [];
 
-        return array_values(array_intersect(
+        $permissions = array_values(array_intersect(
             is_array($permissions) ? $permissions : [],
             array_keys(self::ASSIGNABLE_MODULES)
         ));
+        if (array_filter($permissions, fn ($p) => str_starts_with($p, 'ecommerce_'))) $permissions[] = 'shop';
+        return $permissions;
     }
 
     public function roleName(User $user): string

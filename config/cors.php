@@ -21,7 +21,7 @@ return [
 
     'allowed_origins' => array_values(array_filter(array_map(
         'trim',
-        explode(',', env('CORS_ALLOWED_ORIGINS', '*'))
+        explode(',', env('CORS_ALLOWED_ORIGINS', 'https://www.mkposmyanmar.com,https://mkposmyanmar.com'))
     ))),
 
     'allowed_origins_patterns' => [],

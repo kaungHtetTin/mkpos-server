@@ -10,8 +10,8 @@ class LandingPageTest extends TestCase
     {
         $this->get('/')
             ->assertOk()
-            ->assertSee('Simple point of sale.')
-            ->assertSee('Complete business control.')
+            ->assertSee('Sales, stock and credit.')
+            ->assertSee('All in one place.')
             ->assertSee('/app/#/signup', false)
             ->assertSee('/app/#/login', false)
             ->assertSee('landing/landing.css', false)
@@ -23,9 +23,15 @@ class LandingPageTest extends TestCase
         $this->get('/app/')->assertOk();
     }
 
+    public function test_customer_shop_entry_point_serves_the_existing_customer_app(): void
+    {
+        $response = $this->get('/shop/')->assertOk();
+        $this->assertSame(realpath(public_path('shop/index.html')), $response->baseResponse->getFile()->getRealPath());
+    }
+
     public function test_product_guide_is_public_and_documents_platform_limits(): void
     {
-        $this->get('/documentation')->assertOk()->assertSee('MKPOS documentation');
+        $this->get('/documentation')->assertOk()->assertSee('Documentation');
         foreach (\App\Http\Controllers\LandingController::TOPICS as $key => $info) {
             $response = $this->get('/documentation/'.$key)->assertOk()->assertSee($info[0])
                 ->assertSee('aria-label="On this page"', false);
