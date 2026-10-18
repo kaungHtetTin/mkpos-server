@@ -16,6 +16,7 @@ Route::prefix('ecommerce')->middleware(['throttle:shop-public', \App\Http\Middle
         Route::post('/order-alerts/feed', [\App\Http\Controllers\Ecommerce\CustomerOrderAlertController::class, 'index']);
     });
     Route::middleware(AuthenticatePlatformCustomer::class)->group(function () {
+        Route::get('/chat/inbox-config', [\App\Http\Controllers\Ecommerce\ChatController::class, 'customerInboxConfig']);
         Route::get('/chat/notifications', [\App\Http\Controllers\Ecommerce\ChatController::class, 'customerNotifications']);
         Route::get('/chat', [\App\Http\Controllers\Ecommerce\ChatController::class, 'customerIndex']);
         Route::get('/chat/{uuid}', [\App\Http\Controllers\Ecommerce\ChatController::class, 'customerShow']);

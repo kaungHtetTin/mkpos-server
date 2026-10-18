@@ -11,7 +11,7 @@
                     <h1>Sales, stock and credit.<br><em>All in one place.</em></h1>
                     <p class="hero-lead">MKPOS helps you sell, manage stock, track payments and see reports in one app.</p>
                     <div class="hero-actions">
-                        <a class="button button-primary" href="{{ url('/app') }}/#/signup">Start free trial <svg><use href="#icon-arrow"/></svg></a>
+                        <a class="button button-primary" href="{{ \App\Support\ClientApps::webUrl('signup') }}">Start free trial <svg><use href="#icon-arrow"/></svg></a>
                         <a class="button button-secondary" href="#how-it-works">See how it works</a>
                     </div>
                     <div class="hero-assurances">
@@ -75,7 +75,7 @@
 
         <section class="section workflow" id="how-it-works">
             <div class="container workflow-grid">
-                <div class="workflow-intro"><span class="section-kicker light">Get started</span><h2>Set up. Add products. Start selling.</h2><p>MKPOS keeps your records current as you work.</p><a class="inline-link" href="{{ url('/app') }}/#/signup">Create your workspace <svg><use href="#icon-arrow"/></svg></a></div>
+                <div class="workflow-intro"><span class="section-kicker light">Get started</span><h2>Set up. Add products. Start selling.</h2><p>MKPOS keeps your records current as you work.</p><a class="inline-link" href="{{ \App\Support\ClientApps::webUrl('signup') }}">Create your workspace <svg><use href="#icon-arrow"/></svg></a></div>
                 <ol class="workflow-steps">
                     <li><span>01</span><div><h3>Create your business</h3><p>Register your shop and set up your team.</p></div></li>
                     <li><span>02</span><div><h3>Add your products</h3><p>Enter prices and opening stock.</p></div></li>
@@ -144,12 +144,12 @@
                     <article>
                         <span><svg><use href="#icon-globe"/></svg></span>
                         <div class="platform-copy"><small class="platform-type">Browser</small><h3>Web desktop</h3><p>Full workspace for desktop and laptop browsers.</p></div>
-                        <div class="platform-action"><small>Always current</small><a class="platform-download-button secondary" href="{{ url('/app') }}/#/login">Open desktop web <svg><use href="#icon-arrow"/></svg></a></div>
+                        <div class="platform-action"><small>Always current</small><a class="platform-download-button secondary" href="{{ \App\Support\ClientApps::webUrl('login') }}">Open desktop web <svg><use href="#icon-arrow"/></svg></a></div>
                     </article>
                     <article>
                         <span><svg><use href="#icon-phone"/></svg></span>
                         <div class="platform-copy"><small class="platform-type">Browser</small><h3>Web mobile</h3><p>Touch-friendly mobile access without an installation.</p></div>
-                        <div class="platform-action"><small>Mobile optimized</small><a class="platform-download-button secondary" href="{{ url('/mobile') }}/#/login">Open mobile web <svg><use href="#icon-arrow"/></svg></a></div>
+                        <div class="platform-action"><small>Mobile optimized</small><a class="platform-download-button secondary" href="{{ \App\Support\ClientApps::mobileUrl('login') }}">Open mobile web <svg><use href="#icon-arrow"/></svg></a></div>
                     </article>
                     <article>
                         <span><svg><use href="#icon-phone"/></svg></span>
@@ -194,7 +194,7 @@
             <div class="container cta-card">
                 <div class="cta-grid"></div>
                 <div><span class="section-kicker light">Ready to begin?</span><h2>Run your shop with MKPOS.</h2><p>Start with one month free.</p></div>
-                <div class="cta-actions"><a class="button button-lime" href="{{ url('/app') }}/#/signup">Start free trial <svg><use href="#icon-arrow"/></svg></a><a href="{{ url('/app') }}/#/login">Already use MKPOS? Sign in</a></div>
+                <div class="cta-actions"><a class="button button-lime" href="{{ \App\Support\ClientApps::webUrl('signup') }}">Start free trial <svg><use href="#icon-arrow"/></svg></a><a href="{{ \App\Support\ClientApps::webUrl('login') }}">Already use MKPOS? Sign in</a></div>
             </div>
         </section>
     </main>

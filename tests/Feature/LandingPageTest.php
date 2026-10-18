@@ -6,6 +6,19 @@ use Tests\TestCase;
 
 class LandingPageTest extends TestCase
 {
+    public function test_public_links_use_configured_app_subdomains(): void
+    {
+        config()->set('clients.web_url', 'https://app.mkposmyanmar.com');
+        config()->set('clients.mobile_url', 'https://mobile.mkposmyanmar.com');
+
+        $this->get('/')
+            ->assertOk()
+            ->assertSee('https://app.mkposmyanmar.com/signup', false)
+            ->assertSee('https://app.mkposmyanmar.com/login', false)
+            ->assertSee('https://mobile.mkposmyanmar.com/login', false)
+            ->assertDontSee('/app/#/signup', false);
+    }
+
     public function test_public_home_page_presents_mkpos_and_links_to_the_business_app(): void
     {
         $this->get('/')

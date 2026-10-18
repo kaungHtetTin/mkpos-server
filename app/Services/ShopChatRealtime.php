@@ -25,7 +25,9 @@ class ShopChatRealtime
 
     public function changed(object $thread, int $messageId): void
     {
-        $this->publish(['private-shop.chat.business.'.$thread->business_id, 'private-shop.chat.thread.'.$thread->uuid],
+        $channels = ['private-shop.chat.business.'.$thread->business_id, 'private-shop.chat.thread.'.$thread->uuid];
+        if ($thread->platform_customer_id ?? null) $channels[] = 'private-shop.chat.customer.'.$thread->platform_customer_id;
+        $this->publish($channels,
             'chat.changed', ['thread' => $thread->uuid, 'message_id' => $messageId]);
     }
 

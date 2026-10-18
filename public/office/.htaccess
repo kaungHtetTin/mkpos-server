@@ -1,0 +1,20 @@
+# Shared by the owner web app and Office (which uses this publicDir).
+Options -MultiViews -Indexes
+DirectoryIndex index.html
+RewriteEngine On
+
+# Keep hidden files private, including accidental environment-file uploads.
+RewriteRule (^|/)\.(?!well-known(?:/|$)) - [F,L]
+
+# API requests belong to the configured Laravel API origin, not this SPA.
+RewriteRule ^(?:api|sanctum)(?:/|$) - [R=404,L]
+
+# Serve existing files directly. Missing assets must be real 404 responses.
+RewriteCond %{REQUEST_FILENAME} -f [OR]
+RewriteCond %{REQUEST_FILENAME} -d
+RewriteRule ^ - [L]
+RewriteRule ^(?:assets|branding)(?:/|$) - [R=404,L]
+RewriteRule \.[^/]+$ - [R=404,L]
+
+# Direct links and browser refreshes enter the client-side router.
+RewriteRule ^ index.html [L]

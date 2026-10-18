@@ -107,6 +107,32 @@ class ShopChatTest extends TestCase
         return $product['id'];
     }
 
+    public function test_customer_inbox_channel_is_account_scoped_and_message_and_read_events_reach_it(): void
+    {
+        $buyer = $this->account(); $uuid = $this->start($buyer);
+        $channel = 'private-shop.chat.customer.'.$buyer['customer']['id'];
+        config(['shop_chat.realtime_enabled' => true, 'shop_chat.secret' => str_repeat('test-secret', 4)]);
+        Http::fake(['*' => Http::response(['ok' => true])]);
+        $this->getJson('/api/ecommerce/chat/inbox-config')->assertOk()->assertJsonPath('channel', $channel)->assertJsonMissingPath('secret');
+        $token = $this->postJson('/api/ecommerce/chat/auth', ['channel_name' => $channel])->assertOk()->json('token');
+        $claims = json_decode(base64_decode(strtr(explode('.', $token)[0], '-_', '+/')), true);
+        $this->assertSame((int) $buyer['customer']['id'], $claims['customer_id']);
+        $this->assertSame('customer', $claims['role']);
+        $this->postJson('/api/ecommerce/chat/auth', ['channel_name' => 'private-shop.chat.customer.'.($buyer['customer']['id'] + 100000)])->assertForbidden();
+        $other = $this->account();
+        $this->withToken($other['access_token']);
+        $this->postJson('/api/ecommerce/chat/auth', ['channel_name' => $channel])->assertForbidden();
+        $this->withToken($this->owner['access_token']);
+        $this->postJson('/api/shop-admin/chat/auth', ['channel_name' => $channel])->assertForbidden();
+        $id = $this->postJson('/api/shop-admin/chat/'.$uuid.'/messages', ['body' => 'Live inbox', 'client_id' => (string) Str::uuid()])->assertOk()->json('message.id');
+        $this->withToken($buyer['access_token']);
+        $this->postJson('/api/ecommerce/chat/'.$uuid.'/read', ['message_id' => $id])->assertOk();
+        Http::assertSentCount(2);
+        Http::assertSent(fn ($request) => in_array($channel, $request['channels'], true) && $request['data'] === ['thread' => $uuid, 'message_id' => $id]);
+        $this->withHeader('Authorization', '');
+        $this->getJson('/api/ecommerce/chat/inbox-config')->assertUnauthorized();
+    }
+
     public function test_product_cards_are_durable_idempotent_and_work_in_both_chat_directions(): void
     {
         $productId = $this->publishedProduct();

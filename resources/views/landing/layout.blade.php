@@ -48,8 +48,8 @@
                 <a href="{{ route('landing') }}#contact">Contact</a>
             </nav>
             <div class="nav-actions">
-                <a class="text-link" href="{{ url('/app') }}/#/login">Sign in</a>
-                <a class="button button-small" href="{{ url('/app') }}/#/signup">Start free trial</a>
+                <a class="text-link" href="{{ \App\Support\ClientApps::webUrl('login') }}">Sign in</a>
+                <a class="button button-small" href="{{ \App\Support\ClientApps::webUrl('signup') }}">Start free trial</a>
             </div>
             <details class="mobile-nav">
                 <summary aria-label="Open navigation"><span></span><span></span><span></span></summary>
@@ -63,8 +63,8 @@
                     <a href="{{ route('documentation.index') }}">Documentation</a>
                     <a href="{{ route('tutorials.index') }}">Tutorials</a>
                     <a href="{{ route('landing') }}#security">Security</a>
-                    <a href="{{ url('/app') }}/#/login">Sign in</a>
-                    <a class="button" href="{{ url('/app') }}/#/signup">Start free trial</a>
+                    <a href="{{ \App\Support\ClientApps::webUrl('login') }}">Sign in</a>
+                    <a class="button" href="{{ \App\Support\ClientApps::webUrl('signup') }}">Start free trial</a>
                 </div>
             </details>
         </div>
@@ -78,7 +78,7 @@
             <nav aria-label="Footer navigation">
                 <div><strong>Product</strong><a href="{{ route('landing') }}#how-it-works">How it works</a><a href="{{ route('landing') }}#features">Features</a><a href="{{ route('landing') }}#platforms">Downloads</a><a href="{{ route('plans.index') }}">Pricing</a></div>
                 <div><strong>Resources</strong><a href="{{ route('documentation.index') }}">Documentation</a><a href="{{ route('tutorials.index') }}">Tutorials</a><a href="{{ route('landing') }}#security">Security</a></div>
-                <div><strong>Access</strong><a href="{{ url('/app') }}/#/signup">Start free trial</a><a href="{{ url('/app') }}/#/login">Business sign in</a></div>
+                <div><strong>Access</strong><a href="{{ \App\Support\ClientApps::webUrl('signup') }}">Start free trial</a><a href="{{ \App\Support\ClientApps::webUrl('login') }}">Business sign in</a></div>
                 @if($contacts['phone_numbers'] || $contacts['viber_numbers'] || $contacts['telegram_url'] || $contacts['email'] || $contacts['community_url'])
                     <div><strong>Contact & community</strong>
                         @foreach($contacts['phone_numbers'] as $phone)
@@ -98,7 +98,7 @@
     </footer>
     <script>
         if (window.location.hash.startsWith('#/')) {
-            window.location.replace(@json(rtrim(url('/app'), '/')) + '/' + window.location.hash);
+            window.location.replace(@json(\App\Support\ClientApps::webUrl()) + window.location.hash.slice(2));
         }
     </script>
     <script src="{{ asset('landing/navigation.js') }}" defer></script>

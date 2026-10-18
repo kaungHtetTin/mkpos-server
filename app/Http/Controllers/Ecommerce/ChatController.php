@@ -18,6 +18,10 @@ class ChatController extends Controller
 
     public function config(): array { return $this->realtime->settings(); }
     public function ownerConfig(): array { return $this->config() + ['channel' => 'private-shop.chat.business.'.app(TenantContext::class)->requireId()]; }
+    public function customerInboxConfig(Request $request): array
+    {
+        return $this->config() + ['channel' => 'private-shop.chat.customer.'.$request->attributes->get('platform_customer')->id];
+    }
 
     public function customerAppPresence(Request $request): array
     {
@@ -316,6 +320,9 @@ class ChatController extends Controller
     {
         $data = $request->validate(['channel_name' => ['required', 'string', 'max:150']]);
         $channel = $data['channel_name'];
+        if (! $staff && $channel === 'private-shop.chat.customer.'.$request->attributes->get('platform_customer')->id) {
+            return $this->realtime->auth($channel, ['role' => 'customer', 'customer_id' => (int) $request->attributes->get('platform_customer')->id]);
+        }
         if ($staff && $channel === 'private-shop.chat.business.'.app(TenantContext::class)->requireId()) return $this->realtime->auth($channel, ['role' => 'owner', 'business_id' => app(TenantContext::class)->requireId()]);
         abort_unless(preg_match('/^private-shop\.chat\.thread\.([a-f0-9-]{36})$/', $channel, $matches), 403);
         $thread = $this->thread($request, $matches[1], $staff);
