@@ -3,6 +3,10 @@ DirectoryIndex index.html
 RewriteEngine On
 
 RewriteRule (^|/)\.(?!well-known(?:/|$)) - [F,L]
+
+RewriteCond %{HTTP_HOST} ^(?:www\.)?mkposmyanmar\.com(?::[0-9]+)?$ [NC]
+RewriteCond %{REQUEST_URI} ^/(?:public/)?mobile(?:/|$) [NC]
+RewriteRule ^(.*)$ https://mobile.mkposmyanmar.com/$1 [R=302,L]
 RewriteRule ^(?:api|sanctum)(?:/|$) - [R=404,L]
 
 RewriteCond %{REQUEST_FILENAME} -f [OR]

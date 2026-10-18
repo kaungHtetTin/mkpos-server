@@ -8,6 +8,10 @@
     # Never serve hidden files, even if accidentally copied into public/.
     RewriteRule (^|/)\.(?!well-known(?:/|$)) - [F,L]
 
+    # Old owner-app addresses remain valid entry links to the subdomains.
+    RewriteCond %{HTTP_HOST} ^(?:www\.)?mkposmyanmar\.com(?::[0-9]+)?$ [NC]
+    RewriteRule ^(app|mobile|office)(?:/(.*))?$ https://$1.mkposmyanmar.com/$2 [R=302,L]
+
     # Handle Authorization Header
     RewriteCond %{HTTP:Authorization} .
     RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]

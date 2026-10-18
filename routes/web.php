@@ -3,6 +3,8 @@
 use App\Http\Controllers\DownloadController;
 use App\Http\Controllers\LandingController;
 use App\Models\AppRelease;
+use App\Support\ClientApps;
+use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 
 /*
@@ -26,26 +28,11 @@ Route::get('/downloads/{platform}', [DownloadController::class, 'show'])
     ->whereIn('platform', AppRelease::PLATFORMS)
     ->name('downloads.show');
 
-Route::get('/office/{path?}', function () {
-    $index = public_path('office/index.html');
-    abort_unless(is_file($index), 404, 'Office build not found. Run npm run build:laravel in office.');
-
-    return response()->file($index);
-})->where('path', '.*');
-
-Route::get('/app/{path?}', function () {
-    $index = public_path('app/index.html');
-    abort_unless(is_file($index), 404, 'React build not found. Run npm run build:laravel in frontend.');
-
-    return response()->file($index);
-})->where('path', '.*');
-
-Route::get('/mobile/{path?}', function () {
-    $index = public_path('mobile/index.html');
-    abort_unless(is_file($index), 404, 'Mobile build not found. Run npm run build:laravel in mobile.');
-
-    return response()->file($index);
-})->where('path', '.*');
+foreach (['app', 'mobile', 'office'] as $client) {
+    Route::get('/'.$client.'/{path?}', function (Request $request, string $path = '') use ($client) {
+        return redirect()->away(ClientApps::legacyUrl($client, $path, $request->getQueryString()), 302);
+    })->where('path', '.*');
+}
 
 Route::get('/shop/{path?}', function () {
     $index = public_path('shop/index.html');

@@ -31,9 +31,9 @@ class LandingPageTest extends TestCase
             ->assertSee('Android download coming soon');
     }
 
-    public function test_business_spa_entry_point_is_unchanged(): void
+    public function test_old_business_spa_entry_point_redirects_to_the_subdomain(): void
     {
-        $this->get('/app/')->assertOk();
+        $this->get('/app/')->assertRedirect('https://app.mkposmyanmar.com/');
     }
 
     public function test_customer_shop_entry_point_serves_the_existing_customer_app(): void

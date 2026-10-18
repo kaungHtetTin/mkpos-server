@@ -6,6 +6,11 @@ RewriteEngine On
 # Keep hidden files private, including accidental environment-file uploads.
 RewriteRule (^|/)\.(?!well-known(?:/|$)) - [F,L]
 
+# Also cover existing directories that Apache serves without entering Laravel.
+RewriteCond %{HTTP_HOST} ^(?:www\.)?mkposmyanmar\.com(?::[0-9]+)?$ [NC]
+RewriteCond %{REQUEST_URI} ^/(?:public/)?(app|office)(?:/|$) [NC]
+RewriteRule ^(.*)$ https://%1.mkposmyanmar.com/$1 [R=302,L]
+
 # API requests belong to the configured Laravel API origin, not this SPA.
 RewriteRule ^(?:api|sanctum)(?:/|$) - [R=404,L]
 
