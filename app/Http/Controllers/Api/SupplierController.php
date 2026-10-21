@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Api;
 
+use App\Support\SupplierBalance;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 
@@ -215,7 +216,7 @@ class SupplierController extends ApiController
 
     private function balanceSql(): string
     {
-        return "CAST(COALESCE((SELECT SUM(p.credit_amount) FROM purchases p WHERE p.supplier_id=s.id AND p.status='completed'),0)-COALESCE((SELECT SUM(CASE WHEN sp.direction='shop_to_supplier' THEN sp.amount ELSE -sp.amount END) FROM supplier_payments sp WHERE sp.supplier_id=s.id AND sp.status='completed'),0) AS SIGNED)";
+        return SupplierBalance::sql();
     }
 
     private function accountTotals(int $supplierId): array

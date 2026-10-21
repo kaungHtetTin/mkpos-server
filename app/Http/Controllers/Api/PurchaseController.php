@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Api;
 
+use App\Support\SupplierBalance;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
@@ -36,7 +37,16 @@ class PurchaseController extends ApiController
             $query->whereDate(DB::raw('COALESCE(purchase_date, created_at)'), '<=', $request->query('date_to'));
         }
 
-        return $this->page($query->orderByDesc('created_at')->orderByDesc('id'), $request, 25, 100);
+        $result = $this->page($query->orderByDesc('created_at')->orderByDesc('id'), $request, 25, 100);
+        if ($request->boolean('with_total') && $request->boolean('with_current_balance')) {
+            // A current account balance is independent of purchase history filters
+            // and pagination. Keep the legacy response unchanged unless requested.
+            $balances = DB::table('suppliers as s')->where('s.is_active', true)
+                ->selectRaw(SupplierBalance::sql().' as balance')->get();
+            $result['current_payable_total'] = (int) $balances->sum(fn ($row) => max((int) $row->balance, 0));
+        }
+
+        return $result;
     }
 
     public function store(Request $request)

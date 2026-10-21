@@ -37,7 +37,7 @@ class AuthController extends Controller
                 'name' => trim($data['business_name']),
                 'slug' => $this->uniqueSlug($data['business_name']),
                 'status' => 'active',
-                'timezone' => config('app.timezone'),
+                'timezone' => 'Asia/Yangon',
                 'currency' => 'Ks',
             ]);
 
@@ -194,6 +194,7 @@ class AuthController extends Controller
             'user' => $user->only(['id', 'name', 'email', 'role']),
             'permissions' => $access->permissions($user),
             'role_name' => $access->roleName($user),
+            'storage_timezone' => config('app.timezone'),
             'business' => $business->only(['id', 'name', 'slug', 'status', 'timezone', 'currency']),
             'subscription' => app(SubscriptionService::class)->status((int) $business->id),
         ];

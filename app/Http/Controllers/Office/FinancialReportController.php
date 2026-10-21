@@ -15,6 +15,8 @@ class FinancialReportController extends Controller
             'page' => ['sometimes', 'integer', 'min:1'],
             'per_page' => ['sometimes', 'integer', 'min:1', 'max:100'],
             'q' => ['nullable', 'string', 'max:200'],
+            'from' => ['nullable', 'date_format:Y-m-d'],
+            'to' => array_filter(['nullable', 'date_format:Y-m-d', $request->filled('from') ? 'after_or_equal:from' : null]),
             'currency' => ['nullable', 'string', 'max:20'],
             'type' => ['sometimes', Rule::in(['all', 'assignment', 'renewal'])],
         ]);
@@ -34,6 +36,8 @@ class FinancialReportController extends Controller
         if ($currency = ($data['currency'] ?? '')) $query->where('payments.currency', $currency);
         if (($data['type'] ?? 'all') !== 'all') $query->where('payments.type', $data['type']);
 
+        if (!empty($data['from'])) $query->where('payments.paid_at', '>=', \App\Support\AppTime::day($data['from'], config('app.timezone')));
+        if (!empty($data['to'])) $query->where('payments.paid_at', '<', \App\Support\AppTime::day($data['to'], config('app.timezone'))->addDay());
         $total = (clone $query)->count();
         $perPage = (int) ($data['per_page'] ?? 25);
         $lastPage = max(1, (int) ceil($total / $perPage));
@@ -44,7 +48,10 @@ class FinancialReportController extends Controller
             'businesses.name as business_name', 'plans.name as plan_name',
             'admins.name as created_by_name'
         )->orderByDesc('payments.paid_at')->orderByDesc('payments.id')
-            ->offset(($page - 1) * $perPage)->limit($perPage)->get()->all();
+            ->offset(($page - 1) * $perPage)->limit($perPage)->get()->map(function ($row) {
+                $row->paid_at = \App\Support\AppTime::iso($row->paid_at);
+                return $row;
+            })->all();
 
         return [
             'items' => $items, 'total' => $total, 'page' => $page,
@@ -144,7 +151,7 @@ class FinancialReportController extends Controller
             ],
             'monthly' => $monthly,
             'yearly' => $yearly,
-            'recent_sales' => $recentSales,
+            'recent_sales' => array_map(function ($row) { $row->paid_at = \App\Support\AppTime::iso($row->paid_at); return $row; }, $recentSales),
         ];
     }
 }

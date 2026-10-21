@@ -34,6 +34,6 @@ class ShopReviews
             'rating' => (int) $review->rating, 'comment' => $review->comment,
             'customer_name' => $review->customer_name ?? 'Customer',
             'verified_purchase' => true, 'reply' => $review->reply,
-            'replied_at' => $review->replied_at, 'created_at' => $review->created_at, 'updated_at' => $review->updated_at];
+            'replied_at' => \App\Support\AppTime::utc($review->replied_at), 'created_at' => \App\Support\AppTime::utc($review->created_at), 'updated_at' => \App\Support\AppTime::utc($review->updated_at)];
     }
 }

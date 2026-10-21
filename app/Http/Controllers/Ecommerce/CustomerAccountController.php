@@ -130,7 +130,7 @@ class CustomerAccountController extends Controller
             ])->values();
             unset($row->id, $row->business_id);
         }
-        return ['items' => $visible, 'has_more' => $rows->count() > $limit];
+        return ['items' => \App\Support\AppTime::shopPayload($visible), 'has_more' => $rows->count() > $limit];
     }
 
     public function order(Request $request, string $reference): array

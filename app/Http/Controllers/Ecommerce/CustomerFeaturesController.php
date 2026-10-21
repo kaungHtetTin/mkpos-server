@@ -26,7 +26,7 @@ class CustomerFeaturesController extends Controller
         if ($request->boolean('unread')) $query->whereNull('read_at');
         $rows = $query->orderByDesc('id')->offset(max(0, (int) $request->query('offset', 0)))->limit($limit + 1)->get();
         return ['unread_count' => $unread, 'items' => $rows->take($limit)->map(fn ($row) => ['id' => $row->id, 'event' => $row->event,
-            'payload' => json_decode($row->payload, true), 'read_at' => $row->read_at, 'created_at' => $row->created_at])->values(), 'has_more' => $rows->count() > $limit];
+            'payload' => json_decode($row->payload, true), 'read_at' => \App\Support\AppTime::utc($row->read_at), 'created_at' => \App\Support\AppTime::utc($row->created_at)])->values(), 'has_more' => $rows->count() > $limit];
     }
 
     public function readNotifications(Request $request): array

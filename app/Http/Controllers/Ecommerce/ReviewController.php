@@ -97,8 +97,8 @@ class ReviewController extends Controller
         if (($data['content'] ?? '') === 'rating_only') $query->whereNull('r.comment');
         if (! empty($data['date_from']) || ! empty($data['date_to'])) {
             $timezone = DB::table('businesses')->where('id', $businessId)->value('timezone') ?: 'Asia/Rangoon';
-            if (! empty($data['date_from'])) $query->where('r.created_at', '>=', CarbonImmutable::createFromFormat('!Y-m-d', $data['date_from'], $timezone)->utc());
-            if (! empty($data['date_to'])) $query->where('r.created_at', '<', CarbonImmutable::createFromFormat('!Y-m-d', $data['date_to'], $timezone)->addDay()->utc());
+            if (! empty($data['date_from'])) $query->where('r.created_at', '>=', \App\Support\AppTime::day($data['date_from'], $timezone));
+            if (! empty($data['date_to'])) $query->where('r.created_at', '<', \App\Support\AppTime::storage(CarbonImmutable::createFromFormat('!Y-m-d', $data['date_to'], $timezone)->addDay()));
         }
         if ($search = trim($data['q'] ?? '')) $query->where(function ($q) use ($search) {
             $q->where('c.name', 'like', '%'.$search.'%')->orWhere('p.name', 'like', '%'.$search.'%')->orWhere('r.comment', 'like', '%'.$search.'%');

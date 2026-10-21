@@ -13,12 +13,7 @@ class SaleController extends ApiController
     {
         $query = DB::table('sales')->leftJoin('customers', 'customers.id', '=', 'sales.customer_id')->select('sales.*', 'customers.name as customer_name')
             ->selectRaw('(SELECT COUNT(*) FROM sale_items WHERE sale_items.sale_id = sales.id) as item_count');
-        if ($request->query('start')) {
-            $query->whereDate('sales.created_at', '>=', $request->query('start'));
-        }
-        if ($request->query('end')) {
-            $query->whereDate('sales.created_at', '<=', $request->query('end'));
-        }
+        \App\Support\AppTime::filterDays($query, $request->query('start'), $request->query('end'), 'sales.created_at');
         if (($status = $request->query('status', 'all')) !== 'all') {
             $query->where('sales.status', $status);
         }
@@ -210,7 +205,11 @@ class SaleController extends ApiController
             'receipt_paper_size' => '80mm', 'receipt_header_alignment' => 'center', 'receipt_margin_left' => '3', 'receipt_margin_right' => '3',
             'receipt_header_font_size' => '11', 'receipt_body_font_size' => '8.2', 'receipt_line_height' => '1.45',
         ], DB::table('settings')->pluck('value', 'key')->all()));
-        return \App\Support\ReceiptRenderer::render($sale, $settings);
+        $printSale = $sale;
+        $printSale['created_at'] = \App\Support\AppTime::storage($sale['created_at'])->setTimezone(\App\Support\AppTime::businessTimezone())->toDateTimeString();
+        $receipt = \App\Support\ReceiptRenderer::render($printSale, $settings);
+        $receipt['sale'] = $sale;
+        return $receipt;
     }
 
     public function print(int $id): array

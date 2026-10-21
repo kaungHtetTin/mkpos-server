@@ -14,7 +14,7 @@ class ShopReportController extends Controller
     private function customer(Request $request): int { return (int) $request->attributes->get('platform_customer')->id; }
     private function customerView(object $row): array
     {
-        return collect((array) $row)->only(['id', 'reason', 'details', 'order_reference', 'status', 'office_response', 'created_at', 'updated_at'])->all();
+        return \App\Support\AppTime::shopPayload(collect((array) $row)->only(['id', 'reason', 'details', 'order_reference', 'status', 'office_response', 'created_at', 'updated_at'])->all());
     }
     public function mine(Request $request, string $slug): array
     {
@@ -74,12 +74,12 @@ class ShopReportController extends Controller
         }
         $total = (clone $query)->count(); $perPage = (int) ($data['per_page'] ?? 25); $last = max(1, (int) ceil($total / $perPage)); $page = min((int) ($data['page'] ?? 1), $last);
         $rows = $query->orderByDesc('r.id')->offset(($page - 1) * $perPage)->limit($perPage)->get()->map(fn ($r) => collect((array) $r)->except(['open_key', 'submission_key'])->all());
-        return ['items' => $rows, 'total' => $total, 'page' => $page, 'per_page' => $perPage, 'last_page' => $last];
+        return ['items' => \App\Support\AppTime::shopPayload($rows), 'total' => $total, 'page' => $page, 'per_page' => $perPage, 'last_page' => $last];
     }
     public function show(int $id): array
     {
         $row = $this->officeQuery()->where('r.id', $id)->first(); abort_unless($row, 404);
-        return collect((array) $row)->except(['open_key', 'submission_key'])->all() + ['updates' => DB::table('shop_report_updates')->where('report_id', $id)->orderByDesc('id')->get()];
+        return \App\Support\AppTime::shopPayload(collect((array) $row)->except(['open_key', 'submission_key'])->all() + ['updates' => DB::table('shop_report_updates')->where('report_id', $id)->orderByDesc('id')->get()]);
     }
     public function review(Request $request, int $id): array
     {

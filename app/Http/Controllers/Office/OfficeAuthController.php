@@ -108,7 +108,7 @@ class OfficeAuthController extends Controller
 
     private function payload(?PlatformAdmin $admin = null, ?string $token = null): array
     {
-        $payload = ['admin' => ($admin ?? Auth::guard('office')->user())->only(['id', 'name', 'email'])];
+        $payload = ['timezone' => config('app.timezone'), 'admin' => ($admin ?? Auth::guard('office')->user())->only(['id', 'name', 'email'])];
         if ($token) {
             $payload['access_token'] = $token;
             $payload['token_type'] = 'Bearer';

@@ -12,19 +12,17 @@ class ReportController extends ApiController
     public function summary(Request $request): array
     {
         $allTime = $request->boolean('all_time');
-        $start = $allTime ? null : ($request->query('start') ?: now()->startOfMonth()->toDateString());
-        $end = $allTime ? null : ($request->query('end') ?: now()->toDateString());
+        $timezone = \App\Support\AppTime::businessTimezone();
+        $today = now($timezone);
+        $start = $allTime ? null : ($request->query('start') ?: $today->copy()->startOfMonth()->toDateString());
+        $end = $allTime ? null : ($request->query('end') ?: $today->toDateString());
         $sales = DB::table('sales')->where('status', 'completed');
         $expenses = DB::table('expenses')->where('status', 'completed');
         $payments = DB::table('customer_payments')->where('status', 'completed');
         $supplierPayments = DB::table('supplier_payments')->where('status', 'completed');
         $purchases = DB::table('purchases')->where('status', 'completed');
         foreach ([$sales, $payments, $supplierPayments, $purchases] as $query) {
-            if ($start) {
-                $query->whereDate('created_at', '>=', $start);
-            } if ($end) {
-                $query->whereDate('created_at', '<=', $end);
-            }
+            \App\Support\AppTime::filterDays($query, $start, $end);
         }
         if ($start) {
             $expenses->whereDate('expense_date', '>=', $start);
@@ -192,22 +190,23 @@ class ReportController extends ApiController
 
     private function salesTrends(?string $anchorDate): array
     {
-        $anchor = Carbon::parse($anchorDate ?: now()->toDateString());
+        $timezone = \App\Support\AppTime::businessTimezone();
+        $anchor = Carbon::parse($anchorDate ?: now($timezone)->toDateString(), $timezone);
         $monthStart = $anchor->copy()->startOfMonth();
         $monthEnd = $anchor->copy()->endOfMonth();
         $yearStart = $anchor->copy()->startOfYear();
         $yearEnd = $anchor->copy()->endOfYear();
 
         $dailyTotals = DB::table('sales')->where('status', 'completed')
-            ->whereBetween('created_at', [$monthStart, $monthEnd])
+            ->whereBetween('created_at', [\App\Support\AppTime::storage($monthStart), \App\Support\AppTime::storage($monthEnd)])
             ->get(['created_at', 'total'])
-            ->groupBy(fn ($sale) => Carbon::parse($sale->created_at)->day)
+            ->groupBy(fn ($sale) => \App\Support\AppTime::storage($sale->created_at)->setTimezone($timezone)->day)
             ->map(fn ($sales) => (int) $sales->sum('total'));
 
         $monthlyTotals = DB::table('sales')->where('status', 'completed')
-            ->whereBetween('created_at', [$yearStart, $yearEnd])
+            ->whereBetween('created_at', [\App\Support\AppTime::storage($yearStart), \App\Support\AppTime::storage($yearEnd)])
             ->get(['created_at', 'total'])
-            ->groupBy(fn ($sale) => Carbon::parse($sale->created_at)->month)
+            ->groupBy(fn ($sale) => \App\Support\AppTime::storage($sale->created_at)->setTimezone($timezone)->month)
             ->map(fn ($sales) => (int) $sales->sum('total'));
 
         return [

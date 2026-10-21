@@ -233,6 +233,9 @@ class BusinessSubscriptionController extends Controller
             ->select('requests.*', 'businesses.name as business_name', 'plans.name as plan_name', 'plans.price', 'plans.currency', 'plans.duration_days')
             ->orderByRaw("FIELD(requests.status, 'pending', 'approved', 'rejected')")->orderByDesc('requests.id')->get()
             ->map(function ($item) {
+                foreach (['created_at', 'reviewed_at', 'updated_at'] as $field) {
+                    if (isset($item->$field)) $item->$field = \App\Support\AppTime::iso($item->$field);
+                }
                 $item->payment_screenshot_available = (bool) $item->payment_screenshot_path;
                 $item->payment_screenshot_url = $item->payment_screenshot_path
                     ? "/api/office/subscription-requests/{$item->id}/payment-screenshot"

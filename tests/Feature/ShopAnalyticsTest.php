@@ -38,8 +38,8 @@ class ShopAnalyticsTest extends TestCase
     {
         $this->order(['created_at' => '2026-10-05 10:00:00', 'phone' => '09 1234']);
         $id = $this->order();
-        $this->order(['created_at' => '2026-10-05 17:30:00', 'phone' => '098888', 'total' => 2000]); // Midnight in Yangon.
-        $this->order(['created_at' => '2026-10-06 17:30:00', 'total' => 9000]); // Next local day; excluded.
+        $this->order(['created_at' => '2026-10-06 00:00:00', 'phone' => '098888', 'total' => 2000]); // Midnight in Yangon.
+        $this->order(['created_at' => '2026-10-07 00:00:00', 'total' => 9000]); // Next local day; excluded.
         $this->order(['status' => 'cancelled', 'payment_status' => 'refund_pending', 'total' => 3000]);
         $this->order(['sale_voided' => true, 'total' => 4000]);
         $this->order(['currency' => 'USD', 'total' => 20]);
@@ -98,10 +98,10 @@ class ShopAnalyticsTest extends TestCase
     public function test_calendar_buckets_handle_daylight_saving_changes(): void
     {
         DB::table('businesses')->where('id', $this->businessId)->update(['timezone' => 'America/New_York']);
-        $this->order(['created_at' => '2026-11-01 03:59:59', 'total' => 9000]); // Previous local day.
-        $this->order(['created_at' => '2026-11-01 04:00:00']);
-        $this->order(['created_at' => '2026-11-02 04:59:59']); // Still the 25-hour local day.
-        $this->order(['created_at' => '2026-11-02 05:00:00', 'total' => 9000]); // Next day.
+        $this->order(['created_at' => '2026-11-01 10:29:59', 'total' => 9000]); // Previous local day.
+        $this->order(['created_at' => '2026-11-01 10:30:00']);
+        $this->order(['created_at' => '2026-11-02 11:29:59']); // Still the 25-hour local day.
+        $this->order(['created_at' => '2026-11-02 11:30:00', 'total' => 9000]); // Next day.
         $this->getJson('/api/shop-admin/report?analytics=1&date_from=2026-11-01&date_to=2026-11-01&currency=Ks')->assertOk()
             ->assertJsonPath('summary.sales', 2000)->assertJsonPath('trend.0.sales', 2000)->assertJsonPath('trend.0.orders', 2);
     }

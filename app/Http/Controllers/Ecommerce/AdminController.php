@@ -293,8 +293,8 @@ class AdminController extends Controller
         $query = DB::table('ecommerce_orders')->where('business_id', $businessId);
         if (! empty($dates['date_from']) || ! empty($dates['date_to'])) {
             $timezone = DB::table('businesses')->where('id', $businessId)->value('timezone') ?: 'Asia/Rangoon';
-            if (! empty($dates['date_from'])) $query->where('created_at', '>=', CarbonImmutable::createFromFormat('!Y-m-d', $dates['date_from'], $timezone)->utc());
-            if (! empty($dates['date_to'])) $query->where('created_at', '<', CarbonImmutable::createFromFormat('!Y-m-d', $dates['date_to'], $timezone)->addDay()->utc());
+            if (! empty($dates['date_from'])) $query->where('created_at', '>=', \App\Support\AppTime::day($dates['date_from'], $timezone));
+            if (! empty($dates['date_to'])) $query->where('created_at', '<', \App\Support\AppTime::storage(CarbonImmutable::createFromFormat('!Y-m-d', $dates['date_to'], $timezone)->addDay()));
         }
         if ($s = $request->query('status')) $query->where('status', $s);
         if ($p = $request->query('payment_status')) $query->where('payment_status', $p);

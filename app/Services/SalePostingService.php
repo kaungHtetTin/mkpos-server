@@ -50,7 +50,7 @@ class SalePostingService
                 'source' => $ecommerce ? 'ecommerce' : ($offline ? 'offline' : 'online'),
                 'offline_sale_uuid' => $offline['offline_sale_uuid'] ?? null,
                 'offline_created_at' => $offline['offline_created_at'] ?? null,
-                'created_at' => $offline['offline_created_at'] ?? now(),
+                'created_at' => $offline ? \App\Support\AppTime::storage($offline['offline_created_at'], 'UTC')->toDateTimeString() : now(),
             ]);
         }
         foreach ($data['items'] as $item) {

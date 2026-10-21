@@ -71,7 +71,7 @@ class ShopCustomerController extends Controller
             ])->values();
             unset($row->platform_customer_id);
         }
-        return ['items' => $rows, 'total' => $total];
+        return ['items' => \App\Support\AppTime::shopPayload($rows), 'total' => $total];
     }
 
     public function orders(Request $request, string $customerKey): array
@@ -82,7 +82,7 @@ class ShopCustomerController extends Controller
         abort_unless($total, 404, 'Shop customer unavailable.');
         $limit = max(1, min(100, (int) $request->query('limit', 25)));
         $rows = $query->orderByDesc('id')->offset(max(0, (int) $request->query('offset', 0)))->limit($limit)->get(['id', 'reference', 'created_at', 'currency', 'total', 'status', 'payment_status']);
-        return ['items' => $rows, 'total' => $total];
+        return ['items' => \App\Support\AppTime::shopPayload($rows), 'total' => $total];
     }
 
     private function customer(string $customerKey): object
@@ -226,7 +226,7 @@ class ShopCustomerController extends Controller
             'total_orders' => (int) $counts->sum('orders'), 'completed_orders' => (int) ($states['completed'] ?? 0),
             'active_orders' => (int) $counts->whereNotIn('status', ['completed', 'cancelled', 'expired'])->sum('orders'),
             'cancelled_orders' => (int) ($states['cancelled'] ?? 0), 'expired_orders' => (int) ($states['expired'] ?? 0),
-            'first_purchase_at' => $range->first_purchase_at, 'last_purchase_at' => $range->last_purchase_at,
+            'first_purchase_at' => \App\Support\AppTime::utc($range->first_purchase_at), 'last_purchase_at' => \App\Support\AppTime::utc($range->last_purchase_at),
             'currencies' => $money,
         ]];
     }
@@ -241,8 +241,8 @@ class ShopCustomerController extends Controller
         $query = $this->historyQuery($customerKey);
         if (! empty($data['date_from']) || ! empty($data['date_to'])) {
             $timezone = DB::table('businesses')->where('id', $this->tenant->requireId())->value('timezone') ?: 'Asia/Rangoon';
-            if (! empty($data['date_from'])) $query->where('created_at', '>=', CarbonImmutable::createFromFormat('!Y-m-d', $data['date_from'], $timezone)->utc());
-            if (! empty($data['date_to'])) $query->where('created_at', '<', CarbonImmutable::createFromFormat('!Y-m-d', $data['date_to'], $timezone)->addDay()->utc());
+            if (! empty($data['date_from'])) $query->where('created_at', '>=', \App\Support\AppTime::day($data['date_from'], $timezone));
+            if (! empty($data['date_to'])) $query->where('created_at', '<', \App\Support\AppTime::storage(CarbonImmutable::createFromFormat('!Y-m-d', $data['date_to'], $timezone)->addDay()));
         }
         if ($q = trim($data['q'] ?? '')) $query->where('reference', 'like', '%'.$q.'%');
         if (! empty($data['status'])) $query->where('status', $data['status']);

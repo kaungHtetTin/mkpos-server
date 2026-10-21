@@ -51,7 +51,7 @@ class ChatController extends Controller
             $latest = (clone $messages)->orderByDesc('id')->first();
             return ['uuid' => $thread->uuid, 'shop_name' => $thread->shop_name, 'slug' => $thread->slug,
                 'owner_active' => $this->view($thread)['owner_active'],
-                'updated_at' => $latest?->created_at ?? $thread->updated_at,
+                'updated_at' => \App\Support\AppTime::utc($latest?->created_at ?? $thread->updated_at),
                 'product' => $latest?->product_snapshot ? json_decode($latest->product_snapshot, true) : null,
                 'preview' => $latest ? mb_substr($latest->body !== '' ? $latest->body : ($latest->product_snapshot ? 'Shared product' : 'Sent an image'), 0, 160) : '',
                 'unread_count' => (clone $messages)->where('sender', 'owner')->where('id', '>', $thread->customer_read_id)->count()];
@@ -125,14 +125,14 @@ class ChatController extends Controller
     {
         $ownerSeen = DB::table('shop_chat_presence')->where('business_id', $thread->business_id)->value('owner_last_seen_at');
         $active = fn ($value) => $value && \Carbon\Carbon::parse($value)->greaterThan(now()->subSeconds(60));
-        return ['uuid' => $thread->uuid, 'customer_name' => $thread->customer_name, 'phone' => $thread->phone,
+        return \App\Support\AppTime::shopPayload(['timezone' => DB::table('businesses')->where('id', $thread->business_id)->value('timezone') ?: config('app.timezone'), 'uuid' => $thread->uuid, 'customer_name' => $thread->customer_name, 'phone' => $thread->phone,
             'avatar_url' => \App\Services\PlatformCustomerAvatar::url(property_exists($thread, 'avatar_path') ? $thread->avatar_path : ($thread->platform_customer_id ? DB::table('platform_customers')->where('id', $thread->platform_customer_id)->value('avatar_path') : null)),
             'customer_key' => $thread->platform_customer_id ? 'account:'.$thread->platform_customer_id : null,
             'account_type' => $thread->platform_customer_id ? 'account' : 'guest', 'updated_at' => $thread->updated_at,
             'owner_read_id' => (int) $thread->owner_read_id, 'customer_read_id' => (int) $thread->customer_read_id,
             'customer_last_seen_at' => $thread->customer_last_seen_at,
             'customer_active' => (bool) $active($thread->customer_last_seen_at), 'owner_active' => (bool) $active($ownerSeen),
-            'owner_last_seen_at' => $ownerSeen];
+            'owner_last_seen_at' => $ownerSeen]);
     }
 
     private function messageView(object $message): array
@@ -141,7 +141,7 @@ class ChatController extends Controller
         $data['product'] = $message->product_snapshot ? json_decode($message->product_snapshot, true) : null;
         $data['image'] = $message->image_expires_at ? ['status' => ! $message->image_path || $message->image_deleted_at || now()->greaterThanOrEqualTo($message->image_expires_at) ? 'expired' : 'available',
             'expires_at' => $message->image_expires_at, 'mime' => $message->image_mime] : null;
-        return $data;
+        return \App\Support\AppTime::shopPayload($data);
     }
 
     public function customerImage(Request $request, string $uuid, int $id) { return $this->image($request, $uuid, $id, false); }

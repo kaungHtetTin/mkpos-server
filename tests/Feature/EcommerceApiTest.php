@@ -335,7 +335,7 @@ class EcommerceApiTest extends TestCase
         $base = '/api/shop-admin/customers/'.$key;
         $this->getJson($base)->assertOk()->assertJsonPath('customer.customer_name', 'Buyer latest')->assertJsonPath('customer.address', 'Latest checkout address')
             ->assertJsonPath('report.total_orders', 4)->assertJsonPath('report.completed_orders', 2)->assertJsonPath('report.active_orders', 1)->assertJsonPath('report.cancelled_orders', 1)
-            ->assertJsonPath('report.first_purchase_at', '2026-10-01 08:00:00')->assertJsonPath('report.last_purchase_at', '2026-10-02 08:00:00')
+            ->assertJsonPath('report.first_purchase_at', '2026-10-01 01:30:00')->assertJsonPath('report.last_purchase_at', '2026-10-02 01:30:00')
             ->assertJsonPath('report.currencies.0.currency', 'Ks')->assertJsonPath('report.currencies.0.completed_spend', 3000)->assertJsonPath('report.currencies.0.average_purchase', 3000)
             ->assertJsonPath('report.currencies.0.refund_pending', 1000)->assertJsonPath('report.currencies.1.currency', 'USD')->assertJsonPath('report.currencies.1.completed_spend', 5);
         $this->getJson($base.'/history?limit=2')->assertOk()->assertJsonPath('total', 4)->assertJsonCount(2, 'items')->assertJsonPath('items.0.id', $cancelled);
@@ -349,9 +349,9 @@ class EcommerceApiTest extends TestCase
         $this->getJson($base.'/history?date_from=2026-10-03&date_to=2026-10-02')->assertUnprocessable();
         $this->getJson($base.'/history?date_from=invalid')->assertUnprocessable();
         DB::table('businesses')->where('id', $this->owner['business']['id'])->update(['timezone' => 'Asia/Rangoon']);
-        DB::table('ecommerce_orders')->where('id', $active)->update(['created_at' => '2026-10-02 17:30:00']);
+        DB::table('ecommerce_orders')->where('id', $active)->update(['created_at' => '2026-10-03 00:00:00']);
         $this->getJson($base.'/history?date_from=2026-10-03&date_to=2026-10-03')->assertOk()->assertJsonPath('total', 1)->assertJsonPath('items.0.id', $active);
-        DB::table('ecommerce_orders')->where('id', $active)->update(['created_at' => '2026-10-03 17:30:00']);
+        DB::table('ecommerce_orders')->where('id', $active)->update(['created_at' => '2026-10-04 00:00:00']);
         $this->getJson($base.'/history?date_from=2026-10-03&date_to=2026-10-03')->assertOk()->assertJsonPath('total', 0);
         DB::table('ecommerce_orders')->where('id', $cancelled)->update(['payment_status' => 'refunded']);
         $this->getJson($base)->assertOk()->assertJsonPath('report.currencies.0.refunded', 1000)->assertJsonPath('report.currencies.0.refund_pending', 0);
@@ -918,11 +918,11 @@ class EcommerceApiTest extends TestCase
         DB::table('businesses')->where('id', $this->owner['business']['id'])->update(['timezone' => 'Asia/Yangon']);
         [$id] = $this->order();
         $range = '/api/shop-admin/orders?date_from=2026-10-05&date_to=2026-10-05';
-        foreach (['2026-10-04 17:30:00', '2026-10-05 17:29:59'] as $time) {
+        foreach (['2026-10-05 00:00:00', '2026-10-05 23:59:59'] as $time) {
             DB::table('ecommerce_orders')->where('id', $id)->update(['created_at' => $time]);
             $this->getJson($range)->assertOk()->assertJsonCount(1, 'items')->assertJsonPath('items.0.id', $id);
         }
-        foreach (['2026-10-04 17:29:59', '2026-10-05 17:30:00'] as $time) {
+        foreach (['2026-10-04 23:59:59', '2026-10-06 00:00:00'] as $time) {
             DB::table('ecommerce_orders')->where('id', $id)->update(['created_at' => $time]);
             $this->getJson($range)->assertOk()->assertJsonCount(0, 'items');
         }
@@ -1502,10 +1502,10 @@ class EcommerceApiTest extends TestCase
         $businessId = $this->owner['business']['id'];
         DB::table('businesses')->where('id', $businessId)->update(['timezone' => 'Asia/Yangon']);
         $rows = [
-            ['target_id' => 0, 'rating' => 1, 'comment' => null, 'reply' => null, 'created_at' => '2026-10-08 17:29:59'],
-            ['target_id' => $this->product['id'], 'rating' => 2, 'comment' => 'Needs improvement', 'reply' => null, 'created_at' => '2026-10-08 17:30:00'],
-            ['target_id' => $this->product['id'], 'rating' => 5, 'comment' => 'Great', 'reply' => 'Thanks', 'created_at' => '2026-10-09 17:29:59'],
-            ['target_id' => 0, 'rating' => 3, 'comment' => null, 'reply' => null, 'created_at' => '2026-10-09 17:30:00'],
+            ['target_id' => 0, 'rating' => 1, 'comment' => null, 'reply' => null, 'created_at' => '2026-10-08 23:59:59'],
+            ['target_id' => $this->product['id'], 'rating' => 2, 'comment' => 'Needs improvement', 'reply' => null, 'created_at' => '2026-10-09 00:00:00'],
+            ['target_id' => $this->product['id'], 'rating' => 5, 'comment' => 'Great', 'reply' => 'Thanks', 'created_at' => '2026-10-09 23:59:59'],
+            ['target_id' => 0, 'rating' => 3, 'comment' => null, 'reply' => null, 'created_at' => '2026-10-10 00:00:00'],
         ];
         foreach ($rows as $i => $row) {
             $customerId = DB::table('platform_customers')->insertGetId(['name' => 'Filter buyer '.$i, 'email' => Str::uuid().'@example.com',

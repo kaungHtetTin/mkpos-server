@@ -437,9 +437,9 @@ class ShopChatTest extends TestCase
         $this->postJson('/api/shop-admin/chat/presence')->assertOk();
         $ownerSeen = DB::table('shop_chat_presence')->where('business_id', $this->owner['business']['id'])->value('owner_last_seen_at');
         $this->assertNotNull($ownerSeen);
-        $this->getJson('/api/shop-admin/chat')->assertOk()->assertJsonPath('items.0.customer_last_seen_at', $customerSeen);
+        $this->getJson('/api/shop-admin/chat')->assertOk()->assertJsonPath('items.0.customer_last_seen_at', \App\Support\AppTime::utc($customerSeen));
         $this->withToken($buyer['access_token']);
-        $this->getJson('/api/ecommerce/chat/'.$uuid.'/messages')->assertOk()->assertJsonPath('thread.owner_last_seen_at', $ownerSeen);
+        $this->getJson('/api/ecommerce/chat/'.$uuid.'/messages')->assertOk()->assertJsonPath('thread.owner_last_seen_at', \App\Support\AppTime::utc($ownerSeen));
         $this->withHeader('Authorization', '');
         $this->postJson('/api/ecommerce/chat/'.$uuid.'/presence')->assertUnauthorized();
     }

@@ -266,7 +266,7 @@ class EcommerceService
                 ->get(['id', 'type', 'amount', 'reference', 'status', 'actor_id', 'reason', 'created_at'])->all();
             $result['events'] = DB::table('ecommerce_order_events')->where('business_id', $order->business_id)->where('order_id', $order->id)->orderBy('id')->get()->all();
         }
-        return $result;
+        return \App\Support\AppTime::shopPayload($result);
     }
 
     public function event(int $businessId, int $id, string $event, ?int $actor = null, ?string $reason = null): void

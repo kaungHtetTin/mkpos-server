@@ -51,6 +51,6 @@ class CustomerOrderAlertController extends Controller
             ->where('event.id', '>', $data['after_id'])->orderBy('event.id')->limit(51)
             ->get(['event.id', 'event.event', 'event.reason', 'event.created_at', 'orders.reference', 'store.display_name as store_name']);
         $items = $rows->take(50)->map(fn ($row) => array_replace((array) $row, ['id' => (int) $row->id]));
-        return ['items' => $items->values(), 'cursor' => $items->isEmpty() ? (int) $data['after_id'] : $items->last()['id'], 'has_more' => $rows->count() > 50];
+        return ['items' => \App\Support\AppTime::shopPayload($items->values()), 'cursor' => $items->isEmpty() ? (int) $data['after_id'] : $items->last()['id'], 'has_more' => $rows->count() > 50];
     }
 }

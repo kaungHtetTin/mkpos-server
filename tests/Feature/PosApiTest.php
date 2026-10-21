@@ -223,7 +223,7 @@ class PosApiTest extends TestCase
 
         $payload = [
             'offline_sale_uuid' => '7c434eb3-31c6-4ff0-9179-98c77dacb615',
-            'offline_created_at' => '2026-08-07T03:30:00.000Z',
+            'offline_created_at' => '2026-08-06T17:45:00.000Z',
             'payment_type' => 'cash', 'payment_method' => 'Cash', 'paid_amount' => 5000,
             'discount' => 0, 'customer_id' => null,
             'items' => [[
@@ -237,6 +237,9 @@ class PosApiTest extends TestCase
         $this->postJson('/api/sales/offline-sync', $payload)
             ->assertOk()->assertJsonPath('already_synced', true)->assertJsonPath('id', $first['id']);
         $this->assertDatabaseHas('products', ['id' => $product['id'], 'stock' => 1]);
+        $this->assertSame('2026-08-07 00:15:00', $first['created_at']);
+        $this->getJson('/api/sales?with_total=true&start=2026-08-07&end=2026-08-07')->assertOk()->assertJsonPath('total', 1);
+        $this->getJson('/api/sales?with_total=true&start=2026-08-06&end=2026-08-06')->assertOk()->assertJsonPath('total', 0);
 
         $insufficient = $payload;
         $insufficient['offline_sale_uuid'] = '0faf6fe7-9b5d-490e-b3f2-b90c0e95ade0';

@@ -198,6 +198,8 @@ Route::middleware(['auth:sanctum', \App\Http\Middleware\VerifyPasswordReset::cla
             Route::delete('/staff/{id}', [StaffController::class, 'destroy']);
 
             Route::post('/settings/logo', [SettingsController::class, 'uploadLogo']);
+            Route::get('/settings/timezone', [\App\Http\Controllers\Api\BusinessTimezoneController::class, 'show']);
+            Route::put('/settings/timezone', [\App\Http\Controllers\Api\BusinessTimezoneController::class, 'update']);
             Route::delete('/settings/logo', [SettingsController::class, 'deleteLogo']);
             Route::get('/data/status', [DataBackupController::class, 'status']);
             Route::post('/data/reset', [DataBackupController::class, 'reset'])->middleware('throttle:3,1');

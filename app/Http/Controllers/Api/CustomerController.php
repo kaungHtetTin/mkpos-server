@@ -265,11 +265,7 @@ class CustomerController extends ApiController
     {
         $start = $request->query('start', $request->query('date_from'));
         $end = $request->query('end', $request->query('date_to'));
-        if ($start) {
-            $query->whereDate($column, '>=', $start);
-        } if ($end) {
-            $query->whereDate($column, '<=', $end);
-        }
+        \App\Support\AppTime::filterDays($query, $start, $end, $column);
         if (($status = $request->query('status', 'all')) !== 'all') {
             $query->where('status', $status);
         }
