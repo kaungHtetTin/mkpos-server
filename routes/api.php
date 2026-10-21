@@ -92,6 +92,11 @@ Route::middleware(['auth:sanctum', \App\Http\Middleware\VerifyPasswordReset::cla
             Route::get('/products/{id}', [ProductController::class, 'show'])->whereNumber('id');
         });
         Route::middleware('module:products')->group(function () {
+            Route::get('/product-imports', [\App\Http\Controllers\Api\ProductImportController::class, 'index']);
+            Route::post('/product-imports', [\App\Http\Controllers\Api\ProductImportController::class, 'store']);
+            Route::get('/product-imports/{id}', [\App\Http\Controllers\Api\ProductImportController::class, 'show'])->whereUuid('id');
+            Route::get('/product-imports/{id}/rows', [\App\Http\Controllers\Api\ProductImportController::class, 'rows'])->whereUuid('id');
+            Route::post('/product-imports/{id}/process', [\App\Http\Controllers\Api\ProductImportController::class, 'process'])->whereUuid('id');
             Route::post('/products/internal-barcode', [ProductController::class, 'internalBarcode']);
             Route::post('/products', [ProductController::class, 'store']);
             Route::post('/products/bulk-delete', [ProductController::class, 'destroyMany']);
