@@ -22,6 +22,15 @@ class McpKnowledgeTest extends TestCase
             'driver' => 'sqlite', 'database' => ':memory:', 'prefix' => '',
         ]);
         DB::setDefaultConnection('mcp_test');
+        Schema::create('tutorials', function (Blueprint $table): void {
+            $table->id();
+            $table->string('title');
+            $table->text('description');
+            $table->string('youtube_id');
+            $table->string('thumbnail_path')->nullable();
+            $table->boolean('is_published')->default(true);
+            $table->integer('sort_order')->default(0);
+        });
         Schema::create('payment_methods', function (Blueprint $table): void {
             $table->id();
             $table->string('bank');
@@ -58,7 +67,7 @@ class McpKnowledgeTest extends TestCase
             ->assertJsonPath('result.serverInfo.name', 'MKPOS Customer Knowledge');
 
         $this->rpc('tools/list')->assertOk()
-            ->assertJsonCount(5, 'result.tools')
+            ->assertJsonCount(15, 'result.tools')
             ->assertJsonPath('result.tools.0.name', 'get_available_package_plans')
             ->assertJsonPath('result.tools.0.annotations.readOnlyHint', true)
             ->assertJsonPath('result.tools.0.inputSchema.properties.language.enum', ['en', 'my'])
@@ -69,7 +78,90 @@ class McpKnowledgeTest extends TestCase
             ->assertJsonPath('result.tools.3.name', 'get_platform_links')
             ->assertJsonPath('result.tools.3.annotations.readOnlyHint', true)
             ->assertJsonPath('result.tools.4.name', 'get_payment_screenshot_instructions')
-            ->assertJsonPath('result.tools.4.annotations.readOnlyHint', true);
+            ->assertJsonPath('result.tools.4.annotations.readOnlyHint', true)
+            ->assertJsonPath('result.tools.5.name', 'get_video_tutorials')
+            ->assertJsonPath('result.tools.5.annotations.readOnlyHint', true)
+            ->assertJsonPath('result.tools.5.inputSchema.properties.language.enum', ['en', 'my']);
+    }
+
+    public function test_video_tutorials_return_live_published_links_without_private_paths_or_external_calls(): void
+    {
+        Http::preventStrayRequests();
+        $id = DB::table('tutorials')->insertGetId([
+            'title' => 'ကုန်ပစ္စည်း ထည့်နည်း', 'description' => 'Add products and prices',
+            'youtube_id' => 'abcdefghijk', 'thumbnail_path' => 'private/secret-thumbnail.jpg',
+        ]);
+        DB::table('tutorials')->insert([
+            'title' => 'Unpublished video', 'description' => 'Not for customers',
+            'youtube_id' => 'zyxwvutsrqp', 'is_published' => false,
+        ]);
+        foreach (['en', 'my'] as $language) {
+            $result = $this->videos(compact('language'))->assertOk()
+                ->assertJsonPath('result.isError', false)
+                ->assertJsonPath('result.structuredContent.language', $language)
+                ->assertJsonCount(1, 'result.structuredContent.tutorials')
+                ->assertJsonPath('result.structuredContent.tutorials.0.id', $id)
+                ->assertJsonPath('result.structuredContent.tutorials.0.title', 'ကုန်ပစ္စည်း ထည့်နည်း')
+                ->assertJsonPath('result.structuredContent.tutorials.0.youtube_url', 'https://www.youtube.com/watch?v=abcdefghijk')
+                ->assertJsonPath('result.structuredContent.source_url', route('tutorials.index'))
+                ->assertJsonPath('result.structuredContent.has_more', false)
+                ->assertJsonPath('result.structuredContent.next_offset', null)
+                ->assertDontSee('private/secret-thumbnail')->assertDontSee('Unpublished video');
+            $this->assertStringContainsString('[ကုန်ပစ္စည်း ထည့်နည်း](https://www.youtube.com/watch?v=abcdefghijk)', $result->json('result.structuredContent.message'));
+        }
+        DB::table('tutorials')->where('id', $id)->update(['title' => 'Updated tutorial']);
+        $this->videos()->assertJsonPath('result.structuredContent.tutorials.0.title', 'Updated tutorial');
+        DB::table('tutorials')->where('id', $id)->update(['is_published' => false]);
+        $this->videos()->assertJsonPath('result.structuredContent.tutorials', []);
+        Http::assertNothingSent();
+    }
+
+    public function test_video_tutorial_search_and_pagination_keep_office_order_and_literal_search_terms(): void
+    {
+        foreach ([
+            ['title' => 'Product prices', 'description' => 'ကုန်ပစ္စည်း ဈေးနှုန်း 10% off', 'sort_order' => 1],
+            ['title' => 'Product stock', 'description' => 'ကုန်ပစ္စည်း inventory', 'sort_order' => 0],
+            ['title' => 'Checkout', 'description' => 'Confirm orders', 'sort_order' => 0],
+        ] as $row) {
+            DB::table('tutorials')->insert($row + ['youtube_id' => 'abcdefghijk']);
+        }
+        $this->videos(['query' => 'ကုန်ပစ္စည်း', 'limit' => 1])
+            ->assertJsonPath('result.structuredContent.tutorials.0.title', 'Product stock')
+            ->assertJsonPath('result.structuredContent.has_more', true)
+            ->assertJsonPath('result.structuredContent.next_offset', 1);
+        $this->videos(['query' => 'ကုန်ပစ္စည်း', 'limit' => 1, 'offset' => 1])
+            ->assertJsonPath('result.structuredContent.tutorials.0.title', 'Product prices')
+            ->assertJsonPath('result.structuredContent.has_more', false);
+        $this->videos(['query' => '  product  prices  '])->assertJsonCount(1, 'result.structuredContent.tutorials')
+            ->assertJsonPath('result.structuredContent.tutorials.0.title', 'Product prices');
+        $this->videos(['query' => '%'])->assertJsonCount(1, 'result.structuredContent.tutorials');
+        foreach (['_', "' OR 1=1 --", 'No matching topic'] as $query) {
+            $this->videos(compact('query'))->assertJsonPath('result.structuredContent.tutorials', [])
+                ->assertJsonPath('result.isError', false);
+        }
+        $this->videos(['limit' => 2])->assertJsonPath('result.structuredContent.tutorials.0.title', 'Checkout')
+            ->assertJsonPath('result.structuredContent.tutorials.1.title', 'Product stock');
+        $this->videos(['query' => ''])->assertJsonCount(3, 'result.structuredContent.tutorials');
+        $this->videos(['offset' => 100])->assertJsonPath('result.structuredContent.has_more', false)
+            ->assertJsonPath('result.structuredContent.next_offset', null);
+    }
+
+    public function test_video_tutorial_errors_are_distinct_from_no_matches_and_inputs_are_bounded(): void
+    {
+        foreach (['en', 'my'] as $language) {
+            $this->videos(compact('language'))->assertJsonPath('result.isError', false)
+                ->assertJsonPath('result.structuredContent.tutorials', []);
+        }
+        foreach ([['language' => 'fr'], ['query' => str_repeat('x', 201)], ['limit' => 0],
+            ['limit' => 21], ['offset' => -1], ['offset' => 1.5]] as $arguments) {
+            $this->videos($arguments)->assertJsonPath('result.isError', true);
+        }
+        Schema::drop('tutorials');
+        foreach (['en', 'my'] as $language) {
+            $response = $this->videos(compact('language'))->assertOk()->assertJsonPath('result.isError', true)
+                ->assertDontSee('SQLSTATE')->assertDontSee('select ');
+            $this->assertStringContainsString(route('tutorials.index'), $response->json('result.content.0.text'));
+        }
     }
 
     public function test_payment_screenshot_workflow_is_instruction_only_localized_and_has_a_fixed_destination(): void
@@ -201,7 +293,7 @@ class McpKnowledgeTest extends TestCase
         $call = fn ($language = 'en') => $this->rpc('tools/call', ['name' => 'get_platform_links', 'arguments' => ['language' => $language]]);
         $call()->assertOk()->assertJsonPath('result.isError', false)
             ->assertJsonPath('result.structuredContent.release_lookup_status', 'checked')
-            ->assertJsonCount(5, 'result.structuredContent.platforms')
+            ->assertJsonCount(6, 'result.structuredContent.platforms')
             ->assertJsonPath('result.structuredContent.platforms.0.login_url', 'https://app.example.test/login')
             ->assertJsonPath('result.structuredContent.platforms.1.url', 'https://mobile.example.test/')
             ->assertJsonPath('result.structuredContent.platforms.2.status', 'available')
@@ -366,6 +458,13 @@ class McpKnowledgeTest extends TestCase
         return $this->rpc('tools/call', [
             'name' => 'get_available_package_plans',
             'arguments' => $arguments ?: (object) [],
+        ]);
+    }
+
+    private function videos(array $arguments = []): TestResponse
+    {
+        return $this->rpc('tools/call', [
+            'name' => 'get_video_tutorials', 'arguments' => $arguments ?: (object) [],
         ]);
     }
 

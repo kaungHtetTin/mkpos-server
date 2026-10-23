@@ -66,6 +66,8 @@ class GetPlatformLinks extends Tool
             ];
         }
 
+        $platforms[] = ['platform' => 'shop', 'name' => $language === 'my' ? 'Shop ဝယ်သူ app' : 'Shop customer app',
+            'type' => 'browser', 'url' => rtrim(config('clients.shop_url') ?: 'https://shop.mkposmyanmar.com', '/').'/'];
         $directLinks = [];
         $lines = [$language === 'my' ? 'MKPOS အက်ပ်နှင့် ဝဘ်လင့်ခ်များ' : 'MKPOS apps and web links'];
         foreach ($platforms as $platform) {

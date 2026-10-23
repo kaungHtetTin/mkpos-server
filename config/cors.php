@@ -28,7 +28,7 @@ return [
 
     'allowed_headers' => ['*'],
 
-    'exposed_headers' => ['Content-Disposition'],
+    'exposed_headers' => ['Content-Disposition', 'Retry-After'],
 
     'max_age' => 0,
 

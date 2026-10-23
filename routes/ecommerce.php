@@ -36,6 +36,7 @@ Route::prefix('ecommerce')->middleware(['throttle:shop-public', \App\Http\Middle
     Route::post('/customer/login', [CustomerAccountController::class, 'login'])->middleware('throttle:10,1');
     Route::get('/customer/avatars/{filename}', [CustomerAccountController::class, 'avatar'])->where('filename', '[a-f0-9-]+\.jpg');
     Route::prefix('customer')->middleware(AuthenticatePlatformCustomer::class)->group(function () {
+        Route::post('/mcp/access', [\App\Http\Controllers\McpSupportAccessController::class, 'customer'])->middleware('throttle:5,1');
         Route::get('/store-reports/{slug}', [\App\Http\Controllers\Ecommerce\ShopReportController::class, 'mine']);
         Route::post('/store-reports/{slug}', [\App\Http\Controllers\Ecommerce\ShopReportController::class, 'submit'])->middleware('throttle:5,1');
         Route::get('/me', [CustomerAccountController::class, 'me']);

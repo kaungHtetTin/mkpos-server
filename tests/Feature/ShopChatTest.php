@@ -199,6 +199,23 @@ class ShopChatTest extends TestCase
         $this->travelBack();
     }
 
+    public function test_notification_backlog_exposes_a_bounded_continuation_cursor(): void
+    {
+        $uuid = $this->start($this->account());
+        $threadId = DB::table('shop_chat_threads')->where('uuid', $uuid)->value('id');
+        $messages = [];
+        for ($i = 0; $i < 51; $i++) {
+            $messages[] = ['thread_id' => $threadId, 'sender' => 'customer', 'client_id' => (string) Str::uuid(),
+                'body' => 'Backlog '.$i, 'created_at' => now()];
+        }
+        DB::table('shop_chat_messages')->insert($messages);
+        $this->withToken($this->owner['access_token']);
+        $first = $this->getJson('/api/shop-admin/chat/notifications?after_id=0')->assertOk()
+            ->assertJsonCount(50, 'items')->assertJsonPath('has_more', true)->json();
+        $this->getJson('/api/shop-admin/chat/notifications?after_id='.$first['cursor'])->assertOk()
+            ->assertJsonCount(1, 'items')->assertJsonPath('has_more', false);
+    }
+
     public function test_notification_feed_is_scoped_and_excludes_outgoing_and_read_messages(): void
     {
         $account = $this->account(); $other = $this->account();

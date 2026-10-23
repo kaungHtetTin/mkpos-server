@@ -10,6 +10,29 @@ class PosApiTest extends TestCase
 {
     use DatabaseTransactions;
 
+    public function test_checkout_accepts_more_than_three_products_in_one_request(): void
+    {
+        $this->registerOwner('Four Item Shop', 'four-item-checkout@example.com');
+        $items = [];
+        for ($i = 1; $i <= 4; $i++) {
+            $product = $this->postJson('/api/products', [
+                'name' => 'Checkout Product '.$i, 'sku' => 'CHECKOUT-'.$i,
+                'price' => 1000, 'stock' => 5,
+                'prices' => [['name' => 'Retail', 'price' => 1000]],
+            ])->assertOk()->json();
+            $items[] = ['product_id' => $product['id'], 'price_type' => 'Retail',
+                'quantity' => 1, 'foc_quantity' => 0, 'unit_price' => 1000];
+        }
+
+        $sale = $this->postJson('/api/sales', [
+            'items' => $items, 'payment_method' => 'Cash', 'paid_amount' => 4000,
+        ])->assertOk()->assertJsonCount(4, 'items')->assertJsonPath('total', 4000)->json();
+        $this->getJson('/api/sales/'.$sale['id'].'/receipt')->assertOk();
+        foreach ($items as $item) {
+            $this->assertDatabaseHas('products', ['id' => $item['product_id'], 'stock' => 4]);
+        }
+    }
+
     public function test_products_can_be_loaded_in_bulk_by_id_for_purchase_editing(): void
     {
         $this->registerOwner('Bulk Product Shop', 'bulk-products@example.com');

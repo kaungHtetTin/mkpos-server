@@ -17,6 +17,7 @@ class Kernel extends ConsoleKernel
         // Shop orders have no automatic processing deadline.
         $schedule->command('shop-chat:expire-images')->everyMinute()->withoutOverlapping();
         $schedule->command('shop:notify-restocks')->everyMinute()->withoutOverlapping();
+        $schedule->command('mcp:support-prune')->hourly()->withoutOverlapping();
         $schedule->call(fn () => \Illuminate\Support\Facades\DB::table('password_reset_otps')->where('expires_at', '<', now()->subDay())->delete())->daily()->name('password-reset:prune')->withoutOverlapping();
     }
 

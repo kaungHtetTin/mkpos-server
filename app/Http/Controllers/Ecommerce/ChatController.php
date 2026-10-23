@@ -91,7 +91,7 @@ class ChatController extends Controller
                 'slug' => $row->slug, 'preview' => mb_substr($row->body !== '' ? $row->body : ($row->product_snapshot ? 'Shared product: '.(json_decode($row->product_snapshot, true)['name'] ?? 'Product') : 'Sent an image'), 0, 160),
             ])->values();
         }
-        return ['enabled' => true, 'items' => $items, 'cursor' => $cursor, 'unread_count' => $unread];
+        return ['enabled' => true, 'items' => $items, 'cursor' => $cursor, 'unread_count' => $unread, 'has_more' => $cursor < $latest];
     }
 
     public function unread(): array

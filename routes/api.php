@@ -51,6 +51,7 @@ Route::get('/contact-settings', [ContactSettingsController::class, 'show']);
 
 Route::middleware(['auth:sanctum', \App\Http\Middleware\VerifyPasswordReset::class, 'business'])->group(function () {
     Route::get('/auth/me', [AuthController::class, 'me']);
+    Route::post('/mcp/access', [\App\Http\Controllers\McpSupportAccessController::class, 'owner'])->middleware('throttle:5,1');
     Route::put('/auth/profile', [AuthController::class, 'updateProfile'])
         ->middleware(['throttle:10,1', 'subscription']);
     Route::post('/auth/logout', [AuthController::class, 'logout']);
@@ -223,6 +224,7 @@ Route::middleware(['auth:sanctum', \App\Http\Middleware\VerifyPasswordReset::cla
 
 Route::post('/office/auth/login', [OfficeAuthController::class, 'login'])->middleware('throttle:10,1');
 Route::middleware('office.auth')->prefix('office')->group(function () {
+    Route::post('/mcp/access', [\App\Http\Controllers\McpSupportAccessController::class, 'admin'])->middleware('throttle:5,1');
     Route::get('/activity-alerts', [\App\Http\Controllers\ActivityAlertController::class, 'index']);
     Route::get('/activity-alerts/config', [\App\Http\Controllers\ActivityAlertController::class, 'config']);
     Route::post('/activity-alerts/auth', [\App\Http\Controllers\ActivityAlertController::class, 'auth']);
