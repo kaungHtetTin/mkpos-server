@@ -2,9 +2,11 @@
 
 namespace Tests\Feature;
 
+use App\Http\Controllers\LandingController;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Testing\TestResponse;
 use Tests\TestCase;
 
@@ -35,7 +37,7 @@ class McpKnowledgeTest extends TestCase
         });
     }
 
-    public function test_clients_can_initialize_and_discover_only_the_read_only_plan_tool(): void
+    public function test_clients_can_initialize_and_discover_the_read_only_knowledge_tools(): void
     {
         $this->rpc('initialize', [
             'protocolVersion' => '2025-06-18',
@@ -46,10 +48,125 @@ class McpKnowledgeTest extends TestCase
             ->assertJsonPath('result.serverInfo.name', 'MKPOS Customer Knowledge');
 
         $this->rpc('tools/list')->assertOk()
-            ->assertJsonCount(1, 'result.tools')
+            ->assertJsonCount(4, 'result.tools')
             ->assertJsonPath('result.tools.0.name', 'get_available_package_plans')
             ->assertJsonPath('result.tools.0.annotations.readOnlyHint', true)
-            ->assertJsonPath('result.tools.0.inputSchema.properties.language.enum', ['en', 'my']);
+            ->assertJsonPath('result.tools.0.inputSchema.properties.language.enum', ['en', 'my'])
+            ->assertJsonPath('result.tools.1.name', 'get_mkpos_overview')
+            ->assertJsonPath('result.tools.1.annotations.readOnlyHint', true)
+            ->assertJsonPath('result.tools.2.name', 'get_account_guide')
+            ->assertJsonPath('result.tools.2.annotations.readOnlyHint', true)
+            ->assertJsonPath('result.tools.3.name', 'get_platform_links')
+            ->assertJsonPath('result.tools.3.annotations.readOnlyHint', true);
+    }
+
+    public function test_account_guides_cover_all_operations_and_languages_without_database_access(): void
+    {
+        Schema::drop('subscription_plans');
+        config()->set('clients.web_url', 'https://app.example.test');
+        config()->set('clients.mobile_url', 'https://mobile.example.test');
+        foreach (['login' => 'login', 'register' => 'signup', 'password_reset' => 'forgot-password'] as $operation => $path) {
+            $titles = [];
+            foreach (['en', 'my'] as $language) {
+                $result = $this->rpc('tools/call', ['name' => 'get_account_guide', 'arguments' => compact('operation', 'language')])
+                    ->assertOk()->assertJsonPath('result.isError', false)
+                    ->assertJsonPath('result.structuredContent.language', $language)
+                    ->assertJsonPath('result.structuredContent.operation', $operation)
+                    ->assertJsonPath('result.structuredContent.links.web', 'https://app.example.test/'.$path)
+                    ->assertJsonPath('result.structuredContent.links.mobile', 'https://mobile.example.test/'.$path)
+                    ->assertJsonCount(5, 'result.structuredContent.steps');
+                $content = $result->json('result.structuredContent');
+                $titles[] = $content['title'];
+                $this->assertSame([1, 2, 3, 4, 5], array_column($content['steps'], 'step'));
+                $this->assertNotEmpty($content['notes']);
+            }
+            $this->assertNotSame($titles[0], $titles[1]);
+        }
+        $this->rpc('tools/call', ['name' => 'get_account_guide', 'arguments' => ['operation' => 'password_reset']])
+            ->assertSee('6-digit')->assertSee('10 minutes')->assertSee('60 seconds')->assertSee('active owner');
+        foreach ([[], ['operation' => 'delete'], ['operation' => 'login', 'language' => 'fr']] as $arguments) {
+            $this->rpc('tools/call', ['name' => 'get_account_guide', 'arguments' => $arguments ?: (object) []])
+                ->assertJsonPath('result.isError', true);
+        }
+    }
+
+    public function test_platform_links_check_files_and_refresh_download_availability_without_exposing_storage(): void
+    {
+        Schema::create('app_releases', function (Blueprint $table): void {
+            $table->id();
+            $table->string('platform');
+            $table->string('version');
+            $table->string('file_path');
+        });
+        Storage::fake('local');
+        Storage::disk('local')->put('private-releases/windows.exe', 'sample');
+        DB::table('app_releases')->insert([
+            ['platform' => 'windows', 'version' => '1.0', 'file_path' => 'private-releases/windows.exe'],
+            ['platform' => 'android', 'version' => '2.0', 'file_path' => 'private-releases/missing.apk'],
+        ]);
+        config()->set('clients.web_url', 'https://app.example.test');
+        config()->set('clients.mobile_url', 'https://mobile.example.test');
+        $call = fn ($language = 'en') => $this->rpc('tools/call', ['name' => 'get_platform_links', 'arguments' => ['language' => $language]]);
+        $call()->assertOk()->assertJsonPath('result.isError', false)
+            ->assertJsonPath('result.structuredContent.release_lookup_status', 'checked')
+            ->assertJsonCount(5, 'result.structuredContent.platforms')
+            ->assertJsonPath('result.structuredContent.platforms.0.login_url', 'https://app.example.test/login')
+            ->assertJsonPath('result.structuredContent.platforms.1.url', 'https://mobile.example.test/')
+            ->assertJsonPath('result.structuredContent.platforms.2.status', 'available')
+            ->assertJsonPath('result.structuredContent.platforms.2.download_url', url('/downloads/windows'))
+            ->assertJsonPath('result.structuredContent.platforms.3.status', 'not_published')
+            ->assertJsonPath('result.structuredContent.platforms.3.download_url', null)
+            ->assertJsonPath('result.structuredContent.platforms.4.status', 'file_missing')
+            ->assertJsonPath('result.structuredContent.platforms.4.download_url', null)
+            ->assertDontSee('private-releases');
+        Storage::disk('local')->put('private-releases/missing.apk', 'sample');
+        $call('my')->assertJsonPath('result.structuredContent.language', 'my')
+            ->assertJsonPath('result.structuredContent.platforms.0.name', 'ကွန်ပျူတာ ဝဘ်')
+            ->assertJsonPath('result.structuredContent.platforms.4.status', 'available');
+        Storage::disk('local')->delete('private-releases/windows.exe');
+        $call()->assertJsonPath('result.structuredContent.platforms.2.download_url', null);
+        Schema::drop('app_releases');
+        $call()->assertJsonPath('result.structuredContent.release_lookup_status', 'unavailable')
+            ->assertJsonPath('result.structuredContent.platforms.2.status', 'unknown')
+            ->assertJsonPath('result.structuredContent.platforms.2.download_url', null)
+            ->assertDontSee('SQLSTATE');
+        $call('fr')->assertJsonPath('result.isError', true);
+    }
+
+    public function test_overview_is_localized_and_works_without_a_database(): void
+    {
+        Schema::drop('subscription_plans');
+        $english = $this->rpc('tools/call', ['name' => 'get_mkpos_overview', 'arguments' => (object) []])
+            ->assertOk()->assertJsonPath('result.isError', false)
+            ->assertJsonPath('result.structuredContent.language', 'en')
+            ->assertJsonPath('result.structuredContent.title', 'What is MKPOS?')
+            ->assertJsonPath('result.structuredContent.pricing_tool', 'get_available_package_plans');
+        $burmese = $this->rpc('tools/call', ['name' => 'get_mkpos_overview', 'arguments' => ['language' => 'my']])
+            ->assertOk()->assertJsonPath('result.isError', false)
+            ->assertJsonPath('result.structuredContent.language', 'my')
+            ->assertJsonPath('result.structuredContent.title', 'MKPOS ဆိုတာ ဘာလဲ?');
+
+        $en = $english->json('result.structuredContent');
+        $my = $burmese->json('result.structuredContent');
+        $this->assertSame(array_column($en['capabilities'], 'id'), array_column($my['capabilities'], 'id'));
+        $this->assertStringContainsString('point-of-sale', $en['summary']);
+        $this->assertStringContainsString('ဆိုင်စီမံခန့်ခွဲမှုစနစ်', $my['summary']);
+        foreach ($en['capabilities'] as $index => $capability) {
+            $this->assertArrayHasKey($capability['id'], LandingController::TOPICS);
+            $this->assertSame(url('/documentation/'.$capability['id']), $capability['guide_url']);
+            $this->assertNotSame($capability['description'], $my['capabilities'][$index]['description']);
+        }
+        $this->assertStringContainsString('not customer credit', implode(' ', $en['limitations']));
+        $this->assertStringContainsString('paid plan', implode(' ', $en['limitations']));
+        $this->assertStringContainsString('အခပေးပက်ကေ့ချ်', implode(' ', $my['limitations']));
+        $this->assertSame($en['summary'], json_decode($english->json('result.content.0.text'), true)['summary']);
+        $this->assertSame('en', app()->getLocale());
+    }
+
+    public function test_overview_rejects_unsupported_languages(): void
+    {
+        $this->rpc('tools/call', ['name' => 'get_mkpos_overview', 'arguments' => ['language' => 'fr']])
+            ->assertJsonPath('result.isError', true);
     }
 
     public function test_only_public_active_non_system_plans_are_returned_with_exact_prices(): void
