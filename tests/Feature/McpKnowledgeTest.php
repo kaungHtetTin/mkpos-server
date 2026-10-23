@@ -5,6 +5,7 @@ namespace Tests\Feature;
 use App\Http\Controllers\LandingController;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Testing\TestResponse;
@@ -48,7 +49,7 @@ class McpKnowledgeTest extends TestCase
             ->assertJsonPath('result.serverInfo.name', 'MKPOS Customer Knowledge');
 
         $this->rpc('tools/list')->assertOk()
-            ->assertJsonCount(4, 'result.tools')
+            ->assertJsonCount(5, 'result.tools')
             ->assertJsonPath('result.tools.0.name', 'get_available_package_plans')
             ->assertJsonPath('result.tools.0.annotations.readOnlyHint', true)
             ->assertJsonPath('result.tools.0.inputSchema.properties.language.enum', ['en', 'my'])
@@ -57,7 +58,56 @@ class McpKnowledgeTest extends TestCase
             ->assertJsonPath('result.tools.2.name', 'get_account_guide')
             ->assertJsonPath('result.tools.2.annotations.readOnlyHint', true)
             ->assertJsonPath('result.tools.3.name', 'get_platform_links')
-            ->assertJsonPath('result.tools.3.annotations.readOnlyHint', true);
+            ->assertJsonPath('result.tools.3.annotations.readOnlyHint', true)
+            ->assertJsonPath('result.tools.4.name', 'get_payment_screenshot_instructions')
+            ->assertJsonPath('result.tools.4.annotations.readOnlyHint', true);
+    }
+
+    public function test_payment_screenshot_workflow_is_instruction_only_localized_and_has_a_fixed_destination(): void
+    {
+        Schema::drop('subscription_plans');
+        Http::preventStrayRequests();
+        $titles = [];
+        foreach (['en', 'my'] as $language) {
+            $response = $this->rpc('tools/call', [
+                'name' => 'get_payment_screenshot_instructions',
+                'arguments' => ['language' => $language, 'chat_id' => 'untrusted-other-group'],
+            ])->assertOk()->assertJsonPath('result.isError', false)
+                ->assertJsonPath('result.structuredContent.mode', 'instructions_only')
+                ->assertJsonPath('result.structuredContent.language', $language)
+                ->assertJsonPath('result.structuredContent.destination.chat_id', '-1003997260748')
+                ->assertJsonPath('result.structuredContent.destination.name', 'MKPOS payments')
+                ->assertJsonCount(5, 'result.structuredContent.steps')
+                ->assertJsonMissingPath('result.structuredContent.sent')
+                ->assertJsonMissingPath('result.structuredContent.message_id')
+                ->assertDontSee('untrusted-other-group');
+            $content = $response->json('result.structuredContent');
+            $titles[] = $content['title'];
+            $this->assertSame([1, 2, 3, 4, 5], array_column($content['steps'], 'step'));
+            foreach (['completed_payment_screenshot', 'not_payment_or_not_completed', 'unclear_or_unreadable', 'telegram_tool_missing_or_send_failed'] as $decision) {
+                $this->assertNotEmpty($content['decisions'][$decision]);
+            }
+            $this->assertStringContainsString('{amount}', $content['caption_template']);
+            $this->assertStringContainsString('{source}', $content['caption_template']);
+            $this->assertSame(['kpay', 'wavepay', 'ayapay'], array_keys($content['provider_profiles']));
+            foreach ($content['provider_profiles'] as $provider) {
+                $this->assertNotEmpty($provider['name_cues']);
+                $this->assertNotEmpty($provider['guidance']);
+            }
+            preg_match_all('/\{([a-z_]+)\}/', $content['caption_template'], $placeholders);
+            $this->assertEqualsCanonicalizing(array_keys($content['payment_fields']), $placeholders[1]);
+            $this->assertStringContainsString('follow-up text', implode(' ', $content['execution_rules']));
+            $this->assertStringContainsString('recipient matching as not checked', implode(' ', $content['execution_rules']));
+            $this->assertNotEmpty($content['recognition_note']);
+            $this->assertStringContainsString('no image analysis or Telegram send', implode(' ', $content['execution_rules']));
+            $this->assertNotEmpty($content['customer_replies']['after_confirmed_send']);
+        }
+        $this->assertNotSame($titles[0], $titles[1]);
+        Http::assertNothingSent();
+        $this->rpc('tools/call', ['name' => 'get_payment_screenshot_instructions', 'arguments' => (object) []])
+            ->assertJsonPath('result.structuredContent.language', 'en');
+        $this->rpc('tools/call', ['name' => 'get_payment_screenshot_instructions', 'arguments' => ['language' => 'fr']])
+            ->assertJsonPath('result.isError', true);
     }
 
     public function test_account_guides_cover_all_operations_and_languages_without_database_access(): void

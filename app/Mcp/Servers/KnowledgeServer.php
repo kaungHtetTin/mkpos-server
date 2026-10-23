@@ -5,6 +5,7 @@ namespace App\Mcp\Servers;
 use App\Mcp\Tools\GetAccountGuide;
 use App\Mcp\Tools\GetAvailablePackagePlans;
 use App\Mcp\Tools\GetMkposOverview;
+use App\Mcp\Tools\GetPaymentScreenshotInstructions;
 use App\Mcp\Tools\GetPlatformLinks;
 use Laravel\Mcp\Server;
 
@@ -12,9 +13,16 @@ class KnowledgeServer extends Server
 {
     protected string $name = 'MKPOS Customer Knowledge';
 
-    protected string $version = '1.2.1';
+    protected string $version = '1.3.1';
 
     protected string $instructions = <<<'TEXT'
+        For customer payment screenshots call get_payment_screenshot_instructions.
+        Follow its workflow using OpenClaw's existing vision model and Telegram tool.
+        Use its KPay, WavePay and AYA Pay guidance; send visible payment details with
+        the original image to the fixed admin group, not an image-only notification.
+        The MCP call only returns instructions; never claim it forwards a photo.
+        Only tell the customer it was sent after Telegram confirms delivery. Do not
+        equate a payment screenshot with confirmed funds or subscription approval.
         Help customers understand MKPOS. Use get_account_guide with operation login,
         register or password_reset for account procedures. Never collect passwords or
         reset codes. Use get_platform_links for current web URLs and installer links;
@@ -42,5 +50,6 @@ class KnowledgeServer extends Server
         GetMkposOverview::class,
         GetAccountGuide::class,
         GetPlatformLinks::class,
+        GetPaymentScreenshotInstructions::class,
     ];
 }
