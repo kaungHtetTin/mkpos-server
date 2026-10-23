@@ -21,6 +21,7 @@ return [
     ],
     'recognition_note' => 'These are visual inspection instructions, not certified receipt templates. App versions, languages, transfer types and MMQR flows can change the layout. Do not require exact colors, fixed field positions, logo placement, reference length or a specific success phrase. Use multiple visible cues and the actual transaction details; a matching design never proves authenticity.',
     'payment_fields' => [
+        'matched_method' => 'ID and provider of the currently active MKPOS payment method matched to this receipt',
         'provider' => 'Wallet/payment provider actually visible',
         'status' => 'Payment result exactly as shown',
         'amount' => 'Transfer/payment amount, preserving decimal digits and separating fees',
@@ -39,18 +40,21 @@ return [
     'steps' => [
         'Use the image-capable model already connected to OpenClaw to inspect the actual customer attachment. Do not classify from the filename, customer caption or an earlier model summary alone.',
         'Check the payment app or bank context, visible successful/completed transfer status, amount and recipient, plus a transaction reference or transaction date/time. Read only what is visible. A QR code, balance screen, payment request, pending/failed transfer or unrelated image does not qualify as a successful payment screenshot.',
-        'If the image clearly shows a completed payment receipt, use the existing OpenClaw Telegram media/message tool to forward or upload the original screenshot to the fixed MKPOS payments group. Include the admin review caption with the visible details and original sender/chat/message identifiers where available.',
+        'Before sending, match the visible provider and full recipient account to the SAME currently active method returned by this tool. A visible account name must also agree. Only a clear completed-payment receipt that passes matching_policy may be forwarded with its details to MKPOS payments using the existing Telegram tool. Unavailable/empty methods, unsupported provider, masked/missing account or mismatched recipient means DO NOT forward. Include the matched method ID, admin caption and source identifiers.',
         'Send the image and caption together where supported. Keep normal notifications enabled when the Telegram tool supports this. Address the caption to admins; do not invent administrator usernames or assume @admins mentions all admins.',
         'Wait for the Telegram tool to confirm success and record its returned message ID. Only then tell the customer that the screenshot was sent for admin review. Admins must confirm receipt of funds separately; do not approve a subscription or state that payment is verified.',
     ],
     'decisions' => [
-        'completed_payment_screenshot' => 'Forward the original image with the admin caption to the fixed group using the existing Telegram tool.',
+        'completed_payment_screenshot' => 'Forward ONLY after matching_policy passes against a currently active method; include the original image, extracted details and matched method ID.',
+        'method_not_matched_or_lookup_unavailable' => 'Do not forward. Explain that the recipient/provider could not be matched to a currently supported MKPOS payment method, or that method availability could not be checked. Request clearer evidence when needed.',
         'not_payment_or_not_completed' => 'Do not forward. Ask the customer for the completed payment receipt screenshot.',
         'unclear_or_unreadable' => 'Do not guess or forward automatically. Ask for a clear full screenshot showing the payment result and transaction details.',
         'telegram_tool_missing_or_send_failed' => 'Do not claim delivery. Explain that forwarding could not be completed and retain the pending work for support.',
     ],
-    'caption_template' => "MKPOS payment screenshot — admin review needed\nCustomer: {customer}\nWallet: {provider}\nResult: {status}\nAmount: {amount} {currency}\nPayer: {sender}\nRecipient: {recipient}\nReference: {reference}\nDate/time: {transaction_time}\nType: {transaction_type}\nFee: {fee}\nNote: {note}\nSource chat/message: {source}\nReview flags: {review_flags}\nAdmins: please reconcile the recipient, amount and reference with your payment records. Receipt of funds and screenshot authenticity are NOT verified. Review before activating any package.",
+    'caption_template' => "MKPOS payment screenshot — admin review needed\nMatched active method: {matched_method}\nCustomer: {customer}\nWallet: {provider}\nResult: {status}\nAmount: {amount} {currency}\nPayer: {sender}\nRecipient: {recipient}\nReference: {reference}\nDate/time: {transaction_time}\nType: {transaction_type}\nFee: {fee}\nNote: {note}\nSource chat/message: {source}\nReview flags: {review_flags}\nAdmins: please reconcile the recipient, amount and reference with your payment records. Receipt of funds and screenshot authenticity are NOT verified. Review before activating any package.",
     'customer_replies' => [
+        'method_not_matched' => 'The payment provider or recipient could not be matched to a currently supported MKPOS payment method. The screenshot has not been forwarded. Please check the recipient and send a clear full receipt.',
+        'methods_unavailable' => 'Current MKPOS payment methods could not be confirmed. The screenshot has not been forwarded yet.',
         'after_confirmed_send' => 'Your payment screenshot has been sent to MKPOS payments for admin review. Payment confirmation is pending.',
         'request_completed_receipt' => 'Please send the completed payment receipt screenshot showing the amount, recipient and transaction details.',
         'request_clearer_image' => 'Please send a clearer, full payment screenshot so the payment result and transaction details can be read.',

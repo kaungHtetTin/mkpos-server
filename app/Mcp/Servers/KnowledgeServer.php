@@ -13,10 +13,13 @@ class KnowledgeServer extends Server
 {
     protected string $name = 'MKPOS Customer Knowledge';
 
-    protected string $version = '1.3.1';
+    protected string $version = '1.3.2';
 
     protected string $instructions = <<<'TEXT'
         For customer payment screenshots call get_payment_screenshot_instructions.
+        Fetch it fresh per screenshot. Forward only after matching the screenshot's
+        provider and full recipient account to the SAME returned active payment
+        method; unavailable, inactive, mismatched or unreadable evidence blocks sends.
         Follow its workflow using OpenClaw's existing vision model and Telegram tool.
         Use its KPay, WavePay and AYA Pay guidance; send visible payment details with
         the original image to the fixed admin group, not an image-only notification.

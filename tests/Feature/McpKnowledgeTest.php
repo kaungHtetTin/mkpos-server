@@ -22,6 +22,15 @@ class McpKnowledgeTest extends TestCase
             'driver' => 'sqlite', 'database' => ':memory:', 'prefix' => '',
         ]);
         DB::setDefaultConnection('mcp_test');
+        Schema::create('payment_methods', function (Blueprint $table): void {
+            $table->id();
+            $table->string('bank');
+            $table->string('account_name');
+            $table->string('account_no');
+            $table->boolean('is_active')->default(true);
+            $table->integer('sort_order')->default(0);
+            $table->string('private_note')->default('payment-private-secret');
+        });
         Schema::create('subscription_plans', function (Blueprint $table): void {
             $table->id();
             $table->string('name');
@@ -97,7 +106,7 @@ class McpKnowledgeTest extends TestCase
             preg_match_all('/\{([a-z_]+)\}/', $content['caption_template'], $placeholders);
             $this->assertEqualsCanonicalizing(array_keys($content['payment_fields']), $placeholders[1]);
             $this->assertStringContainsString('follow-up text', implode(' ', $content['execution_rules']));
-            $this->assertStringContainsString('recipient matching as not checked', implode(' ', $content['execution_rules']));
+            $this->assertStringContainsString('Apply matching_policy before every send', implode(' ', $content['execution_rules']));
             $this->assertNotEmpty($content['recognition_note']);
             $this->assertStringContainsString('no image analysis or Telegram send', implode(' ', $content['execution_rules']));
             $this->assertNotEmpty($content['customer_replies']['after_confirmed_send']);
@@ -108,6 +117,39 @@ class McpKnowledgeTest extends TestCase
             ->assertJsonPath('result.structuredContent.language', 'en');
         $this->rpc('tools/call', ['name' => 'get_payment_screenshot_instructions', 'arguments' => ['language' => 'fr']])
             ->assertJsonPath('result.isError', true);
+    }
+
+    public function test_payment_instructions_use_only_current_active_methods_and_block_missing_data(): void
+    {
+        Http::preventStrayRequests();
+        $call = fn () => $this->rpc('tools/call', ['name' => 'get_payment_screenshot_instructions', 'arguments' => (object) []]);
+        $call()->assertJsonPath('result.structuredContent.payment_method_lookup_status', 'checked')
+            ->assertJsonPath('result.structuredContent.active_payment_methods', [])
+            ->assertJsonPath('result.structuredContent.forwarding_gate', 'blocked_no_active_methods');
+        $id = DB::table('payment_methods')->insertGetId([
+            'bank' => 'KPay', 'account_name' => 'MKPOS Receiver', 'account_no' => '09123456789',
+        ]);
+        DB::table('payment_methods')->insert([
+            'bank' => 'Disabled WavePay', 'account_name' => 'Hidden Receiver', 'account_no' => '09999999999', 'is_active' => false,
+        ]);
+        $response = $call()->assertOk()->assertJsonPath('result.isError', false)
+            ->assertJsonPath('result.structuredContent.forwarding_gate', 'requires_matching_active_method')
+            ->assertJsonCount(1, 'result.structuredContent.active_payment_methods')
+            ->assertJsonPath('result.structuredContent.active_payment_methods.0.id', $id)
+            ->assertJsonPath('result.structuredContent.active_payment_methods.0.provider', 'KPay')
+            ->assertJsonPath('result.structuredContent.active_payment_methods.0.account_no', '09123456789')
+            ->assertDontSee('Disabled WavePay')->assertDontSee('Hidden Receiver')->assertDontSee('payment-private-secret');
+        $this->assertStringContainsString('SAME returned active method', $response->json('result.structuredContent.matching_policy.required'));
+        $this->assertStringContainsString('masked/missing', $response->json('result.structuredContent.matching_policy.blocked'));
+        DB::table('payment_methods')->where('id', $id)->update(['account_no' => '09222222222']);
+        $call()->assertJsonPath('result.structuredContent.active_payment_methods.0.account_no', '09222222222');
+        DB::table('payment_methods')->where('id', $id)->update(['is_active' => false]);
+        $call()->assertJsonPath('result.structuredContent.forwarding_gate', 'blocked_no_active_methods');
+        Schema::drop('payment_methods');
+        $call()->assertOk()->assertJsonPath('result.structuredContent.payment_method_lookup_status', 'unavailable')
+            ->assertJsonPath('result.structuredContent.forwarding_gate', 'blocked_lookup_unavailable')
+            ->assertJsonPath('result.structuredContent.active_payment_methods', [])->assertDontSee('SQLSTATE');
+        Http::assertNothingSent();
     }
 
     public function test_account_guides_cover_all_operations_and_languages_without_database_access(): void
