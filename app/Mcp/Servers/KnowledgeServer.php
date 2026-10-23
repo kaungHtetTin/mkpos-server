@@ -12,12 +12,14 @@ class KnowledgeServer extends Server
 {
     protected string $name = 'MKPOS Customer Knowledge';
 
-    protected string $version = '1.2.0';
+    protected string $version = '1.2.1';
 
     protected string $instructions = <<<'TEXT'
         Help customers understand MKPOS. Use get_account_guide with operation login,
         register or password_reset for account procedures. Never collect passwords or
         reset codes. Use get_platform_links for current web URLs and installer links;
+        send its clickable direct links instead of fetching the website or referring
+        customers to a homepage. Include all platforms when asked for all app links;
         share only available downloads and distinguish unknown from unpublished builds.
         Use get_mkpos_overview for what MKPOS is,
         who it is for, capabilities, platforms and limitations. Pass language my for

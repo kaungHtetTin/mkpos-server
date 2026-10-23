@@ -20,7 +20,7 @@ class GetPlatformLinks extends Tool
 {
     protected string $name = 'get_platform_links';
 
-    protected string $description = 'Get MKPOS desktop web and mobile web URLs and current Windows 64-bit, Windows 32-bit and Android download links. Checks release records and files on every call; unavailable installers have no download URL. Use for download, install, app, APK or platform URL questions in English or Burmese.';
+    protected string $description = 'Return direct MKPOS download links and web app URLs, ready to share: desktop web, mobile web, Windows 64-bit, Windows 32-bit and Android APK. Includes a localized message with clickable links; do not fetch the website or send only a homepage link. Checks release records and files on every call; unavailable installers have no download URL. Use for download, install, app, APK or platform URL questions in English or Burmese.';
 
     public function schema(JsonSchema $schema): array
     {
@@ -66,14 +66,29 @@ class GetPlatformLinks extends Tool
             ];
         }
 
+        $directLinks = [];
+        $lines = [$language === 'my' ? 'MKPOS အက်ပ်နှင့် ဝဘ်လင့်ခ်များ' : 'MKPOS apps and web links'];
+        foreach ($platforms as $platform) {
+            $link = $platform['type'] === 'browser' ? $platform['url'] : $platform['download_url'];
+            if ($link !== null) {
+                $directLinks[$platform['platform']] = $link;
+                $lines[] = '- ['.$platform['name'].']('.$link.')';
+            } else {
+                $status = Lang::get('mkpos_access.download_status.'.$platform['status'], [], $language);
+                $lines[] = '- '.$platform['name'].': '.$status;
+            }
+        }
+
         return Response::structured([
             'language' => $language,
             'checked_at' => now()->toIso8601String(),
             'release_lookup_status' => $releaseStatus,
             'platforms' => $platforms,
+            'direct_links' => $directLinks,
+            'message' => implode("\n", $lines),
             'note' => Lang::get('mkpos_access.downloads_note', [], $language),
             'source_url' => route('landing').'#platforms',
-            'answer_guidance' => 'Answer in the customer language. Share returned URLs exactly. Only available installers can be downloaded. not_published means no release; file_missing means a release file is absent; unknown means availability could not be checked. Browser URLs are configured entry points, not uptime checks. Do not invent iOS/macOS installers or claim unavailable builds are ready. Call again for fresh download questions.',
+            'answer_guidance' => 'Give clickable direct links from message or direct_links, preserving URLs exactly. For all-app requests include both web apps and all three installer platforms, explaining any unavailable status. For a specific platform share its direct link. Do not fetch the website, substitute the homepage, or tell customers to search for a download button. Installer URLs download files directly; web URLs open browser apps without installation. Only available installers can be downloaded. not_published means no release; file_missing means the file is absent; unknown means availability could not be checked. Browser URLs are configured entry points, not uptime checks. Do not invent iOS/macOS installers. Call again for fresh download questions.',
         ]);
     }
 }

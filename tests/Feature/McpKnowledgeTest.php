@@ -118,17 +118,27 @@ class McpKnowledgeTest extends TestCase
             ->assertJsonPath('result.structuredContent.platforms.3.download_url', null)
             ->assertJsonPath('result.structuredContent.platforms.4.status', 'file_missing')
             ->assertJsonPath('result.structuredContent.platforms.4.download_url', null)
+            ->assertJsonPath('result.structuredContent.direct_links.web', 'https://app.example.test/')
+            ->assertJsonPath('result.structuredContent.direct_links.mobile', 'https://mobile.example.test/')
+            ->assertJsonPath('result.structuredContent.direct_links.windows', url('/downloads/windows'))
+            ->assertJsonMissingPath('result.structuredContent.direct_links.windows32')
+            ->assertJsonMissingPath('result.structuredContent.direct_links.android')
+            ->assertSee('[Windows 64-bit](')->assertSee('Not yet published.')
             ->assertDontSee('private-releases');
         Storage::disk('local')->put('private-releases/missing.apk', 'sample');
         $call('my')->assertJsonPath('result.structuredContent.language', 'my')
             ->assertJsonPath('result.structuredContent.platforms.0.name', 'ကွန်ပျူတာ ဝဘ်')
-            ->assertJsonPath('result.structuredContent.platforms.4.status', 'available');
+            ->assertJsonPath('result.structuredContent.platforms.4.status', 'available')
+            ->assertJsonPath('result.structuredContent.direct_links.android', url('/downloads/android'))
+            ->assertSee('မထုတ်ပြန်ရသေးပါ။', false);
         Storage::disk('local')->delete('private-releases/windows.exe');
         $call()->assertJsonPath('result.structuredContent.platforms.2.download_url', null);
         Schema::drop('app_releases');
         $call()->assertJsonPath('result.structuredContent.release_lookup_status', 'unavailable')
             ->assertJsonPath('result.structuredContent.platforms.2.status', 'unknown')
             ->assertJsonPath('result.structuredContent.platforms.2.download_url', null)
+            ->assertJsonMissingPath('result.structuredContent.direct_links.windows')
+            ->assertSee('Download availability could not be checked.')
             ->assertDontSee('SQLSTATE');
         $call('fr')->assertJsonPath('result.isError', true);
     }

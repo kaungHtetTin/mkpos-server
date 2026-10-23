@@ -35,5 +35,6 @@ return [
         'notes' => ['Wait at least 60 seconds before using Resend code. Use the newest code; an expired code or too many failed attempts requires a new code.', 'Business password recovery is for active owner accounts. Staff should ask the business owner for help; this flow is separate from the customer shop account.', 'Enter passwords and reset codes only in MKPOS. Never send them to this bot or support chat. Other devices may require sign-in again after a reset.'],
     ],
     'platforms' => ['web' => 'Desktop web', 'mobile' => 'Mobile web', 'windows' => 'Windows 64-bit', 'windows32' => 'Windows 32-bit', 'android' => 'Android'],
+    'download_status' => ['not_published' => 'Not yet published.', 'file_missing' => 'Download file is currently unavailable.', 'unknown' => 'Download availability could not be checked.'],
     'downloads_note' => 'Web links open MKPOS in a browser without an installer. Native downloads are offered only when a release record and its file are available. No iOS or macOS installer is listed by this server.',
 ];
