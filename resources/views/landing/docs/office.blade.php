@@ -13,7 +13,7 @@
 <p>Existing receipts keep their original book when the default changes. The internal receiving book is separate from the customer-facing payment instructions. Referenced books cannot be deleted; archive them instead. Change the subscription default before archiving its current book. Archived balances remain included in the financial history.</p>
 
 <h2 id="founders">Founder shares and financial history</h2>
-<p>In Financial book, open Founder settings to add founders, edit names and percentages, or remove founders from future allocations. Active shares must total 100%. Removing a founder archives their identity and preserves their earlier contributions, allocations and payouts.</p>
+<p>Open Finance > Founders, or select Founder settings in Financial book, to manage founders on a separate page. Use Add founder, edit names and percentages, then Save founders. Reset changes restores saved values; Cancel returns without saving. Active shares must total 100%. Removing a founder archives their identity and preserves their earlier contributions, allocations and payouts.</p>
 <p>Allocate profit from a funded book to record the active founders' shares as paid. Each allocation keeps its original names, percentages and amounts. Older unpaid allocations remain available for separate payouts. Transfers move funds between books without changing total cash or profit. Opening adjustments add to an existing balance; enter the adjustment amount rather than replacing the balance with the full bank-statement amount.</p>
 
 <h2 id="branding">Theme, logo and web icons</h2>
