@@ -25,7 +25,7 @@
                     <div class="stage-orbit orbit-two"></div>
                     <div class="dashboard-window">
                         <div class="window-topbar">
-                            <div class="window-brand"><img src="{{ asset('app/branding/mktransparenticon.png') }}" alt=""><strong>MKPOS</strong></div>
+                            <div class="window-brand"><img src="{{ \App\Support\PlatformBranding::all()['logo_url'] ?: asset('app/branding/mktransparenticon.png') }}" alt=""><strong>MKPOS</strong></div>
                             <div class="window-search"><span></span>Search products or barcode</div>
                             <div class="avatar">KL</div>
                         </div>
@@ -131,6 +131,24 @@
                         <div class="report-visual" aria-hidden="true"><div><small>Net sales</small><strong>2.48M Ks</strong><span>+18.2%</span></div><svg viewBox="0 0 520 160" preserveAspectRatio="none"><path d="M0 142 C54 136 70 112 112 119 S177 80 221 92 S287 53 326 64 S407 18 520 24"/><circle cx="520" cy="24" r="7"/></svg><div class="report-columns"><i style="--h:34%"></i><i style="--h:48%"></i><i style="--h:44%"></i><i style="--h:66%"></i><i style="--h:60%"></i><i style="--h:81%"></i><i style="--h:92%"></i></div></div>
                     </article>
                 </div>
+            </div>
+        </section>
+
+        <section class="section office-section" id="office" aria-labelledby="office-heading">
+            <div class="container">
+                <div class="section-heading">
+                    <div><span class="section-kicker">MKPOS Office</span><h2 id="office-heading">Clear control behind every workspace.</h2></div>
+                    <p>A dedicated console for platform administrators to manage access, track decisions and keep platform finances organized.</p>
+                </div>
+                <div class="office-feature-grid">
+                    <article><span class="feature-icon"><svg><use href="#icon-users"/></svg></span><h3>A team of administrators</h3><p>Create individual admin accounts and reserve account management and branding for super administrators.</p></article>
+                    <article><span class="feature-icon"><svg><use href="#icon-shield"/></svg></span><h3>Know who changed what</h3><p>Trace payment approvals and subscription access changes to the administrator who made them.</p></article>
+                    <article><span class="feature-icon"><svg><use href="#icon-wallet"/></svg></span><h3>Flexible bank books</h3><p>Add balance books and choose where subscription receipts are recorded. Existing receipts keep their original book.</p></article>
+                    <article><span class="feature-icon"><svg><use href="#icon-chart"/></svg></span><h3>Founder profit shares</h3><p>Add founders, set profit percentages and keep a clear history of contributions, allocations and payouts.</p></article>
+                    <article><span class="feature-icon"><svg><use href="#icon-monitor"/></svg></span><h3>One shared identity</h3><p>Manage the web theme color, logo and icons from Office so MKPOS stays consistent across its web apps.</p></article>
+                    <article><span class="feature-icon"><svg><use href="#icon-receipt"/></svg></span><h3>Financial history preserved</h3><p>Keep existing balances and transaction records through the upgrade, with before-and-after financial verification.</p></article>
+                </div>
+                <div class="office-section-footer"><p>Office manages the MKPOS platform. Your shop's staff and business records stay in the Business app.</p><a class="button button-secondary" href="{{ route('documentation.show', 'office') }}">Explore the Office guide <svg><use href="#icon-arrow"/></svg></a></div>
             </div>
         </section>
 

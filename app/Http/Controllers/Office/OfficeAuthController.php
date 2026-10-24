@@ -35,6 +35,7 @@ class OfficeAuthController extends Controller
                 return response()->json(['message' => 'The email or password is incorrect.'], 422);
             }
 
+            $this->recordLogin($admin);
             return $this->payload($admin, $this->issueToken($request, $admin));
         }
 
@@ -45,7 +46,17 @@ class OfficeAuthController extends Controller
         $request->session()->regenerate();
         $request->session()->put('office_password_reset_version', hash('sha256', Auth::guard('office')->user()->password));
 
+        $this->recordLogin(Auth::guard('office')->user());
         return $this->payload();
+    }
+
+    private function recordLogin(PlatformAdmin $admin): void
+    {
+        \Illuminate\Support\Facades\DB::table('office_activity_logs')->insert([
+            'admin_id' => $admin->id, 'admin_name' => $admin->name, 'admin_email' => $admin->email,
+            'action' => 'OfficeAuthController@login', 'method' => 'POST', 'path' => 'api/office/auth/login',
+            'details' => '{}', 'created_at' => now(),
+        ]);
     }
 
     public function me(): array
@@ -108,7 +119,7 @@ class OfficeAuthController extends Controller
 
     private function payload(?PlatformAdmin $admin = null, ?string $token = null): array
     {
-        $payload = ['timezone' => config('app.timezone'), 'admin' => ($admin ?? Auth::guard('office')->user())->only(['id', 'name', 'email'])];
+        $payload = ['timezone' => config('app.timezone'), 'admin' => ($admin ?? Auth::guard('office')->user())->only(['id', 'name', 'email', 'role'])];
         if ($token) {
             $payload['access_token'] = $token;
             $payload['token_type'] = 'Bearer';

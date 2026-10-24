@@ -235,7 +235,8 @@ class ProductImportService
         return null;
     }
 
-    private function payload(array $row, array $types): array
+    // Shared, pure CSV-to-product normalization; does not read or write tenant data.
+    public function payload(array $row, array $types): array
     {
         $get = function (array $keys, $default = '') use ($row) {
             foreach ($keys as $key) {

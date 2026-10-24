@@ -6,6 +6,45 @@ use Tests\TestCase;
 
 class LandingPageTest extends TestCase
 {
+    use \Illuminate\Foundation\Testing\DatabaseTransactions;
+
+    public function test_office_features_and_administrator_guide_are_public(): void
+    {
+        $this->get('/')->assertOk()
+            ->assertSee('id="office"', false)
+            ->assertSee('A team of administrators')
+            ->assertSee('Know who changed what')
+            ->assertSee('Flexible bank books')
+            ->assertSee('Founder profit shares')
+            ->assertSee('Financial history preserved')
+            ->assertSee(route('documentation.show', 'office'), false);
+        $this->get('/documentation/office')->assertOk()
+            ->assertSee('MKPOS Office administration')
+            ->assertSee('Active shares must total 100%.')
+            ->assertSee('Existing receipts keep their original book')
+            ->assertSee('php artisan office:financial-snapshot')
+            ->assertSee('Unsafe rollback is blocked');
+    }
+
+    public function test_public_pages_use_office_branding_and_validated_color_fallback(): void
+    {
+        \Illuminate\Support\Facades\DB::table('platform_branding')->where('id', 1)->update([
+            'primary_color' => '#4f46e5', 'logo_path' => 'platform-branding/test-logo.png',
+            'icon_path' => 'platform-branding/test-icon.webp', 'favicon_path' => 'platform-branding/test-favicon.png',
+        ]);
+        foreach (['/', '/documentation/office', '/plans', '/tutorials'] as $path) {
+            $this->get($path)->assertOk()
+                ->assertSee('--green: #4f46e5;', false)
+                ->assertSee('content="#4f46e5"', false)
+                ->assertSee('/api/branding/assets/logo?v=', false)
+                ->assertSee('/api/branding/assets/icon?v=', false)
+                ->assertSee('/api/branding/assets/favicon?v=', false)
+                ->assertDontSee('platform-branding/test-logo.png');
+        }
+        \Illuminate\Support\Facades\DB::table('platform_branding')->where('id', 1)->update(['primary_color' => 'red;/*']);
+        $this->get('/')->assertOk()->assertSee('--green: #0e684e;', false)->assertDontSee('red;/*', false);
+    }
+
     public function test_public_links_use_configured_app_subdomains(): void
     {
         config()->set('clients.web_url', 'https://app.mkposmyanmar.com');

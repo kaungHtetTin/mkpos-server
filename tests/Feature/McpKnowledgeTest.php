@@ -67,7 +67,7 @@ class McpKnowledgeTest extends TestCase
             ->assertJsonPath('result.serverInfo.name', 'MKPOS Customer Knowledge');
 
         $this->rpc('tools/list')->assertOk()
-            ->assertJsonCount(15, 'result.tools')
+            ->assertJsonCount(17, 'result.tools')
             ->assertJsonPath('result.tools.0.name', 'get_available_package_plans')
             ->assertJsonPath('result.tools.0.annotations.readOnlyHint', true)
             ->assertJsonPath('result.tools.0.inputSchema.properties.language.enum', ['en', 'my'])

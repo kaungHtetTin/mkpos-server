@@ -10,6 +10,12 @@ class SupportToolDefinitions
         $id = ['type' => 'integer', 'min' => 1, 'required' => true];
         $page = ['limit' => ['type' => 'integer', 'min' => 1, 'max' => 20], 'offset' => ['type' => 'integer', 'min' => 0]];
         $definitions = [
+            'get_product_import_template' => ['public', false, ['price_types' => $string(1000)]],
+            'validate_product_import' => ['public', false, [
+                'csv_content' => $string(5242880, true), 'filename' => $string(255), 'price_types' => $string(1000),
+                'limit' => ['type' => 'integer', 'min' => 1, 'max' => 100],
+                'offset' => ['type' => 'integer', 'min' => 0], 'issues_only' => ['type' => 'boolean'],
+            ]],
             'get_form_field_guide' => ['public', false, ['form' => $string(80), 'field' => $string(200),
                 'mode' => ['type' => 'string', 'enum' => ['create', 'edit']]]],
             'search_help_articles' => ['public', false, ['query' => $string(), ...$page]],

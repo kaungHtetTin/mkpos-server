@@ -42,6 +42,11 @@ class McpSupportKnowledge
 
     public function run(string $tool, array $data): array
     {
+        if (in_array($tool, ['get_product_import_template', 'validate_product_import'], true)) {
+            abort_if(($data['app'] ?? 'business_web') === 'shop', 422, 'Product CSV import belongs to the Business apps, not the customer Shop app.');
+            $validator = app(McpProductImportValidator::class);
+            return $tool === 'get_product_import_template' ? $validator->template($data) : $validator->check($data);
+        }
         if ($tool === 'get_form_field_guide') {
             return app(McpFormFieldGuide::class)->explain($data);
         }

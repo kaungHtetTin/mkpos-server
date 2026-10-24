@@ -168,6 +168,9 @@ class McpSupportTest extends TestCase
             $t->text('release_notes')->nullable();
             $t->timestamp('published_at')->nullable();
         });
+        foreach (['2026_10_15_150000_create_office_financial_book.php', '2026_10_15_160000_add_office_bank_books.php', '2026_10_24_000001_office_management.php', '2026_10_24_000002_add_subscription_access_actor.php'] as $migration) {
+            (require database_path('migrations/'.$migration))->up();
+        }
         (require database_path('migrations/2026_10_24_000001_create_mcp_support_tables.php'))->up();
         DB::table('businesses')->insert([['id' => 1, 'name' => 'One'], ['id' => 2, 'name' => 'Two']]);
         $this->owner = User::create(['business_id' => 1, 'name' => 'Owner', 'email' => 'owner@example.test', 'password' => Hash::make('test-password'), 'role' => 'owner', 'is_active' => true]);
@@ -297,6 +300,7 @@ class McpSupportTest extends TestCase
         $this->rpc('/mcp/admin', 'approve_subscription_payment', $intent, $admin)->assertJsonPath('result.structuredContent.status', 'approved');
         $this->assertSame(1, DB::table('subscription_payments')->count());
         $this->assertSame($this->admin->id, DB::table('subscription_requests')->where('id', $request)->value('reviewed_by_admin_id'));
+        $this->assertSame(1, DB::table('office_activity_logs')->where('action', 'McpSupportTools@approve_subscription_payment')->count());
         $this->rpc('/mcp/admin', 'reject_subscription_payment', $this->intent(['request_id' => $request, 'admin_note' => 'Cannot reject approved']), $admin)->assertJsonPath('result.isError', true);
         $pending = DB::table('subscription_requests')->insertGetId(['business_id' => 1, 'subscription_plan_id' => 1]);
         $this->rpc('/mcp/admin', 'reject_subscription_payment', $this->intent(['request_id' => $pending, 'admin_note' => 'Recipient did not match']), $admin)->assertJsonPath('result.structuredContent.status', 'rejected');

@@ -1,7 +1,7 @@
 # MKPOS customer service MCP
 
-This implements the agreed 27-tool catalogue, the additional form-field guide, plus the existing
-`get_mkpos_overview` for compatibility. No public endpoint can read a customer's
+This implements the customer-service catalogue, form-field guidance, read-only
+product-import template/validation tools, and `get_mkpos_overview` for compatibility. No public endpoint can read a customer's
 private account or execute administrator actions.
 
 ## Connections and tools
@@ -11,7 +11,7 @@ Laravel base URL (including `/public` if used by the host).
 
 | Endpoint | Authentication | Tools |
 | --- | --- | --- |
-| `/mcp/knowledge` | Public, 60 requests/minute/IP | 15 tools: public usage/form/payment information and legacy overview |
+| `/mcp/knowledge` | Public, 60 requests/minute/IP | 17 tools: public usage/form/payment information, CSV template/validation and legacy overview |
 | `/mcp/account` | Per-account delegated support bearer | 9 private account tools; 60 requests/minute/actor |
 | `/mcp/admin` | Per-administrator delegated support bearer | 5 administrator tools; 30 requests/minute/actor |
 | `/mcp/subscription-payments` | Existing server-to-server secret | Existing read-only pending-payment notification integration; unchanged |

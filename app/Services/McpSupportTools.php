@@ -185,6 +185,12 @@ class McpSupportTools
             $result = $tool === 'approve_subscription_payment' ? $controller->approve($http, (int) $data['request_id'])
                 : $controller->reject($http, (int) $data['request_id']);
 
+            DB::table('office_activity_logs')->insert([
+                'admin_id' => $context['actor']->id, 'admin_name' => $context['actor']->name, 'admin_email' => $context['actor']->email,
+                'action' => 'McpSupportTools@'.$tool, 'method' => 'POST', 'path' => 'mcp/subscription-requests/'.$data['request_id'],
+                'details' => json_encode(array_intersect_key($data, array_flip(['request_id', 'price_paid', 'admin_note']))), 'created_at' => now(),
+            ]);
+
             // Avoid exposing internal subscription notes returned by the existing controller.
             return ['request_id' => (int) $data['request_id'], 'status' => $tool === 'approve_subscription_payment' ? 'approved' : 'rejected', 'ok' => $result['ok']];
         } finally {

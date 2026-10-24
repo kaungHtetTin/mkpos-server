@@ -1,21 +1,37 @@
+@php
+    $branding = \App\Support\PlatformBranding::all();
+    $brandLogo = $branding['logo_url'] ?: asset('app/branding/mktransparenticon.png');
+    $brandIcon = $branding['icon_url'] ?: asset('app/branding/mkicon.png');
+    $brandFavicon = $branding['favicon_url'] ?: asset('app/branding/mkicon.png');
+@endphp
 <!doctype html>
 <html lang="en">
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="theme-color" content="#0b4a3b">
+    <meta name="theme-color" content="{{ $branding['primary_color'] }}">
     <meta name="description" content="MKPOS is a point-of-sale app for local shops. Record sales, manage stock, track credit and see reports in one place.">
     <meta property="og:type" content="website">
     <meta property="og:title" content="MKPOS — Sales, stock and credit in one place">
     <meta property="og:description" content="A simple point-of-sale app for local shops. Sell, manage stock and track what you are owed.">
     <meta property="og:url" content="{{ url('/') }}">
-    <meta property="og:image" content="{{ asset('app/branding/mkicon.png') }}">
+    <meta property="og:image" content="{{ $brandIcon }}">
     <link rel="canonical" href="{{ url()->current() }}">
-    <link rel="icon" type="image/png" href="{{ asset('app/branding/mkicon.png') }}">
-    <link rel="apple-touch-icon" href="{{ asset('app/branding/mkicon.png') }}">
+    <link rel="icon" href="{{ $brandFavicon }}">
+    <link rel="apple-touch-icon" href="{{ $brandIcon }}">
     <link rel="stylesheet" href="{{ asset('landing/landing.css') }}">
     <link rel="stylesheet" href="{{ asset('landing/guide.css') }}">
     <link rel="stylesheet" href="{{ asset('landing/tutorials.css') }}">
+    <style>
+        :root {
+            --green: {{ $branding['primary_color'] }};
+            --green-2: {{ \App\Support\PlatformBranding::shade($branding['primary_color'], .15, 0) }};
+            --green-3: {{ $branding['primary_color'] }};
+            --ink-deep: {{ \App\Support\PlatformBranding::shade($branding['primary_color'], .45, 0) }};
+            --lime: {{ \App\Support\PlatformBranding::shade($branding['primary_color'], .82, 255) }};
+            --lime-soft: {{ \App\Support\PlatformBranding::shade($branding['primary_color'], .94, 255) }};
+        }
+    </style>
     <title>@yield('title', 'MKPOS')</title>
 </head>
 <body>
@@ -37,12 +53,13 @@
     <header class="site-header">
         <div class="container nav-wrap">
             <a class="brand" href="{{ url('/') }}" aria-label="MKPOS home">
-                <img src="{{ asset('app/branding/mktransparenticon.png') }}" alt="" width="44" height="44">
+                <img src="{{ $brandLogo }}" alt="" width="44" height="44">
                 <span>MKPOS</span>
             </a>
             <nav class="desktop-nav" aria-label="Primary navigation">
                 <a href="{{ route('landing') }}#how-it-works">How it works</a>
                 <a href="{{ route('landing') }}#features">Features</a>
+                <a href="{{ route('landing') }}#office">Office</a>
                 <a href="{{ route('landing') }}#platforms">Downloads</a>
                 <a href="{{ route('plans.index') }}">Pricing</a>
                 <a href="{{ route('landing') }}#contact">Contact</a>
@@ -56,6 +73,7 @@
                 <div>
                     <a href="{{ route('landing') }}#how-it-works">How it works</a>
                     <a href="{{ route('landing') }}#features">Features</a>
+                <a href="{{ route('landing') }}#office">Office</a>
                     <a href="{{ route('landing') }}#platforms">Downloads</a>
                     <a href="{{ route('plans.index') }}">Pricing</a>
                     <a href="{{ route('landing') }}#contact">Contact</a>
@@ -74,9 +92,10 @@
     @php($contacts = \App\Support\PlatformContacts::all())
     <footer id="contact">
         <div class="container footer-main">
-            <div><a class="brand footer-brand" href="{{ url('/') }}"><img src="{{ asset('app/branding/mktransparenticon.png') }}" alt="" width="42" height="42"><span>MKPOS</span></a><p>Sales, stock and credit in one app for local shops.</p></div>
+            <div><a class="brand footer-brand" href="{{ url('/') }}"><img src="{{ $brandLogo }}" alt="" width="42" height="42"><span>MKPOS</span></a><p>Sales, stock and credit in one app for local shops.</p></div>
             <nav aria-label="Footer navigation">
-                <div><strong>Product</strong><a href="{{ route('landing') }}#how-it-works">How it works</a><a href="{{ route('landing') }}#features">Features</a><a href="{{ route('landing') }}#platforms">Downloads</a><a href="{{ route('plans.index') }}">Pricing</a></div>
+                <div><strong>Product</strong><a href="{{ route('landing') }}#how-it-works">How it works</a><a href="{{ route('landing') }}#features">Features</a>
+                <a href="{{ route('landing') }}#office">Office</a><a href="{{ route('landing') }}#platforms">Downloads</a><a href="{{ route('plans.index') }}">Pricing</a></div>
                 <div><strong>Resources</strong><a href="{{ route('documentation.index') }}">Documentation</a><a href="{{ route('tutorials.index') }}">Tutorials</a><a href="{{ route('landing') }}#security">Security</a></div>
                 <div><strong>Access</strong><a href="{{ \App\Support\ClientApps::webUrl('signup') }}">Start free trial</a><a href="{{ \App\Support\ClientApps::webUrl('login') }}">Business sign in</a></div>
                 @if($contacts['phone_numbers'] || $contacts['viber_numbers'] || $contacts['telegram_url'] || $contacts['email'] || $contacts['community_url'])
@@ -96,6 +115,10 @@
         </div>
         <div class="container footer-bottom"><span>© {{ date('Y') }} MKPOS. All rights reserved.</span><span>Made for businesses that keep moving.</span></div>
     </footer>
+    <a class="ai-assistant-fab" href="https://t.me/KaungKaungKK_Bot" target="_blank" rel="noopener noreferrer" aria-label="AI assistant on Telegram (opens in a new tab)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v3M10 3h4"/><rect x="4" y="6" width="16" height="14" rx="4"/><path d="M4 11H2v4h2M20 11h2v4h-2M9 16h6"/><circle cx="9" cy="11" r=".8"/><circle cx="15" cy="11" r=".8"/></svg>
+        <span><strong>AI assistant</strong><small>Chat on Telegram <span aria-hidden="true">↗</span></small></span>
+    </a>
     <script>
         if (window.location.hash.startsWith('#/')) {
             window.location.replace(@json(\App\Support\ClientApps::webUrl()) + window.location.hash.slice(2));

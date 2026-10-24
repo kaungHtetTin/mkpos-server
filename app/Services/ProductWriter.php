@@ -30,17 +30,20 @@ class ProductWriter
         });
     }
 
-    public function validate(Request $request, ?int $id = null, bool $update = false): array
+    public function validate(Request $request, ?int $id = null, bool $update = false, bool $checkExistingBarcode = true): array
     {
+        $finite = static function ($attribute, $value, $fail) {
+            if (is_numeric($value) && !is_finite((float) $value)) $fail('The '.$attribute.' must be a finite number.');
+        };
         $data = $request->validate(['name' => ['required', 'string', 'max:255'], 'sku' => ['nullable', 'string', 'max:255'],
             'marketplace_category_id' => ['sometimes', 'nullable', 'integer', 'min:1'],
             'marketplace_category_version' => [Rule::requiredIf(fn () => $request->exists('marketplace_category_id')), 'integer', 'min:0'],
             'online_description' => ['sometimes', 'nullable', 'string', 'max:4000'],
-            'barcode' => ['nullable', 'string', 'max:255', Rule::unique('products', 'barcode')->ignore($id)->where(fn ($q) => $q->where('is_active', true))],
+            'barcode' => ['nullable', 'string', 'max:255', ...($checkExistingBarcode ? [Rule::unique('products', 'barcode')->ignore($id)->where(fn ($q) => $q->where('is_active', true))] : [])],
             'category' => ['nullable', 'string', 'max:255'], 'base_unit' => ['nullable', 'string', 'max:50'],
-            'purchase_unit' => ['nullable', 'string', 'max:50'], 'purchase_conversion_factor' => ['nullable', 'numeric', 'min:1', 'max:1000000'],
+            'purchase_unit' => ['nullable', 'string', 'max:50'], 'purchase_conversion_factor' => ['nullable', 'numeric', 'min:1', 'max:1000000', $finite],
             'price' => ['required', 'integer', 'min:0'], 'cost' => ['nullable', 'integer', 'min:0'],
-            'stock' => ['nullable', 'numeric'], 'low_stock_threshold' => ['nullable', 'numeric', 'min:0'],
+            'stock' => ['nullable', 'numeric', $finite], 'low_stock_threshold' => ['nullable', 'numeric', 'min:0', $finite],
             'is_active' => [$update ? 'sometimes' : 'nullable', 'boolean'], 'prices' => ['nullable', 'array'],
             'prices.*.name' => ['required', 'string', 'max:50'], 'prices.*.price' => ['required', 'integer', 'min:0'], 'prices.*.is_manual' => ['nullable', 'boolean']]);
 

@@ -116,6 +116,24 @@ supported. Configured price types plus Retail/Wholesale/Credit columns are
 recognized; optional ` price` suffixes and legacy unit/low-stock aliases are
 accepted. Zero selling prices are preserved.
 
+## MCP template and pre-import checks
+
+The public `/mcp/knowledge` server exposes `get_product_import_template` and
+`validate_product_import`. A support bot can supply a UTF-8 CSV template and
+check the customer's actual CSV text before upload. Results include logical
+row numbers, field errors, counts, duplicate codes inside the file, a content
+hash and bounded pagination (50 rows by default, 100 maximum). File limits
+match the app: 5 MB and 5,000 products. Unknown headings are flagged so a typo
+cannot silently discard a price. Extra price names can be declared explicitly.
+
+The checker reuses the import payload normalization and product field/unit
+rules, excluding private catalog uniqueness queries. It performs no SQL,
+saves no import and creates no products or stock movements. A passing public
+file check is preliminary: the signed-in import still validates the business's
+configuration, existing active products, subscription and permissions. This
+also keeps public tools from probing another business's inventory. See the
+[MCP examples and contract](mcp-customer-support.md#product-import-template-and-validation).
+
 ## Setup and verification
 
 Run `php artisan migrate` during deployment. The additive migration creates

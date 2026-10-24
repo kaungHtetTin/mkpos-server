@@ -51,6 +51,7 @@ Route::get('/contact-settings', [ContactSettingsController::class, 'show']);
 
 Route::middleware(['auth:sanctum', \App\Http\Middleware\VerifyPasswordReset::class, 'business'])->group(function () {
     Route::get('/auth/me', [AuthController::class, 'me']);
+
     Route::post('/mcp/access', [\App\Http\Controllers\McpSupportAccessController::class, 'owner'])->middleware('throttle:5,1');
     Route::put('/auth/profile', [AuthController::class, 'updateProfile'])
         ->middleware(['throttle:10,1', 'subscription']);
@@ -222,8 +223,25 @@ Route::middleware(['auth:sanctum', \App\Http\Middleware\VerifyPasswordReset::cla
     });
 });
 
+
+Route::get('/branding', [\App\Http\Controllers\Office\BrandingController::class, 'show']);
+Route::get('/branding/assets/{asset}', [\App\Http\Controllers\Office\BrandingController::class, 'asset'])->whereIn('asset', ['logo', 'icon', 'favicon']);
+
 Route::post('/office/auth/login', [OfficeAuthController::class, 'login'])->middleware('throttle:10,1');
-Route::middleware('office.auth')->prefix('office')->group(function () {
+Route::middleware(['office.auth', \App\Http\Middleware\AuditOfficeAction::class])->prefix('office')->group(function () {
+    Route::get('/admins', [\App\Http\Controllers\Office\AdminManagementController::class, 'index']);
+    Route::post('/admins', [\App\Http\Controllers\Office\AdminManagementController::class, 'store']);
+    Route::put('/admins/{admin}', [\App\Http\Controllers\Office\AdminManagementController::class, 'update'])->whereNumber('admin');
+    Route::delete('/admins/{admin}', [\App\Http\Controllers\Office\AdminManagementController::class, 'destroy'])->whereNumber('admin');
+    Route::get('/activity-log', [\App\Http\Controllers\Office\AdminManagementController::class, 'activity']);
+    Route::get('/bank-books', [\App\Http\Controllers\Office\BankBookController::class, 'index']);
+    Route::post('/bank-books', [\App\Http\Controllers\Office\BankBookController::class, 'store']);
+    Route::put('/bank-books/{bank}', [\App\Http\Controllers\Office\BankBookController::class, 'update'])->whereNumber('bank');
+    Route::delete('/bank-books/{bank}', [\App\Http\Controllers\Office\BankBookController::class, 'destroy'])->whereNumber('bank');
+    Route::put('/subscription-bank-book', [\App\Http\Controllers\Office\BankBookController::class, 'subscriptionAccount']);
+    Route::put('/branding', [\App\Http\Controllers\Office\BrandingController::class, 'update']);
+    Route::post('/branding/{asset}', [\App\Http\Controllers\Office\BrandingController::class, 'upload'])->whereIn('asset', ['logo', 'icon', 'favicon']);
+    Route::delete('/branding/{asset}', [\App\Http\Controllers\Office\BrandingController::class, 'reset'])->whereIn('asset', ['logo', 'icon', 'favicon']);
     Route::post('/mcp/access', [\App\Http\Controllers\McpSupportAccessController::class, 'admin'])->middleware('throttle:5,1');
     Route::get('/activity-alerts', [\App\Http\Controllers\ActivityAlertController::class, 'index']);
     Route::get('/activity-alerts/config', [\App\Http\Controllers\ActivityAlertController::class, 'config']);

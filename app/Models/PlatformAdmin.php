@@ -10,7 +10,7 @@ class PlatformAdmin extends Authenticatable
 {
     use HasApiTokens, Notifiable;
 
-    protected $fillable = ['name', 'email', 'password', 'is_active'];
+    protected $fillable = ['name', 'email', 'password', 'is_active', 'role'];
 
     protected $hidden = ['password', 'remember_token'];
 

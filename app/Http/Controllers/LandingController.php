@@ -24,6 +24,7 @@ class LandingController extends Controller
         'offline' => ['Offline & sync', 'Prepare cached products and synchronize pending sales safely.'],
         'access' => ['Staff access', 'Permissions, protected actions and till handover.'],
         'billing' => ['Packages & billing', 'Understand the trial, submit a package request and verify activation.'],
+        'office' => ['MKPOS Office administration', 'Manage platform admins, review activity, organize financial books and update branding.'],
         'data' => ['Backups & updates', 'Protect business records and update devices safely.'],
         'troubleshooting' => ['Troubleshooting & glossary', 'Resolve common problems and learn the terms used throughout MKPOS.'],
     ];

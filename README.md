@@ -7,6 +7,34 @@
 <a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/l/laravel/framework" alt="License"></a>
 </p>
 
+## MKPOS Office administration and financial upgrades
+
+Office supports administrator/super-administrator accounts, activity history,
+variable founder shares, bank-book management, configurable subscription
+receiving books and shared web branding. See the
+[Office overview](../README.md#office-administration-finance-and-branding) and
+[financial-book operations guide](../office/docs/financial-book.md).
+
+For an existing database, use the
+[financial preservation deployment procedure](../README.md#upgrading-an-existing-office-financial-book).
+Take a full backup, stop financial writers, save a snapshot with
+`php artisan office:financial-snapshot`, apply `php artisan migrate --force`,
+and run the printed `--verify=FILENAME.json` command before reopening writes.
+Snapshots are private financial exports under
+`storage/app/office-financial-snapshots/`. They supplement the full backup.
+Existing receipts remain in legacy book 2; changing the default affects future
+receipts only. No balances or transaction history are reset by the upgrade.
+
+The migration preservation regression suite runs in an isolated in-memory
+legacy database:
+
+```sh
+php artisan test --filter=OfficeBankBookMigrationTest
+```
+
+See the main README for first-super-admin provisioning and the distinction
+between migrated existing accounts and newly created administrator accounts.
+
 ## Demo shops
 
 Run `php artisan db:seed --class=DemoShopSeeder` from this directory after migrations.
