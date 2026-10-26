@@ -3,6 +3,7 @@
 namespace App\Services\TelegramSupport;
 
 use App\Ai\Agents\CustomerServiceAgent;
+use App\Ai\Agents\TelegramImageReader;
 use App\Services\AiAssistantSettings;
 use App\Services\AiBalanceBook;
 use App\Services\AiProviderCredentials;
@@ -48,6 +49,11 @@ class Runner
 
                     return null;
                 }
+                if (! app(Groups::class)->allowed($conversation)) {
+                    DB::table('customer_service_messages')->where('id', $id)->update(['status' => 'cancelled', 'error_code' => 'group_disabled', 'updated_at' => now('UTC')]);
+
+                    return null;
+                }
                 if ($message->available_at && now('UTC')->lt($message->available_at)) {
                     return 30;
                 }
@@ -79,6 +85,7 @@ class Runner
 
     private function generate(object $message, object $conversation): void
     {
+        $answer = null;
         try {
             $settings = app(AiAssistantSettings::class)->get();
             if (! $settings['enabled'] || ! $settings['configured']) {
@@ -97,35 +104,77 @@ class Runner
                     $history[] = new Message('assistant', Crypt::decryptString($row->reply));
                 }
             }
-            $agent = new CustomerServiceAgent($history, $message->language);
+            $hasImage = ! empty($message->image_file_id_encrypted);
+            if ($hasImage && ! app(Settings::class)->get()['images_enabled']) {
+                throw new \RuntimeException('Images disabled');
+            }
+            $agent = $hasImage ? new TelegramImageReader($message->language) : new CustomerServiceAgent($history, $message->language);
             app(AiProviderCredentials::class)->activate();
-            $answer = $agent->prompt(Crypt::decryptString($message->input), provider: 'deepseek', model: 'deepseek-flash', timeout: (int) config('telegram_support.timeout'));
+            $answer = app(TypingIndicator::class)->during($message, $conversation, function () use ($agent, $message, $hasImage) {
+                $attachments = $hasImage ? [app(ImageInput::class)->attachment(Crypt::decryptString($message->image_file_id_encrypted), (int) $message->bot_id)] : [];
+                if ($hasImage) {
+                    $fresh = app(Settings::class)->get();
+                    $current = DB::table('customer_service_conversations')->where('id', $message->conversation_id)->first();
+                    if (! $fresh['enabled'] || ! $fresh['images_enabled'] || TelegramClient::idFor((string) $fresh['bot_token']) !== (int) $message->bot_id
+                        || ! $current || (int) $current->version !== (int) $message->conversation_version || ! app(Groups::class)->allowed($current)) {
+                        throw new \RuntimeException('Image access changed');
+                    }
+                }
+
+                return $agent->prompt(Crypt::decryptString($message->input), attachments: $attachments, provider: 'deepseek', model: 'deepseek-flash', timeout: (int) config('telegram_support.timeout'));
+            });
+            // Account for incurred usage even when extraction validation or permission checks fail.
+            DB::transaction(fn () => $book->chargeSystem($message->id, (object) ['id' => null, 'name' => 'MKPOS customer service'], 'deepseek-flash',
+                $answer->usage->inputTokens, $answer->usage->outputTokens, $answer->usage->cacheReadInputTokens, $pricing, 'Telegram customer service AI'));
             if (trim($answer->text) === '') {
                 throw new \RuntimeException('Empty reply');
             }
-            DB::transaction(function () use ($message, $conversation, $agent, $answer, $pricing) {
+            $report = null;
+            $reply = $answer->text;
+            if ($hasImage) {
+                $report = validator($answer->toArray(), ['kind' => 'required|in:receipt,general,unreadable', 'summary' => 'required|string|max:1200',
+                    'payment_status' => 'required|in:completed,pending,failed,unknown',
+                    ...array_fill_keys(['amount', 'currency', 'provider', 'recipient_name', 'recipient_account', 'transaction_reference', 'paid_at'], 'present|nullable|string|max:200')])->validate();
+                $reply = $report['summary'];
+                if ($report['kind'] === 'receipt') {
+                    $reply = $message->language === 'my' ? "Receipt မှာ မြင်ရသော အချက်အလက်များ — admin က စစ်ဆေးရန် လိုပါသည်။\n" : "Visible receipt details — manual review required.\n";
+                    foreach (['amount', 'currency', 'provider', 'recipient_name', 'recipient_account', 'transaction_reference', 'paid_at', 'payment_status'] as $field) {
+                        $reply .= str_replace('_', ' ', $field).': '.($report[$field] ?: 'Unknown')."\n";
+                    }
+                    $reply .= $message->language === 'my' ? 'ငွေအမှန်တကယ်ရရှိမှုနှင့် receipt အစစ်အမှန်ဖြစ်မှုကို အတည်မပြုနိုင်ပါ။ Admin က manual စစ်ဆေးရပါမည်။'
+                        : 'Funds and receipt authenticity are not verified. An administrator must check manually.';
+                }
+            }
+            DB::transaction(function () use ($message, $conversation, $agent, $answer, $reply, $report) {
                 $current = DB::table('customer_service_conversations')->where('id', $conversation->id)->lockForUpdate()->first();
                 $run = DB::table('customer_service_messages')->where('id', $message->id)->lockForUpdate()->first();
                 if (! $run) {
                     return;
                 }
-                app(AiBalanceBook::class)->chargeSystem($message->id, (object) ['id' => null, 'name' => 'MKPOS customer service'], 'deepseek-flash',
-                    $answer->usage->inputTokens, $answer->usage->outputTokens, $answer->usage->cacheReadInputTokens, $pricing, 'Telegram customer service AI');
-                $canDeliver = $run->status === 'processing' && $current && $current->version === $message->conversation_version;
+                $canDeliver = $run->status === 'processing' && $current && $current->version === $message->conversation_version && app(Groups::class)->allowed($current)
+                    && ($report === null || app(Settings::class)->get()['images_enabled']);
                 DB::table('customer_service_messages')->where('id', $message->id)->update([
-                    'status' => $canDeliver ? 'ready' : 'cancelled', 'reply' => $canDeliver ? Crypt::encryptString(mb_substr(trim($answer->text), 0, 3500)) : null,
+                    'status' => $canDeliver ? 'ready' : 'cancelled', 'reply' => $canDeliver ? Crypt::encryptString(mb_substr(trim($reply), 0, 3500)) : null,
+                    ...($report !== null ? ['image_report_encrypted' => $canDeliver ? Crypt::encryptString(json_encode($report, JSON_THROW_ON_ERROR)) : null] : []),
                     'input_tokens' => $answer->usage->inputTokens, 'output_tokens' => $answer->usage->outputTokens,
                     'cached_input_tokens' => $answer->usage->cacheReadInputTokens, 'tools' => json_encode(array_values(array_unique($agent->usedTools))),
                     'charged_at' => now('UTC'), 'updated_at' => now('UTC')]);
+                if ($canDeliver && ($report['kind'] ?? '') === 'receipt') {
+                    app(ReceiptNotices::class)->reserve($message);
+                }
             });
         } catch (\Throwable $error) {
             Log::warning('Customer service generation unavailable', ['message_id' => $message->id, 'exception_class' => get_class($error)]);
+            $usage = $answer && DB::table('ai_balance_entries')->where('run_id', $message->id)->exists() ? [
+                'input_tokens' => $answer->usage->inputTokens, 'output_tokens' => $answer->usage->outputTokens,
+                'cached_input_tokens' => $answer->usage->cacheReadInputTokens, 'charged_at' => now('UTC'),
+            ] : [];
             $fallback = $message->language === 'my' ? 'လောလောဆယ် မဖြေနိုင်သေးပါ။ နောက်မှ ပြန်မေးပါ၊ သို့မဟုတ် MKPOS ဝဘ်ဆိုက်မှ support ကို ဆက်သွယ်ပါ။' : 'I could not prepare an answer right now. Please try again later, or use the support contacts on the MKPOS website.';
-            DB::transaction(function () use ($message, $conversation, $fallback) {
+            DB::transaction(function () use ($message, $conversation, $fallback, $usage) {
                 $current = DB::table('customer_service_conversations')->where('id', $conversation->id)->lockForUpdate()->first();
-                $valid = $current && $current->version === $message->conversation_version;
+                $valid = $current && $current->version === $message->conversation_version && app(Groups::class)->allowed($current);
                 DB::table('customer_service_messages')->where('id', $message->id)->where('status', 'processing')
-                    ->update(['status' => $valid ? 'ready' : 'cancelled', 'reply' => $valid ? Crypt::encryptString($fallback) : null,
+                    ->update($usage + ['status' => $valid ? 'ready' : 'cancelled', 'reply' => $valid ? Crypt::encryptString($fallback) : null,
                         'error_code' => 'generation_unavailable', 'updated_at' => now('UTC')]);
             });
         }
@@ -142,7 +191,7 @@ class Runner
             if (! $row || $row->status !== 'ready' || ! $row->reply) {
                 return null;
             }
-            if (! $current || $current->version !== $row->conversation_version) {
+            if (! $current || $current->version !== $row->conversation_version || ! app(Groups::class)->allowed($current)) {
                 DB::table('customer_service_messages')->where('id', $id)->update(['status' => 'cancelled', 'reply' => null, 'updated_at' => now('UTC')]);
 
                 return null;
@@ -154,7 +203,7 @@ class Runner
         if (! $message) {
             return 0;
         }
-        $result = app(TelegramClient::class)->reply((int) $conversation->chat_id, (int) $message->telegram_message_id, Crypt::decryptString($message->reply), (int) $message->bot_id);
+        $result = app(TelegramClient::class)->reply((int) $conversation->chat_id, (int) $message->telegram_message_id, Crypt::decryptString($message->reply), (int) $message->bot_id, (int) ($conversation->thread_id ?? 0));
         if ($result['ok']) {
             DB::table('customer_service_messages')->where('id', $id)->where('status', 'sending')->update(['status' => 'delivered',
                 'reply_message_id' => $result['result']['message_id'] ?? null, 'updated_at' => now('UTC')]);

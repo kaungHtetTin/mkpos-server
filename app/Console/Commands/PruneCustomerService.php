@@ -21,6 +21,11 @@ class PruneCustomerService extends Command
         $expired()->whereIn('status', ['queued', 'ready', 'processing'])->update(['status' => 'cancelled']);
         $expired()->where('status', 'sending')->update(['status' => 'delivery_unknown']);
         $expired()->update(['input' => null, 'reply' => null]);
+        if (Schema::hasColumn('customer_service_messages', 'image_file_id_encrypted')) {
+            DB::table('customer_service_receipt_notices')->whereIn('message_id', $expired()->select('id'))->where('status', 'pending')
+                ->update(['status' => 'cancelled', 'updated_at' => now('UTC')]);
+            $expired()->update(['image_file_id_encrypted' => null, 'image_report_encrypted' => null]);
+        }
 
         return self::SUCCESS;
     }

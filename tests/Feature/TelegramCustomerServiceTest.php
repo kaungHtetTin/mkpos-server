@@ -3,13 +3,21 @@
 namespace Tests\Feature;
 
 use App\Ai\Agents\CustomerServiceAgent;
+use App\Ai\Agents\TelegramImageReader;
 use App\Ai\Tools\CustomerServiceKnowledge;
+use App\Http\Client\RefreshTelegramTyping;
+use App\Models\PlatformAdmin;
 use App\Services\AiAssistantSettings;
 use App\Services\AiUsageReport;
 use App\Services\TelegramSupport\Inbox;
+use App\Services\TelegramSupport\ReceiptNotices;
 use App\Services\TelegramSupport\Runner;
 use App\Services\TelegramSupport\Settings;
+use App\Services\TelegramSupport\TypingIndicator;
 use App\Tenancy\TenantContext;
+use GuzzleHttp\Promise\Create;
+use GuzzleHttp\Psr7\Request;
+use GuzzleHttp\Psr7\Response;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Http\Client\Factory;
 use Illuminate\Support\Facades\Cache;
@@ -18,6 +26,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Schema;
+use Illuminate\Validation\ValidationException;
 use Laravel\Ai\Prompts\AgentPrompt;
 use Laravel\Ai\Responses\AgentResponse;
 use Laravel\Ai\Responses\Data\Meta;
@@ -49,7 +58,7 @@ class TelegramCustomerServiceTest extends TestCase
             $table->timestamp('created_at')->nullable();
         });
         Schema::create('ai_messages', fn (Blueprint $table) => $table->id());
-        foreach (['2026_10_26_000005_create_customer_service_agent.php', '2026_10_26_000006_create_telegram_support_settings.php', '2026_10_25_000002_create_ai_balance_book_tables.php', '2026_10_25_000003_add_cached_input_tokens_to_ai_usage.php'] as $file) {
+        foreach (['2026_10_26_000005_create_customer_service_agent.php', '2026_10_26_000006_create_telegram_support_settings.php', '2026_10_26_000008_add_telegram_support_groups.php', '2026_10_27_000001_telegram_images_and_receipt_notices.php', '2026_10_25_000002_create_ai_balance_book_tables.php', '2026_10_25_000003_add_cached_input_tokens_to_ai_usage.php'] as $file) {
             (require database_path('migrations/'.$file))->up();
         }
         DB::table('ai_balance_accounts')->where('id', 1)->update(['balance_nanos' => 10_000_000_000]);
@@ -74,6 +83,532 @@ class TelegramCustomerServiceTest extends TestCase
     {
         return ['update_id' => $update, 'message' => ['message_id' => $update, 'text' => $text,
             'chat' => ['id' => $chat, 'type' => 'private'], 'from' => ['id' => $chat, 'is_bot' => false, 'language_code' => 'en']]];
+    }
+
+    private function photoUpdate(int $update = 1, bool $document = false): array
+    {
+        $value = $this->update('', $update);
+        unset($value['message']['text']);
+        $image = ['file_id' => 'fixture_image_file_id', 'file_unique_id' => 'fixture_unique', 'file_size' => 1000];
+        $value['message'][$document ? 'document' : 'photo'] = $document ? $image + ['mime_type' => 'image/png', 'file_name' => 'receipt.png'] : [$image + ['width' => 20, 'height' => 20]];
+
+        return $value;
+    }
+
+    private function imageFixture(bool $notices = true, string $kind = 'receipt'): array
+    {
+        DB::table('telegram_support_settings')->where('id', 1)->update(['images_enabled' => true, 'receipt_notices_enabled' => $notices,
+            'admin_group_chat_id' => -100777, 'admin_group_thread_id' => 77]);
+        DB::table('telegram_support_groups')->insertOrIgnore(['bot_id' => 123456, 'chat_id' => -100777, 'title' => 'Private admin group', 'is_member' => true]);
+        $image = imagecreatetruecolor(20, 20);
+        ob_start();
+        imagepng($image);
+        $bytes = ob_get_clean();
+        imagedestroy($image);
+        Http::swap(new Factory);
+        Http::preventStrayRequests();
+        Http::fake([
+            'https://api.telegram.org/*/getFile' => Http::response(['ok' => true, 'result' => ['file_path' => 'photos/fixture.png', 'file_size' => strlen($bytes)]]),
+            'https://api.telegram.org/file/*' => Http::response($bytes, 200, ['Content-Type' => 'image/png']),
+            'https://api.telegram.org/*' => Http::response(['ok' => true, 'result' => ['message_id' => 501]]),
+        ]);
+        $report = ['kind' => $kind, 'summary' => 'Visible screenshot details.', 'payment_status' => 'completed', 'amount' => '30000', 'currency' => 'MMK',
+            'provider' => 'Fixture Pay', 'recipient_name' => 'Fixture merchant', 'recipient_account' => '******1234', 'transaction_reference' => '001234', 'paid_at' => '2026-10-27T09:00:00+06:30'];
+        TelegramImageReader::fake([$report]);
+
+        return $report;
+    }
+
+    public function test_receipt_image_is_read_only_in_worker_and_admin_gets_one_manual_review_notice(): void
+    {
+        $this->imageFixture();
+        $this->receive($this->photoUpdate())->assertOk();
+        $this->receive($this->photoUpdate())->assertOk();
+        Http::assertNothingSent();
+        $this->assertStringNotContainsString('fixture_image_file_id', DB::table('jobs')->value('payload'));
+        $this->assertNotSame('fixture_image_file_id', DB::table('customer_service_messages')->value('image_file_id_encrypted'));
+        app(Runner::class)->process($this->id());
+        $row = DB::table('customer_service_messages')->first();
+        $this->assertSame('receipt', json_decode(Crypt::decryptString($row->image_report_encrypted), true)['kind']);
+        $this->assertStringContainsString('not verified', Crypt::decryptString($row->reply));
+        $this->assertSame(1, DB::table('ai_balance_entries')->count());
+        $notices = app(ReceiptNotices::class);
+        $notices->process($this->id());
+        $notices->process($this->id());
+        $this->assertSame('sent', DB::table('customer_service_receipt_notices')->value('status'));
+        $sent = Http::recorded(fn ($r) => str_ends_with($r->url(), '/sendPhoto'));
+        $this->assertCount(1, $sent);
+        $request = $sent->first()[0];
+        $this->assertSame(-100777, $request['chat_id']);
+        $this->assertSame(77, $request['message_thread_id']);
+        $this->assertSame('fixture_image_file_id', $request['photo']);
+        $this->assertStringContainsString('NOT verified', $request['caption']);
+        $this->assertTrue($request['protect_content']);
+        TelegramImageReader::assertPromptedTimes(1);
+        TelegramImageReader::assertPrompted(fn (AgentPrompt $p) => count($p->attachments) === 1);
+        CustomerServiceAgent::assertNeverPrompted();
+    }
+
+    public function test_general_image_does_not_notify_admin_and_image_documents_are_supported(): void
+    {
+        $this->imageFixture(kind: 'general');
+        $this->receive($this->photoUpdate(document: true))->assertOk();
+        app(Runner::class)->process($this->id());
+        $this->assertSame('document', DB::table('customer_service_messages')->value('image_source'));
+        $this->assertSame('delivered', DB::table('customer_service_messages')->value('status'));
+        $this->assertSame(0, DB::table('customer_service_receipt_notices')->count());
+        Http::assertNotSent(fn ($r) => str_ends_with($r->url(), '/sendPhoto') || str_ends_with($r->url(), '/sendDocument'));
+    }
+
+    public function test_disabled_oversized_or_non_image_uploads_never_download_or_call_ai(): void
+    {
+        $this->receive($this->photoUpdate())->assertOk();
+        $this->assertFalse((bool) DB::table('customer_service_messages')->value('uses_ai'));
+        DB::table('telegram_support_settings')->where('id', 1)->update(['images_enabled' => true]);
+        $large = $this->photoUpdate(2);
+        $large['message']['photo'][0]['file_size'] = 6000000;
+        $this->receive($large)->assertOk();
+        $pdf = $this->photoUpdate(3, true);
+        $pdf['message']['document']['mime_type'] = 'application/pdf';
+        $this->receive($pdf)->assertOk();
+        $this->assertSame(0, DB::table('customer_service_messages')->where('uses_ai', true)->count());
+        $this->assertSame(0, DB::table('customer_service_budget_days')->value('requests'));
+        Http::assertNothingSent();
+    }
+
+    public function test_image_download_rejects_unsafe_paths_before_downloading_or_calling_ai(): void
+    {
+        $this->imageFixture();
+        Http::swap(new Factory);
+        Http::preventStrayRequests();
+        Http::fake(['https://api.telegram.org/*/getFile' => Http::response(['ok' => true, 'result' => ['file_path' => '../../.env']]),
+            'https://api.telegram.org/*' => Http::response(['ok' => true, 'result' => ['message_id' => 501]])]);
+        $this->receive($this->photoUpdate())->assertOk();
+        app(Runner::class)->process($this->id());
+        $this->assertSame('generation_unavailable', DB::table('customer_service_messages')->value('error_code'));
+        $this->assertSame(0, DB::table('ai_balance_entries')->count());
+        Http::assertNotSent(fn ($r) => str_contains($r->url(), '/file/bot'));
+        TelegramImageReader::assertNeverPrompted();
+    }
+
+    public function test_receipt_notice_retries_only_telegram_429_and_never_repeats_the_model(): void
+    {
+        $this->imageFixture();
+        $this->receive($this->photoUpdate())->assertOk();
+        app(Runner::class)->process($this->id());
+        Http::swap(new Factory);
+        Http::preventStrayRequests();
+        Http::fake(['https://api.telegram.org/*/sendPhoto' => Http::sequence()->push(['ok' => false, 'error_code' => 429, 'parameters' => ['retry_after' => 2]], 429)
+            ->push(['ok' => true, 'result' => ['message_id' => 502]])]);
+        $notices = app(ReceiptNotices::class);
+        $this->assertSame(2, $notices->process($this->id()));
+        $this->travel(3)->seconds();
+        $notices->process($this->id());
+        $this->assertSame('sent', DB::table('customer_service_receipt_notices')->value('status'));
+        TelegramImageReader::assertPromptedTimes(1);
+        $this->assertSame(1, DB::table('ai_balance_entries')->count());
+    }
+
+    public function test_ambiguous_admin_notice_is_terminal_and_changed_destination_cancels_pending_notice(): void
+    {
+        $this->imageFixture();
+        $this->receive($this->photoUpdate())->assertOk();
+        app(Runner::class)->process($this->id());
+        Http::swap(new Factory);
+        Http::preventStrayRequests();
+        $attempts = 0;
+        Http::fake(['https://api.telegram.org/*/sendPhoto' => function () use (&$attempts) {
+            $attempts++;
+            throw new \RuntimeException('Fixture timeout');
+        }]);
+        $notices = app(ReceiptNotices::class);
+        $notices->process($this->id());
+        $notices->process($this->id());
+        $this->assertSame(1, $attempts);
+        $this->assertSame('delivery_unknown', DB::table('customer_service_receipt_notices')->value('status'));
+        DB::table('customer_service_receipt_notices')->update(['status' => 'pending']);
+        DB::table('telegram_support_settings')->where('id', 1)->update(['admin_group_chat_id' => -100999]);
+        $notices->process($this->id());
+        $this->assertSame('cancelled', DB::table('customer_service_receipt_notices')->value('status'));
+        $this->assertSame(1, $attempts);
+    }
+
+    public function test_receipt_reset_erases_evidence_and_prevents_admin_forwarding(): void
+    {
+        $this->imageFixture();
+        $this->receive($this->photoUpdate())->assertOk();
+        app(Runner::class)->process($this->id());
+        $this->receive($this->update('/reset', 2))->assertOk();
+        $row = DB::table('customer_service_messages')->where('update_id', 1)->first();
+        $this->assertNull($row->image_file_id_encrypted);
+        $this->assertNull($row->image_report_encrypted);
+        app(ReceiptNotices::class)->process($this->id());
+        $this->assertSame('cancelled', DB::table('customer_service_receipt_notices')->value('status'));
+        Http::assertNotSent(fn ($r) => str_ends_with($r->url(), '/sendPhoto'));
+    }
+
+    public function test_receipt_notice_settings_require_a_real_group_for_the_current_bot(): void
+    {
+        $this->imageFixture(notices: false);
+        try {
+            $this->officeSettings(['images_enabled' => true, 'receipt_notices_enabled' => true, 'admin_group_chat_id' => -100999]);
+            $this->fail('Unknown admin group must be rejected.');
+        } catch (ValidationException $error) {
+            $this->assertArrayHasKey('admin_group_chat_id', $error->errors());
+        }
+        $this->officeSettings(['images_enabled' => true, 'receipt_notices_enabled' => true, 'admin_group_chat_id' => -100777]);
+        $this->assertTrue(app(Settings::class)->get()['receipt_notices_enabled']);
+        $this->officeSettings(['bot_token' => '654321:replacement_token_12345678901234567890']);
+        $this->assertFalse(app(Settings::class)->get()['receipt_notices_enabled']);
+        $this->assertNull(app(Settings::class)->get()['admin_group_chat_id']);
+    }
+
+    public function test_group_photo_caption_requires_approval_and_keeps_the_source_topic(): void
+    {
+        $this->imageFixture();
+        $value = $this->photoUpdate(document: true);
+        $value['message']['chat'] = ['id' => -1009001, 'type' => 'supergroup', 'title' => 'Support group'];
+        $value['message']['caption'] = '@fixture_support_bot Read receipt';
+        $value['message']['caption_entities'] = [['type' => 'mention', 'offset' => 0, 'length' => 20]];
+        $value['message']['message_thread_id'] = 88;
+        $this->receive($value)->assertOk();
+        $this->assertSame(0, DB::table('jobs')->count());
+        $this->approveGroups();
+        $value['update_id'] = 2;
+        $value['message']['message_id'] = 2;
+        $this->receive($value)->assertOk();
+        app(Runner::class)->process($this->id(2));
+        Http::assertSent(fn ($r) => str_ends_with($r->url(), '/sendMessage') && $r['chat_id'] === -1009001 && $r['message_thread_id'] === 88);
+        app(ReceiptNotices::class)->process($this->id(2));
+        Http::assertSent(fn ($r) => str_ends_with($r->url(), '/sendDocument') && $r['chat_id'] === -100777 && $r['message_thread_id'] === 77);
+    }
+
+    public function test_invalid_extraction_is_not_forwarded_but_incurred_usage_is_recorded(): void
+    {
+        $report = $this->imageFixture();
+        $report['kind'] = 'approve_payment';
+        TelegramImageReader::fake([$report]);
+        $this->receive($this->photoUpdate())->assertOk();
+        app(Runner::class)->process($this->id());
+        $this->assertSame('generation_unavailable', DB::table('customer_service_messages')->value('error_code'));
+        $this->assertNotNull(DB::table('customer_service_messages')->value('charged_at'));
+        $this->assertSame(1, DB::table('ai_balance_entries')->count());
+        $this->assertSame(0, DB::table('customer_service_receipt_notices')->count());
+    }
+
+    public function test_expired_image_references_are_pruned_and_pending_notices_are_cancelled(): void
+    {
+        $this->imageFixture();
+        $this->receive($this->photoUpdate())->assertOk();
+        app(Runner::class)->process($this->id());
+        DB::table('customer_service_messages')->update(['created_at' => now('UTC')->subDays(31)]);
+        $this->artisan('customer-service:prune')->assertSuccessful();
+        $this->assertNull(DB::table('customer_service_messages')->value('image_file_id_encrypted'));
+        $this->assertNull(DB::table('customer_service_messages')->value('image_report_encrypted'));
+        $this->assertSame('cancelled', DB::table('customer_service_receipt_notices')->value('status'));
+    }
+
+    private function typingFixture(): TypingIndicator
+    {
+        $typing = new class extends TypingIndicator
+        {
+            public float $time = 100;
+
+            protected function clock(): float
+            {
+                return $this->time;
+            }
+        };
+        $this->app->instance(TypingIndicator::class, $typing);
+
+        return $typing;
+    }
+
+    public function test_typing_refreshes_during_model_progress_and_never_leaks_into_the_next_job(): void
+    {
+        $typing = $this->typingFixture();
+        $this->receive($this->update())->assertOk();
+        Http::assertNothingSent();
+        CustomerServiceAgent::fake(function () use ($typing) {
+            $this->assertTrue($typing->active());
+            $typing->time += 3;
+            $typing->tick();
+            Http::assertSentCount(1);
+            $previousCalls = 0;
+            $middleware = (new RefreshTelegramTyping)(function ($request, $options) use ($typing) {
+                $typing->time += 1;
+                $this->assertSame(0, $options['progress'](0, 0, 0, 0));
+                $typing->time += 4;
+                $this->assertSame(0, $options['progress'](100, 50, 0, 0));
+
+                return Create::promiseFor(new Response(200));
+            });
+            $middleware(new Request('POST', 'https://api.deepseek.com/v1/chat/completions'),
+                ['progress' => function () use (&$previousCalls) {
+                    $previousCalls++;
+
+                    return 0;
+                }])->wait();
+            $this->assertSame(2, $previousCalls);
+
+            return 'Answer';
+        });
+        app(Runner::class)->process($this->id());
+        $this->assertFalse($typing->active());
+        $typing->time += 10;
+        $typing->tick();
+        Http::assertSentCount(4); // Three ephemeral actions and one real answer.
+        CustomerServiceAgent::fake(['Another answer']);
+        $this->receive($this->update('Other chat', 2, 9002))->assertOk();
+        app(Runner::class)->process($this->id(2));
+        $actions = Http::recorded(fn ($r) => str_ends_with($r->url(), '/sendChatAction'))->map(fn ($pair) => $pair[0]['chat_id'])->values()->all();
+        $this->assertSame([9001, 9001, 9001, 9002], $actions);
+        $this->assertSame(2, DB::table('ai_balance_entries')->count());
+    }
+
+    public function test_typing_rate_limit_is_respected_without_repeating_or_blocking_the_answer(): void
+    {
+        $typing = $this->typingFixture();
+        Http::swap(new Factory);
+        Http::preventStrayRequests();
+        Http::fake([
+            'https://api.telegram.org/*/sendChatAction' => Http::sequence()->push(['ok' => false, 'error_code' => 429, 'parameters' => ['retry_after' => 8]], 429)
+                ->push(['ok' => true, 'result' => true]),
+            'https://api.telegram.org/*/sendMessage' => Http::response(['ok' => true, 'result' => ['message_id' => 501]]),
+        ]);
+        $this->receive($this->update())->assertOk();
+        CustomerServiceAgent::fake(function () use ($typing) {
+            $typing->time += 4;
+            $typing->tick();
+            Http::assertSentCount(1);
+            $typing->time += 4;
+            $typing->tick();
+            Http::assertSentCount(2);
+
+            return 'Answer despite typing rate limit';
+        });
+        app(Runner::class)->process($this->id());
+        $this->assertSame('delivered', DB::table('customer_service_messages')->value('status'));
+        $this->assertSame(1, DB::table('ai_balance_entries')->count());
+        Http::assertSentCount(3);
+        CustomerServiceAgent::assertPromptedTimes(1);
+    }
+
+    public function test_typing_transport_failure_cannot_fail_or_retry_the_model(): void
+    {
+        $typing = $this->typingFixture();
+        Http::swap(new Factory);
+        Http::preventStrayRequests();
+        Http::fake([
+            'https://api.telegram.org/*/sendChatAction' => fn () => throw new \RuntimeException('Fixture transport failure; must stay private'),
+            'https://api.telegram.org/*/sendMessage' => Http::response(['ok' => true, 'result' => ['message_id' => 501]]),
+        ]);
+        $this->receive($this->update())->assertOk();
+        app(Runner::class)->process($this->id());
+        $this->assertSame('delivered', DB::table('customer_service_messages')->value('status'));
+        $this->assertFalse($typing->active());
+        $this->assertSame(1, DB::table('ai_balance_entries')->count());
+        CustomerServiceAgent::assertPromptedTimes(1);
+    }
+
+    public function test_typing_stops_when_group_is_disabled_and_uses_the_correct_topic(): void
+    {
+        $typing = $this->typingFixture();
+        $this->receive($this->groupUpdate())->assertOk();
+        $this->approveGroups();
+        $this->receive($this->groupUpdate(2, thread: 77))->assertOk();
+        CustomerServiceAgent::fake(function () use ($typing) {
+            Http::assertSent(fn ($r) => str_ends_with($r->url(), '/sendChatAction') && $r['chat_id'] === -1009001 && $r['message_thread_id'] === 77);
+            DB::table('telegram_support_groups')->update(['status' => 'disabled']);
+            $typing->time += 4;
+            $typing->tick();
+            $this->assertFalse($typing->active());
+            $typing->time += 4;
+            $typing->tick();
+            Http::assertSentCount(1);
+
+            return 'Suppressed answer';
+        });
+        app(Runner::class)->process($this->id(2));
+        Http::assertNotSent(fn ($r) => str_ends_with($r->url(), '/sendMessage'));
+        $this->assertSame(1, DB::table('ai_balance_entries')->count());
+    }
+
+    private function groupUpdate(int $update = 1, int $chat = -1009001, int $sender = 9001, int $thread = 0): array
+    {
+        $value = $this->update('@fixture_support_bot What is MKPOS?', $update, $sender);
+        $value['message']['chat'] = ['type' => 'supergroup', 'id' => $chat, 'title' => 'Support '.$chat];
+        $value['message']['entities'] = [['type' => 'mention', 'offset' => 0, 'length' => 20]];
+        if ($thread) {
+            $value['message']['message_thread_id'] = $thread;
+        }
+
+        return $value;
+    }
+
+    private function approveGroups(): void
+    {
+        DB::table('telegram_support_settings')->where('id', 1)->update(['groups_enabled' => true, 'bot_username' => 'fixture_support_bot']);
+        DB::table('telegram_support_groups')->update(['status' => 'approved']);
+    }
+
+    public function test_multiple_groups_are_discovered_pending_and_only_approved_addressed_messages_are_queued(): void
+    {
+        $this->receive($this->groupUpdate())->assertOk();
+        $this->receive($this->groupUpdate(2, -1009002))->assertOk();
+        $this->assertSame(2, DB::table('telegram_support_groups')->where('status', 'pending')->count());
+        $this->assertSame(0, DB::table('jobs')->count());
+        $this->approveGroups();
+        $this->receive($this->groupUpdate(3))->assertOk();
+        $this->receive($this->groupUpdate(4, -1009002))->assertOk();
+        $ordinary = $this->groupUpdate(5);
+        unset($ordinary['message']['entities']);
+        $this->receive($ordinary)->assertOk();
+        $this->assertSame(2, DB::table('jobs')->count());
+        $this->assertSame(2, DB::table('customer_service_conversations')->count());
+        $this->assertSame('What is MKPOS?', Crypt::decryptString(DB::table('customer_service_messages')->where('update_id', 3)->value('input')));
+        Http::assertNothingSent();
+        CustomerServiceAgent::assertNeverPrompted();
+    }
+
+    public function test_group_history_is_isolated_by_group_sender_and_topic_and_delivery_preserves_topic(): void
+    {
+        $this->receive($this->groupUpdate())->assertOk();
+        $this->approveGroups();
+        $this->receive($this->groupUpdate(2, thread: 77))->assertOk();
+        app(Runner::class)->process($this->id(2));
+        Http::assertSent(fn ($r) => $r['chat_id'] === -1009001 && $r['message_thread_id'] === 77);
+        foreach ([$this->groupUpdate(3, sender: 9002, thread: 77), $this->groupUpdate(4, thread: 88), $this->update('Private question', 5)] as $update) {
+            $this->receive($update)->assertOk();
+        }
+        CustomerServiceAgent::fake(function (AgentPrompt $prompt) {
+            $this->assertSame([], $prompt->agent->history);
+
+            return 'Isolated answer';
+        });
+        foreach ([3, 4, 5] as $id) {
+            app(Runner::class)->process($this->id($id));
+        }
+        $this->assertSame(4, DB::table('customer_service_conversations')->count());
+    }
+
+    public function test_group_limits_apply_across_topics_and_users_and_private_chats_are_unaffected(): void
+    {
+        $this->receive($this->groupUpdate())->assertOk();
+        $this->approveGroups();
+        DB::table('telegram_support_groups')->update(['daily_limit' => 2, 'per_user_daily_limit' => 1]);
+        foreach ([$this->groupUpdate(2), $this->groupUpdate(3, thread: 77), $this->groupUpdate(4, sender: 9002), $this->groupUpdate(5, sender: 9003), $this->update('Private', 6)] as $update) {
+            $this->receive($update)->assertOk();
+        }
+        $this->assertSame(3, DB::table('customer_service_messages')->where('uses_ai', true)->count());
+        $this->assertFalse((bool) DB::table('customer_service_messages')->where('update_id', 3)->value('uses_ai'));
+        $this->assertFalse((bool) DB::table('customer_service_messages')->where('update_id', 5)->value('uses_ai'));
+    }
+
+    public function test_group_reply_trigger_utf16_mentions_and_membership_removal_are_checked(): void
+    {
+        $this->receive($this->groupUpdate())->assertOk();
+        $this->approveGroups();
+        $reply = $this->groupUpdate(2);
+        unset($reply['message']['entities']);
+        $reply['message']['text'] = 'Tell me more';
+        $reply['message']['reply_to_message'] = ['message_id' => 501, 'from' => ['id' => 123456, 'is_bot' => true]];
+        $this->receive($reply)->assertOk();
+        $mention = $this->groupUpdate(3);
+        $mention['message']['text'] = '😀 @fixture_support_bot Question';
+        $mention['message']['entities'][0]['offset'] = 3;
+        $this->receive($mention)->assertOk();
+        $this->assertSame(2, DB::table('jobs')->count());
+        $this->receive(['update_id' => 4, 'my_chat_member' => ['chat' => $reply['message']['chat'],
+            'new_chat_member' => ['user' => ['id' => 123456], 'status' => 'left']]])->assertOk();
+        app(Runner::class)->process($this->id(2));
+        $this->assertSame('cancelled', DB::table('customer_service_messages')->where('update_id', 2)->value('status'));
+        Http::assertNothingSent();
+        CustomerServiceAgent::assertNeverPrompted();
+    }
+
+    public function test_office_group_management_is_super_admin_only_scoped_and_versioned(): void
+    {
+        Schema::create('office_activity_logs', function (Blueprint $table) {
+            $table->id();
+            $table->unsignedBigInteger('admin_id');
+            $table->string('admin_name');
+            $table->string('admin_email');
+            $table->string('action');
+            $table->string('method');
+            $table->string('path');
+            $table->text('details');
+            $table->timestamp('created_at');
+        });
+        $path = '/api/office/telegram-support/groups';
+        $this->receive($this->groupUpdate())->assertOk();
+        $this->getJson($path)->assertUnauthorized();
+        $admin = new PlatformAdmin(['name' => 'Fixture', 'email' => 'fixture@example.test', 'is_active' => true, 'role' => 'admin']);
+        $admin->id = 1;
+        $this->actingAs($admin, 'office');
+        $this->getJson($path)->assertForbidden();
+        $this->postJson($path, ['chat_id' => -200, 'title' => 'Other'])->assertForbidden();
+        $this->putJson($path.'/1', [])->assertForbidden();
+        $admin->role = 'super_admin';
+        $this->getJson($path)->assertOk()->assertJsonPath('total', 1)->assertJsonPath('groups.0.status', 'pending');
+        $body = ['version' => 1, 'status' => 'approved', 'reply_mentions' => true, 'reply_to_bot' => false, 'daily_limit' => 50, 'per_user_daily_limit' => 5];
+        $this->putJson($path.'/1', $body)->assertOk();
+        $this->putJson($path.'/1', $body)->assertConflict();
+        $this->putJson($path.'/1', array_replace($body, ['version' => 2, 'reply_mentions' => false]))->assertUnprocessable();
+        $this->postJson($path, ['chat_id' => 100, 'title' => 'Invalid'])->assertUnprocessable();
+        $this->postJson($path, ['chat_id' => -200, 'title' => 'Second group'])->assertOk();
+        $this->postJson($path, ['chat_id' => -200, 'title' => 'Second group'])->assertConflict();
+        DB::table('telegram_support_groups')->insert(['bot_id' => 999, 'chat_id' => -300, 'title' => 'Other bot']);
+        $this->getJson($path.'?search=Second&per_page=10')->assertOk()->assertJsonPath('total', 1)->assertJsonPath('groups.0.chat_id', '-200');
+        $this->getJson($path.'?status=approved')->assertOk()->assertJsonPath('total', 1);
+        $this->putJson($path.'/3', $body)->assertNotFound();
+    }
+
+    public function test_group_disable_during_generation_suppresses_delivery_but_records_incurred_cost(): void
+    {
+        $this->receive($this->groupUpdate())->assertOk();
+        $this->approveGroups();
+        $this->receive($this->groupUpdate(2))->assertOk();
+        CustomerServiceAgent::fake(function () {
+            DB::table('telegram_support_groups')->update(['status' => 'disabled']);
+
+            return 'Already generated';
+        });
+        app(Runner::class)->process($this->id(2));
+        $this->assertSame('cancelled', DB::table('customer_service_messages')->value('status'));
+        $this->assertSame(1, DB::table('ai_balance_entries')->count());
+        Http::assertNotSent(fn ($r) => str_ends_with($r->url(), '/sendMessage'));
+    }
+
+    public function test_global_group_disable_cancels_pending_group_work_but_not_private_work(): void
+    {
+        $this->receive($this->groupUpdate())->assertOk();
+        $this->approveGroups();
+        $this->receive($this->groupUpdate(2))->assertOk();
+        $this->receive($this->update('Private', 3))->assertOk();
+        $this->officeSettings(['groups_enabled' => false]);
+        $this->officeSettings(['groups_enabled' => true]);
+        app(Runner::class)->process($this->id(2));
+        $this->assertSame('cancelled', DB::table('customer_service_messages')->where('update_id', 2)->value('status'));
+        $this->assertSame('queued', DB::table('customer_service_messages')->where('update_id', 3)->value('status'));
+        CustomerServiceAgent::assertNeverPrompted();
+    }
+
+    public function test_group_reset_command_clears_only_the_requesting_participant(): void
+    {
+        $this->receive($this->groupUpdate())->assertOk();
+        $this->approveGroups();
+        $this->receive($this->groupUpdate(2))->assertOk();
+        $this->receive($this->groupUpdate(3, sender: 9002))->assertOk();
+        $reset = $this->groupUpdate(4);
+        $reset['message']['text'] = '/reset@fixture_support_bot';
+        $reset['message']['entities'] = [['type' => 'bot_command', 'offset' => 0, 'length' => 26]];
+        $this->receive($reset)->assertOk();
+        $this->assertSame('cancelled', DB::table('customer_service_messages')->where('update_id', 2)->value('status'));
+        $this->assertNull(DB::table('customer_service_messages')->where('update_id', 2)->value('input'));
+        $this->assertSame('queued', DB::table('customer_service_messages')->where('update_id', 3)->value('status'));
+        $this->assertNotNull(DB::table('customer_service_messages')->where('update_id', 3)->value('input'));
+        $this->assertFalse((bool) DB::table('customer_service_messages')->where('update_id', 4)->value('uses_ai'));
     }
 
     private function receive(array $update)
@@ -178,8 +713,9 @@ class TelegramCustomerServiceTest extends TestCase
         $this->assertSame(1, DB::table('ai_balance_entries')->count());
         $this->assertSame('Telegram customer service AI', DB::table('ai_balance_entries')->value('description'));
         CustomerServiceAgent::assertPromptedTimes(1);
-        Http::assertSentCount(1);
-        Http::assertSent(fn ($request) => $request['chat_id'] === 9001 && $request['text'] === 'MKPOS helps you manage your shop.' && ! isset($request['parse_mode']));
+        Http::assertSentCount(2);
+        Http::assertSent(fn ($r) => str_ends_with($r->url(), '/sendChatAction') && $r['action'] === 'typing' && $r['chat_id'] === 9001);
+        Http::assertSent(fn ($request) => str_ends_with($request->url(), '/sendMessage') && $request['chat_id'] === 9001 && $request['text'] === 'MKPOS helps you manage your shop.' && ! isset($request['parse_mode']));
     }
 
     public function test_commands_and_unsupported_media_do_not_use_ai_credit(): void
@@ -226,7 +762,7 @@ class TelegramCustomerServiceTest extends TestCase
             return true;
         });
         $this->assertSame(789, app(TenantContext::class)->id());
-        Http::assertSent(fn ($request) => $request['chat_id'] === 9002 && $request['text'] === 'Public package explanation');
+        Http::assertSent(fn ($request) => str_ends_with($request->url(), '/sendMessage') && $request['chat_id'] === 9002 && $request['text'] === 'Public package explanation');
     }
 
     public function test_reset_suppresses_an_in_flight_reply_but_records_incurred_usage(): void
@@ -243,7 +779,7 @@ class TelegramCustomerServiceTest extends TestCase
         $this->assertNull($row->input);
         $this->assertNull($row->reply);
         $this->assertSame(1, DB::table('ai_balance_entries')->count());
-        Http::assertNothingSent();
+        Http::assertNotSent(fn ($r) => str_ends_with($r->url(), '/sendMessage'));
     }
 
     public function test_telegram_rate_limit_retries_only_the_saved_answer_without_another_model_call(): void
@@ -251,8 +787,11 @@ class TelegramCustomerServiceTest extends TestCase
         $this->receive($this->update())->assertOk();
         Http::swap(new Factory);
         Http::preventStrayRequests();
-        Http::fakeSequence()->push(['ok' => false, 'error_code' => 429, 'parameters' => ['retry_after' => 2]], 429)
-            ->push(['ok' => true, 'result' => ['message_id' => 502]]);
+        Http::fake([
+            'https://api.telegram.org/*/sendChatAction' => Http::response(['ok' => true, 'result' => true]),
+            'https://api.telegram.org/*/sendMessage' => Http::sequence()->push(['ok' => false, 'error_code' => 429, 'parameters' => ['retry_after' => 2]], 429)
+                ->push(['ok' => true, 'result' => ['message_id' => 502]]),
+        ]);
         $this->assertSame(2, app(Runner::class)->process($this->id()));
         $this->assertSame('ready', DB::table('customer_service_messages')->value('status'));
         $this->travel(3)->seconds();
@@ -368,7 +907,7 @@ class TelegramCustomerServiceTest extends TestCase
         app(Runner::class)->process($this->id());
         app(Runner::class)->process($this->id());
         $this->assertSame('failed', DB::table('customer_service_messages')->value('status'));
-        Http::assertSentCount(1);
+        Http::assertSentCount(2);
         CustomerServiceAgent::assertPromptedTimes(1);
     }
 }

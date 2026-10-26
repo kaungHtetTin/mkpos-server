@@ -292,6 +292,9 @@ Route::middleware(['office.auth', AuditOfficeAction::class])->prefix('office')->
     Route::get('/error-reports/{report}/images/{index}', [App\Http\Controllers\Office\ErrorReportController::class, 'image'])->whereNumber(['report', 'index']);
     Route::get('/ai-assistant', [AiAssistantSettingsController::class, 'show']);
     Route::get('/telegram-support', [\App\Http\Controllers\Office\TelegramSupportSettingsController::class, 'show']);
+    Route::get('/telegram-support/groups', [\App\Http\Controllers\Office\TelegramSupportGroupsController::class, 'index']);
+    Route::post('/telegram-support/groups', [\App\Http\Controllers\Office\TelegramSupportGroupsController::class, 'store']);
+    Route::put('/telegram-support/groups/{group}', [\App\Http\Controllers\Office\TelegramSupportGroupsController::class, 'update'])->whereNumber('group');
     Route::put('/telegram-support', [\App\Http\Controllers\Office\TelegramSupportSettingsController::class, 'update']);
     Route::post('/telegram-support/test-connection', [\App\Http\Controllers\Office\TelegramSupportSettingsController::class, 'test'])->middleware('throttle:5,1');
     Route::post('/telegram-support/register-webhook', [\App\Http\Controllers\Office\TelegramSupportSettingsController::class, 'register'])->middleware('throttle:5,1');

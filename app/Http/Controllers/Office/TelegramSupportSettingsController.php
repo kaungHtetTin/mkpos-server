@@ -22,7 +22,9 @@ class TelegramSupportSettingsController extends Controller
 
     public function update(Request $request, Settings $settings): array
     {
-        $data = $request->validate(['version' => 'required|integer|min:0', 'enabled' => 'required|boolean',
+        $data = $request->validate(['version' => 'required|integer|min:0', 'enabled' => 'required|boolean', 'groups_enabled' => 'sometimes|boolean',
+            'images_enabled' => 'sometimes|boolean', 'receipt_notices_enabled' => 'sometimes|boolean',
+            'admin_group_chat_id' => 'sometimes|nullable|integer|min:-4503599627370495|max:-1', 'admin_group_thread_id' => 'sometimes|integer|min:0|max:2147483647',
             'webhook_url' => 'nullable|string|max:2048', 'daily_limit' => 'required|integer|min:1|max:10000',
             'per_chat_daily_limit' => 'required|integer|min:1|max:500', 'bot_token' => $this->tokenRules()]);
         $settings->save($data);

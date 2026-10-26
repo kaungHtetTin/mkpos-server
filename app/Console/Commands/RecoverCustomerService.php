@@ -3,6 +3,7 @@
 namespace App\Console\Commands;
 
 use App\Services\TelegramSupport\Inbox;
+use App\Services\TelegramSupport\ReceiptNotices;
 use App\Services\TelegramSupport\Runner;
 use App\Services\TelegramSupport\Settings;
 use Illuminate\Console\Command;
@@ -32,6 +33,7 @@ class RecoverCustomerService extends Command
         foreach ($pending as $id) {
             $inbox->dispatch($id);
         }
+        app(ReceiptNotices::class)->recover(max(1, min(100, (int) $this->option('limit'))));
 
         return self::SUCCESS;
     }

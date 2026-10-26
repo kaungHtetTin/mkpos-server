@@ -1,5 +1,148 @@
 # MKPOS customer-service Telegram agent
 
+## Images and manual payment-receipt review
+
+Office → Settings → Telegram customer service → Images & payment receipt review:
+
+1. Enable Image reading to accept Telegram photos or JPEG/PNG/WebP image documents
+   up to 5 MB. Image documents must have a matching image filename extension.
+2. Add the bot to a private administrator group. Register the webhook once if group
+   membership updates have not been enabled. Copy the discovered negative group ID
+   from the Telegram groups directory.
+3. Enable Admin receipt notices, enter that group ID, and optionally set a forum
+   topic ID (0 uses the default chat). Save settings. This explicitly authorizes
+   sharing receipt images and extracted details with that group.
+
+The selected notice destination must belong to the current bot, have confirmed bot
+membership, and not be disabled. It is independently selected by a super admin;
+it need not be approved for public AI replies. The Group replies switch controls
+incoming public support questions and is not required for outgoing admin notices.
+Replacing the bot token clears the old notice destination and disables notices.
+Turning image reading off in Office also switches notices off.
+
+The webhook stores an encrypted Telegram image reference and queues the work.
+It does not download files, call AI or send admin messages. Existing global,
+private-chat/group, per-user, minute and pending-work admission limits apply to
+images as well as text. In groups the caption must mention the bot, or the image
+must reply to the bot, under that group's approved trigger policy.
+
+The worker downloads only bounded files from the fixed Telegram API host, refuses
+redirects/path traversal, verifies JPEG/PNG/WebP bytes and pixel dimensions, and
+re-encodes a metadata-free JPEG of at most 2400 pixels on its longest edge before
+passing it to the image reader. No original file URL or token is exposed to AI or
+written into queue payloads. No image files are saved in public storage.
+
+General screenshots receive an image explanation in the originating chat. Detected
+payment receipts receive an extraction of the visible amount, currency, provider,
+recipient name/masked account, reference, date and screenshot status. This does not
+check a bank transaction, authenticate the screenshot, approve a payment, create a
+billing request, credit a wallet or activate a subscription. An admin must verify
+funds manually. The image reader has no tools or account permissions.
+
+When enabled, a separate durable notice job sends the receipt image with extracted
+details to the saved admin group/topic, clearly marked MANUAL REVIEW REQUIRED and
+NOT verified. Other images are not forwarded. Destination is determined by saved
+settings, never caption/model output. Photo/document file IDs retain their Telegram
+type. One notice exists per admitted message. An explicit Telegram 429 schedules
+only the notice for retry; ambiguous sends are terminal and are not automatically
+repeated. The existing customer-service recover command recovers lost notice
+dispatches and marks interrupted sending as delivery_unknown. No extra cron or
+worker is needed. Per-message deduplication is not proof of payment uniqueness.
+
+Image references and extracted reports are encrypted with APP_KEY. `/reset`
+erases that participant's saved references/reports and cancels pending notices;
+daily pruning does the same for data older than 30 days. Copies already sent in
+Telegram/admin groups are not removed. `/help` and `/privacy` disclose image support
+and configured receipt sharing. Incurred model usage is billed once even when
+extraction validation fails; no model call is made just to retry an admin notice.
+
+Deploy backend and Office updates and run only the new migration:
+
+```sh
+php artisan migrate --path=database/migrations/2026_10_27_000001_telegram_images_and_receipt_notices.php --force
+php artisan optimize:clear
+```
+
+The earlier group migration must already be installed. These settings default to
+disabled; uploading does not contact Telegram or enable sharing. Cron workers load
+new PHP on the next invocation. Restart an existing persistent customer-service
+worker after deploying. Test coverage uses faked Telegram/model calls and bounded
+generated image fixtures, not live customer receipts.
+
+## Typing indicator
+
+The customer-service worker sends Telegram `sendChatAction` with `action=typing`
+when it starts generating an AI answer. With PHP cURL, transfer-progress callbacks
+refresh it approximately every four seconds, including while waiting for the
+provider's first response byte. The normal non-streaming agent call and billing
+remain unchanged. Nothing is sent while a job is waiting for cron or another job;
+commands, already-generated delivery retries and rejected updates do not start
+typing. No new worker, cron job, Office setting or migration is needed for typing.
+
+The worker checks the current bot identity, enabled status, message state,
+conversation version and group permission before each action. Forum actions use
+the same topic as the incoming message. Reset, cancellation, permission withdrawal
+or bot changes stop refreshes. The in-memory scope is cleared even if generation
+throws, so later jobs cannot inherit another conversation's typing state.
+
+Each action has a one-second connection/total timeout. Telegram `retry_after` is
+respected; transient failures back off for 15 seconds, permanent rejection stops
+actions for that run. Typing failures never trigger another model call or fail an
+answer. The worker stops refreshing after generation and Telegram clears the hint
+when the reply arrives or the short action lifetime expires. The PHP stream
+transport may not provide callbacks while idle, so enable cURL for continuous
+refreshes. There are no background child processes or shell commands involved.
+
+After uploading the PHP update, run `php artisan optimize:clear`. Cron workers pick
+it up on their next invocation; restart a persistent customer-service worker.
+
+## Multiple Telegram groups
+
+Office → Settings → Telegram customer service now includes a Group replies switch
+and a paginated group directory. Group replies default to disabled. Each group is
+scoped to the currently saved bot and starts pending approval. Add the bot to each
+group, register the webhook again once (to include `my_chat_member` updates), then
+review each discovered group through Actions → Manage group. Groups can also be
+added by their negative Telegram chat ID; a manually added group cannot receive
+answers until a real group update confirms the bot is a member.
+
+Each group has independent approval/disabled status, mention and direct-reply
+triggers, a daily group allowance and a daily per-user allowance. The global daily
+AI allowance covers private chats and every group combined. The existing per-chat
+daily allowance applies only to private chats. Budgets reset at midnight Yangon
+time. Membership/title discovery does not store the unaddressed message text or
+call AI. Message edits, channels, anonymous bot senders, and ordinary group chatter
+do not trigger answers.
+
+For mentions, use the saved registered bot username, such as
+`@mkpos_help_bot Explain MKPOS packages`. Keep Telegram group joining enabled and
+Group Privacy enabled in BotFather. The bot needs permission to send messages;
+administrator access is not necessary. Group history is isolated by bot, group,
+sender and topic. A user's `/reset` resets only their own conversation in that topic,
+not other participants or private chats. Group replies preserve the topic ID.
+
+Permission is checked again before generation and before delivery. Changing a
+group's settings cancels its queued replies and invalidates its prior context;
+turning Group replies off cancels pending group work without affecting private
+chats. In-flight model calls may still incur a charge, but their answer is suppressed
+if approval has been withdrawn. A Telegram request already in transit cannot be
+recalled. Group activity exposes only timestamps, request counts and safe error
+codes to Office, not conversation text or credentials.
+
+Deploy the updated PHP source and Office build, then run only this migration:
+
+```sh
+php artisan migrate --path=database/migrations/2026_10_26_000008_add_telegram_support_groups.php --force
+```
+
+The migration preserves existing private chats and makes chat IDs signed to support
+negative group IDs. Its rollback intentionally retains the schema and history.
+Run the existing customer-service cron worker; no separate worker per group is
+needed. Restart an existing persistent customer-service worker after deploying new
+code. Office group settings use version checks to reject stale edits.
+
+The original 3.0.0 release archives predate this feature.
+
 This is a separate Laravel AI agent and `customer-service` database queue. It
 answers public questions about MKPOS in English or Myanmar using the existing
 official knowledge catalogue. It does not replace Wyne Wyne or Sales AI, and
@@ -112,8 +255,10 @@ cannot choose PHP classes, HTTP targets, databases or account identities.
 
 No business records, account/profile tools, approvals, wallet adjustments,
 refunds, shell/SQL execution or private/admin MCP connections are granted. Human
-contact links do not notify a person or create a support ticket. Files, images,
-voice notes, group/channel messages and messages from bots are not processed by
+contact links do not notify a person or create a support ticket. The separately
+configured receipt-image flow can notify the saved admin group. Images require
+Image reading to be enabled; other files, voice notes, channel messages,
+unapproved/unaddressed group messages and messages from bots are not processed by
 the model. Knowledge search/results and the model tool loop are bounded.
 
 ## Processing and privacy

@@ -39,7 +39,7 @@ class Connection
         $info = $this->inspect($settings);
         abort_if($info['webhook_status'] === 'different' && ! $replace, 409, 'A different webhook is active. Select Replace existing webhook only if you intend to switch this bot to MKPOS.');
         $result = (new TelegramClient($settings))->call('setWebhook', ['url' => $settings['webhook_url'], 'secret_token' => $settings['webhook_secret'],
-            'allowed_updates' => ['message'], 'max_connections' => 1, 'drop_pending_updates' => false]);
+            'allowed_updates' => ['message', 'my_chat_member'], 'max_connections' => 1, 'drop_pending_updates' => false]);
         abort_unless($result['ok'], 503, 'Telegram webhook registration did not succeed. Try again shortly.');
 
         return [...$info, 'webhook_status' => 'registered'];
