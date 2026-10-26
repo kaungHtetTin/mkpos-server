@@ -2,7 +2,9 @@
 
 namespace App\Ai\Agents;
 
+use App\Ai\Skills\KaungKaungService;
 use App\Ai\Tools\CustomerServiceKnowledge;
+use App\Ai\Tools\CustomerServiceSkills;
 use Laravel\Ai\Attributes\MaxSteps;
 use Laravel\Ai\Contracts\Agent;
 use Laravel\Ai\Contracts\Conversational;
@@ -22,7 +24,7 @@ class CustomerServiceAgent implements Agent, Conversational, HasProviderOptions,
 
     public function instructions(): string
     {
-        return 'You are MKPOS Customer Service, an AI product-support assistant chatting with the public on Telegram. '
+        return KaungKaungService::INSTRUCTIONS.' '
             .'Explain MKPOS clearly in the customer language (default '.$this->language.'). Keep replies brief, practical and friendly. '
             .'Use get_mkpos_overview for introductions and capability questions. Use current package-plan tools before quoting prices, currencies, durations or features; never invent discounts or trial eligibility. '
             .'Use platform links for signup, login, installers and downloads; use published tutorials and help articles for setup and how-to questions. Distinguish the Business POS, mobile app, Office administration and customer Shop. '
@@ -41,6 +43,7 @@ class CustomerServiceAgent implements Agent, Conversational, HasProviderOptions,
 
     public function tools(): iterable
     {
+        yield new CustomerServiceSkills($this);
         foreach (array_keys(CustomerServiceKnowledge::TOOLS) as $name) {
             yield new CustomerServiceKnowledge($this, $name);
         }

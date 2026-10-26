@@ -5,6 +5,7 @@ namespace App\Console\Commands;
 use App\Services\TelegramSupport\Settings;
 use App\Services\TelegramSupport\TelegramClient;
 use Illuminate\Console\Command;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 
 class TelegramSupportSetup extends Command
@@ -56,9 +57,23 @@ class TelegramSupportSetup extends Command
 
             return self::FAILURE;
         }
-        $result = $telegram->call('setWebhook', ['url' => $url, 'secret_token' => $secret,
-            'allowed_updates' => ['message'], 'max_connections' => 1, 'drop_pending_updates' => false]);
-        if (! $result['ok']) {
+        if (! $settings['storage_ready']) {
+            $this->error('Run the Telegram settings migration before registering this bot.');
+
+            return self::FAILURE;
+        }
+        $registered = app(Settings::class)->locked($settings['version'], function ($current) use ($telegram, $url, $secret, $me) {
+            $result = $telegram->call('setWebhook', ['url' => $url, 'secret_token' => $secret,
+                'allowed_updates' => ['message', 'my_chat_member'], 'max_connections' => 1, 'drop_pending_updates' => false]);
+            if (! $result['ok']) {
+                return false;
+            }
+            DB::table('telegram_support_settings')->where('id', 1)->update(['bot_username' => $me['result']['username'] ?? null,
+                'last_registered_at' => now('UTC'), 'version' => $current['version'] + 1, 'updated_at' => now('UTC')]);
+
+            return true;
+        });
+        if (! $registered) {
             $this->error('Webhook registration did not succeed. Check configuration and try again.');
 
             return self::FAILURE;

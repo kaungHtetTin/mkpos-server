@@ -3,8 +3,10 @@
 namespace Tests\Feature;
 
 use App\Ai\Agents\MkposAssistant;
+use App\Ai\Agents\TelegramImageReader;
 use App\Ai\Personas\WyneWyne;
 use App\Ai\Tools\ErrorSupportTool;
+use App\Ai\Tools\WyneWyneSkills;
 use App\Models\PlatformAdmin;
 use App\Models\User;
 use App\Services\AiBalanceBook;
@@ -74,11 +76,57 @@ class AiAssistantTest extends TestCase
         (require database_path('migrations/2026_10_25_000003_add_cached_input_tokens_to_ai_usage.php'))->up();
         (require database_path('migrations/2026_10_25_000007_create_error_reports.php'))->up();
         (require database_path('migrations/2026_10_25_000008_add_error_report_contact_requests.php'))->up();
+        (require database_path('migrations/2026_10_27_000002_add_image_escalation_key_to_error_reports.php'))->up();
         app(AiBalanceBook::class)->topUp((object) ['id' => 999, 'name' => 'Test budget'], ['request_key' => (string) Str::uuid(), 'amount' => '10', 'description' => 'Test opening credit']);
         Cache::put('ai.deepseek.pricing.v2', ['source_url' => DeepSeekPricing::SOURCE, 'fetched_at' => now()->toIso8601String(), 'rates' => ['deepseek-flash' => ['input' => 0.3, 'output' => 1.2, 'cached_input' => 0.006]]], 3600);
         DB::table('ai_assistant_settings')->where('id', 1)->update(['enabled' => true]);
         $this->mock(SubscriptionService::class, fn ($mock) => $mock->shouldReceive('status')->andReturn(['is_valid' => true, 'can_mutate' => true, 'access_type' => 'paid', 'reason' => null]));
         $this->actingAs($this->owner, 'web');
+    }
+
+    public function test_wyne_skill_guide_is_read_only_and_lists_only_real_exposed_tools(): void
+    {
+        app(TenantContext::class)->set(1);
+        config(['mkpos.enabled_modules' => ['reports', 'products', 'purchases', 'transactions', 'expenses', 'shop']]);
+        $agent = new MkposAssistant($this->owner);
+        $tool = new WyneWyneSkills($agent);
+        $list = json_decode($tool->handle(new Request(['topic' => 'all'])), true);
+        $this->assertCount(17, $list['skills']);
+        $this->assertArrayHasKey('sales_analysis', $list['skills']);
+        $this->assertArrayNotHasKey('steps', $list['skills']['sales_analysis']);
+        $actual = collect($agent->tools())->map(fn ($item) => method_exists($item, 'name') ? $item->name() : class_basename($item))->all();
+        foreach ($list['skills'] as $guide) {
+            foreach ($guide['available_tools'] as $name) {
+                $this->assertContains($name, $actual);
+            }
+        }
+        $guide = json_decode($tool->handle(new Request(['topic' => 'inventory'])), true);
+        $this->assertNotEmpty($guide['skills']['inventory']['steps']);
+        $this->assertContains('get_inventory_report', $guide['skills']['inventory']['available_tools']);
+        $this->assertStringContainsString('get_wyne_wyne_skills', $agent->instructions());
+        $this->assertSame(0, DB::table('ai_messages')->count());
+        $this->assertSame(0, DB::table('error_reports')->count());
+        $this->assertSame(0, DB::table('ai_runs')->count());
+    }
+
+    public function test_skill_guides_recheck_demotion_modules_and_tenant_on_every_call(): void
+    {
+        app(TenantContext::class)->set(1);
+        config(['mkpos.enabled_modules' => ['reports', 'products']]);
+        $agent = new MkposAssistant($this->owner);
+        $tool = new WyneWyneSkills($agent);
+        $this->assertArrayHasKey('inventory', json_decode($tool->handle(new Request(['topic' => 'all'])), true)['skills']);
+        config(['mkpos.enabled_modules' => ['reports']]);
+        $this->assertSame('skill_unavailable', json_decode($tool->handle(new Request(['topic' => 'inventory'])), true)['error']);
+        DB::table('users')->where('id', $this->owner->id)->update(['role' => 'staff']);
+        $skills = json_decode($tool->handle(new Request(['topic' => 'all'])), true)['skills'];
+        $this->assertSame(['getting_started', 'navigation', 'images_support', 'security_devices'], array_keys($skills));
+        foreach ($skills as $guide) {
+            $this->assertEmpty(array_diff($guide['available_tools'], ['open_app_screen']));
+        }
+        $this->assertSame('skill_unavailable', json_decode($tool->handle(new Request(['topic' => 'sales_analysis'])), true)['error']);
+        app(TenantContext::class)->set(2);
+        $this->assertSame('skill_unavailable', json_decode($tool->handle(new Request(['topic' => 'management'])), true)['error']);
     }
 
     private function conversation(): string
@@ -673,17 +721,41 @@ class AiAssistantTest extends TestCase
         MkposAssistant::assertPrompted(fn ($prompt) => count($prompt->agent->history) === 2 && str_contains($prompt->agent->history[0]->content, 'Previously supplied CSV validation') && str_contains($prompt->agent->history[0]->content, 'followup.csv'));
     }
 
+    private function imageReport(string $kind): array
+    {
+        return ['kind' => $kind, 'summary' => 'Visible MKPOS error screenshot.', 'payment_status' => 'unknown',
+            ...array_fill_keys(['amount', 'currency', 'provider', 'recipient_name', 'recipient_account', 'transaction_reference', 'paid_at'], '')];
+    }
+
+    public function test_unknown_image_error_is_reported_to_office_once_and_unrelated_is_rejected(): void
+    {
+        Storage::fake('local');
+        TelegramImageReader::fake([$this->imageReport('error_unknown'), $this->imageReport('unrelated')]);
+        $url = '/api/ai-assistant/conversations/'.$this->conversation().'/messages';
+        $key = (string) Str::uuid();
+        $this->post($url, ['client_id' => $key, 'image' => UploadedFile::fake()->image('error.png')], ['Accept' => 'application/json'])->assertOk();
+        $this->assertSame(1, DB::table('error_reports')->count());
+        $this->assertSame(1, (int) DB::table('error_reports')->value('business_id'));
+        $this->assertStringContainsString('submitted to the admin Office', DB::table('ai_messages')->where('role', 'assistant')->value('body'));
+        $this->postJson($url, ['client_id' => $key, 'body' => ''])->assertOk();
+        $this->assertSame(1, DB::table('error_reports')->count());
+        $this->assertCount(1, Storage::disk('local')->allFiles('error-report-images'));
+        $this->post($url, ['client_id' => (string) Str::uuid(), 'image' => UploadedFile::fake()->image('unrelated.png')], ['Accept' => 'application/json'])->assertOk();
+        $this->assertSame('This image is not related to the MKPOS system.', DB::table('ai_messages')->where('role', 'assistant')->orderByDesc('id')->value('body'));
+        $this->assertSame(1, DB::table('error_reports')->count());
+    }
+
     public function test_image_only_message_is_private_sent_to_the_agent_and_replay_does_not_upload_or_charge_twice(): void
     {
         Storage::fake('local');
-        MkposAssistant::fake(['The screenshot shows the Products page.']);
+        TelegramImageReader::fake([$this->imageReport('general')]);
         $id = $this->conversation();
         $url = '/api/ai-assistant/conversations/'.$id.'/messages';
         $key = (string) Str::uuid();
         $this->post($url, ['client_id' => $key, 'image' => UploadedFile::fake()->image('screen.png', 300, 400)], ['Accept' => 'application/json'])
             ->assertOk()->assertJsonPath('items.0.attachment.type', 'image')->assertJsonPath('items.0.attachment.mime', 'image/png')->assertJsonPath('items.0.attachment.width', 300)
             ->assertJsonMissingPath('items.0.attachment._image_path')->assertJsonMissingPath('items.0.attachment._image_sha256');
-        MkposAssistant::assertPrompted(fn ($prompt) => count($prompt->attachments) === 1 && str_contains($prompt->prompt, 'Read the attached image'));
+        TelegramImageReader::assertPrompted(fn ($prompt) => count($prompt->attachments) === 1 && str_contains($prompt->prompt, 'Read the attached image'));
         $this->assertCount(1, Storage::disk('local')->allFiles('ai-chat-images'));
         $this->postJson($url, ['client_id' => $key, 'body' => ''])->assertOk();
         $this->assertSame(1, DB::table('ai_runs')->count());
@@ -702,22 +774,23 @@ class AiAssistantTest extends TestCase
     public function test_failed_image_message_can_retry_from_its_private_saved_image(): void
     {
         Storage::fake('local');
-        MkposAssistant::fake(fn () => throw new \RuntimeException('provider down'));
+        TelegramImageReader::fake(fn () => throw new \RuntimeException('provider down'));
         $url = '/api/ai-assistant/conversations/'.$this->conversation().'/messages';
         $key = (string) Str::uuid();
         $this->post($url, ['client_id' => $key, 'body' => 'Read this', 'image' => UploadedFile::fake()->image('photo.jpg')], ['Accept' => 'application/json'])->assertStatus(503);
         $this->assertCount(1, Storage::disk('local')->allFiles('ai-chat-images'));
-        MkposAssistant::fake(['The image is readable.']);
+        TelegramImageReader::fake([$this->imageReport('general')]);
         $this->postJson($url, ['client_id' => $key, 'body' => 'Read this'])->assertOk();
-        MkposAssistant::assertPrompted(fn ($prompt) => count($prompt->attachments) === 1);
+        TelegramImageReader::assertPrompted(fn ($prompt) => count($prompt->attachments) === 1);
         $this->assertCount(1, Storage::disk('local')->allFiles('ai-chat-images'));
         $this->assertSame(2, DB::table('ai_messages')->count());
     }
 
-    public function test_followup_includes_only_two_recent_images_and_never_private_paths_in_text(): void
+    public function test_followup_uses_classified_text_without_resending_images_outside_policy(): void
     {
         Storage::fake('local');
-        MkposAssistant::fake(['First image', 'Second image', 'Third image', 'Here is the comparison']);
+        TelegramImageReader::fake([$this->imageReport('general'), $this->imageReport('general'), $this->imageReport('general')]);
+        MkposAssistant::fake(['Here is the comparison']);
         $url = '/api/ai-assistant/conversations/'.$this->conversation().'/messages';
         for ($i = 0; $i < 3; $i++) {
             $this->post($url, ['client_id' => (string) Str::uuid(), 'image' => UploadedFile::fake()->image('image-'.$i.'.png', 30 + $i, 40)], ['Accept' => 'application/json'])->assertOk();
@@ -735,7 +808,7 @@ class AiAssistantTest extends TestCase
                 }
             }
 
-            return $images === 2;
+            return $images === 0;
         });
     }
 
@@ -764,13 +837,13 @@ class AiAssistantTest extends TestCase
         config()->set('ai.providers.deepseek.key', null);
         $this->postJson('/api/ai-assistant/conversations', ['id' => (string) Str::uuid()])->assertStatus(503);
         $agent = new MkposAssistant($this->owner);
-        $this->assertCount(26, iterator_to_array((function () use ($agent) {
+        $this->assertCount(27, iterator_to_array((function () use ($agent) {
             yield from $agent->tools();
         })()));
         $staff = clone $this->owner;
         $staff->role = 'staff';
         $agent = new MkposAssistant($staff);
-        $this->assertCount(2, $agent->tools());
+        $this->assertSame(['MkposKnowledge', 'get_wyne_wyne_skills', 'open_app_screen'], collect($agent->tools())->map(fn ($tool) => method_exists($tool, 'name') ? $tool->name() : class_basename($tool))->all());
     }
 
     public function test_deepseek_transport_calls_a_real_sdk_tool_loop_without_network_or_writes(): void

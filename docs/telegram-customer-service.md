@@ -1,5 +1,31 @@
 # MKPOS customer-service Telegram agent
 
+## Troubleshooting approved groups with no replies
+
+Private `/help` succeeding does not prove group updates are arriving. In Office,
+click Test connection to inspect Telegram Group Privacy, message-update selection,
+the verified username versus the saved username, and any historical webhook error
+timestamp. Testing does not save credentials or register anything. Register webhook
+refreshes the verified identity. The CLI `telegram-support:setup --register` also
+persists the verified username and requests both message and membership updates.
+
+Send `/help@your_bot_username` from a normal personal Telegram account in the group,
+then refresh Office. The group status and Manage group dialog show the last input
+check: missing bot username, disabled service/group replies, missing approval or
+membership, unmatched trigger, bot/anonymous sender, storage failure, accepted help
+or accepted AI work. Last recorded reply errors appear in the editor as well.
+These diagnostics contain only reason codes and UTC timestamps, never message text,
+image references, tokens or extracted payment information. Cache evidence expires
+after seven days; absence is not proof that a group has never sent a message.
+
+An unchanged input-check timestamp after a new targeted command means the app has
+no new diagnostic evidence for that group. Check Telegram delivery and saved webhook
+routing. A storage failure points to migrations/server logs. Accepted input with a
+delivery-rejected error points to the bot's group send permissions. Group support
+still requires the saved global Group replies switch plus approval and a matching
+mention/reply trigger. Anonymous group admins are intentionally not treated as
+ordinary human senders.
+
 ## Images and manual payment-receipt review
 
 Office → Settings → Telegram customer service → Images & payment receipt review:
@@ -32,7 +58,7 @@ re-encodes a metadata-free JPEG of at most 2400 pixels on its longest edge befor
 passing it to the image reader. No original file URL or token is exposed to AI or
 written into queue payloads. No image files are saved in public storage.
 
-General screenshots receive an image explanation in the originating chat. Detected
+MKPOS screenshots receive an image explanation in the originating chat. Detected
 payment receipts receive an extraction of the visible amount, currency, provider,
 recipient name/masked account, reference, date and screenshot status. This does not
 check a bank transaction, authenticate the screenshot, approve a payment, create a
@@ -41,7 +67,7 @@ funds manually. The image reader has no tools or account permissions.
 
 When enabled, a separate durable notice job sends the receipt image with extracted
 details to the saved admin group/topic, clearly marked MANUAL REVIEW REQUIRED and
-NOT verified. Other images are not forwarded. Destination is determined by saved
+NOT verified. Unresolved MKPOS error screenshots are also queued to this saved admin group, independently of the receipt-notice switch. Unrelated images and explained errors are not forwarded. Destination is determined by saved
 settings, never caption/model output. Photo/document file IDs retain their Telegram
 type. One notice exists per admitted message. An explicit Telegram 429 schedules
 only the notice for retry; ambiguous sends are terminal and are not automatically
@@ -115,9 +141,14 @@ call AI. Message edits, channels, anonymous bot senders, and ordinary group chat
 do not trigger answers.
 
 For mentions, use the saved registered bot username, such as
-`@mkpos_help_bot Explain MKPOS packages`. Keep Telegram group joining enabled and
-Group Privacy enabled in BotFather. The bot needs permission to send messages;
-administrator access is not necessary. Group history is isolated by bot, group,
+`@mkpos_help_bot Explain MKPOS packages`. Keep Telegram group joining enabled.
+For ordinary @username mentions, disable Group Privacy in BotFather using
+`/setprivacy`, then remove and re-add the bot to each existing group so Telegram
+applies the change. The app still ignores unaddressed group messages and requires
+Office approval. If Group Privacy stays enabled, use `/help@mkpos_help_bot` and
+reply to the bot's response instead; normal mention text is not an assured update
+delivery path. The bot needs permission to send messages; administrator access is
+not necessary when Group Privacy is disabled. Group history is isolated by bot, group,
 sender and topic. A user's `/reset` resets only their own conversation in that topic,
 not other participants or private chats. Group replies preserve the topic ID.
 
@@ -304,3 +335,38 @@ Tests use SQLite, SDK fakes and intercepted Telegram HTTP. They never send real
 Telegram messages, register a real webhook or spend live model credit. No new
 remote socket deployment is required. Rebuild/deploy Office assets for its settings
 page (`cd office && npm run build:laravel` from the repository root).
+
+
+## Shared MKPOS image scope and escalation (2026-10-27)
+
+Wyne Wyne and Telegram use the restricted structured image reader. Sales AI uses a sales-specific structured reader with its existing shop-scoped, customer-confirmed tools. All three share the server policy for MKPOS subscription receipts, unrelated images and technical error escalation. Captions and screenshot text are untrusted evidence. Unrelated images receive "This image is not related to the MKPOS system." Unreadable images request clearer evidence. Clearly supported MKPOS errors receive safe explanations; unknown errors are escalated without inventing a diagnosis or claiming a fix.
+
+Subscription receipts are compared against the current active platform payment_methods, never shop-order recipients. Matching requires a complete visible recipient account, name and provider. Missing/masked fields are inconclusive, and inactive recipients never count as a match. A matching recipient does not confirm funds, authenticity or subscription approval.
+
+- Wyne Wyne: unknown image errors create an idempotent Office Error report, scoped to the current actor/business, with a private screenshot copy. Automatic image escalation does not invent a contact channel. Existing text-report contact forms keep their normal flow.
+- Sales AI: unknown image errors create an Office Error report scoped to the chat business, with no fabricated owner/reporter identity and a private screenshot copy.
+- Telegram: unknown image errors use the existing durable admin-group notice queue, with the saved admin group/topic and current bot membership/access checks. Enable image reading and configure the admin group in Office Telegram settings. This error route uses that group even if receipt notices are off. Missing configuration produces an explicit reporting-unavailable reply, never a success claim. Queued is not confirmed Telegram delivery.
+
+Sales AI also admits shop-relevant product photos and shop-order receipts. Product images use visible labels/model text to find catalog candidates; the customer confirms uncertain matches. Shop-order receipts use the customer own order and native payment-proof review card, never platform subscription recipients. Image action cards are published only for product/shop-payment classifications; unrelated images and platform support screenshots cannot publish sales proposals. All existing owner tool permissions and customer confirmation boundaries still apply. Wyne follow-ups retain text history without resending old images outside the classifier. To re-read an image, attach it again.
+
+Deploy the new backend and run only this additional migration:
+
+```sh
+php artisan migrate --path=database/migrations/2026_10_27_000002_add_image_escalation_key_to_error_reports.php --force
+php artisan optimize:clear
+```
+
+Restart persistent workers after upload; bounded cron workers load the new code on their next invocation. No new Office build or additional cron command is needed. The migration adds only an idempotency key to error_reports and does not change AI credits.
+
+
+## Kaung Kaung identity and public support skills
+
+The public Telegram assistant is named Kaung Kaung, the MKPOS customer-service and help AI. The text persona, /start and /help messages (including image-enabled mode), and Telegram-only image-reader context use this identity. Wyne Wyne and Sales AI keep their own identities. This does not change the Telegram @username, webhook address or group mention target; Telegram profile/display-name changes are managed separately through BotFather.
+
+The read-only get_customer_service_skills tool provides 13 public workflows: introduction/app selection; getting started; daily POS workflows; current plans; subscription payments; account access; devices/printing; safe troubleshooting; MKPOS images; online Shop/Sales AI; versions/status; human support; and privacy/groups. The all topic gives a compact index and a specific topic gives practical steps. It contains static public guidance only and performs no account/database reads or writes. Its recommended tools are restricted to the existing public knowledge allowlist.
+
+Live facts still come from official public tools. Private account records, role changes, password resets, subscriptions, wallets, payment approval, refunds and administrative actions remain unavailable. Account recovery provides instructions and official links only. A support contact link does not create a ticket or notify anyone. Error-image reports and receipt notices use the existing configured admin-group queue; the bot distinguishes queued from sent and manually approved.
+
+Group answers use public information. Kaung Kaung does not ask members to post credentials/full receipts in groups. Image-enabled /help and /privacy disclose that unresolved MKPOS error screenshots may be forwarded to the configured admin group as well as any enabled receipt notices. Resetting bot history does not remove copies already sent to Telegram/admin chats.
+
+No additional database migration, cron job, Office build or bot token is needed for this identity/skills update. Upload the backend patch, run php artisan optimize:clear and restart persistent workers. Cron workers use the new code on their next invocation.

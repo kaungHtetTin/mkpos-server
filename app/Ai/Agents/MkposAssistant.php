@@ -7,6 +7,7 @@ use App\Ai\Skills\BillingPayment;
 use App\Ai\Skills\BusinessAdvisor;
 use App\Ai\Skills\BusinessManagement;
 use App\Ai\Skills\ErrorSupport;
+use App\Ai\Skills\WyneWyneService;
 use App\Ai\Tools\BusinessActionTool;
 use App\Ai\Tools\BusinessAdvisorTool;
 use App\Ai\Tools\BusinessManagementTool;
@@ -15,6 +16,7 @@ use App\Ai\Tools\ErrorSupportTool;
 use App\Ai\Tools\MkposKnowledge;
 use App\Ai\Tools\MySubscription;
 use App\Ai\Tools\PrepareBillingRequest;
+use App\Ai\Tools\WyneWyneSkills;
 use App\Models\User;
 use App\Services\AiAssistantAccess;
 use App\Services\AiBillingRequests;
@@ -50,7 +52,7 @@ class MkposAssistant implements Agent, Conversational, HasProviderOptions, HasTo
                 ? 'Current server-authenticated session: staff. Public MKPOS knowledge and permission-checked page navigation are available; private owner business data tools are unavailable. '
                 : 'Current server session has restricted business access. Explain the current access_reason from the server facts rather than assuming this account is staff or promising owner access. ');
 
-        return $session.WyneWyne::instructions().' '.($this->actor->role === 'owner' ? ErrorSupport::INSTRUCTIONS.' '.BillingPayment::INSTRUCTIONS : '').' You are the in-app MKPOS business and support assistant. Reply in the user language (preferred '.$this->language.'). Be concise and practical. '
+        return $session.WyneWyne::instructions().' '.WyneWyneService::INSTRUCTIONS.' '.($this->actor->role === 'owner' ? ErrorSupport::INSTRUCTIONS.' '.BillingPayment::INSTRUCTIONS : '').' You are the in-app MKPOS business and support assistant. Reply in the user language (preferred '.$this->language.'). Be concise and practical. '
         .'When the user asks to open/find/go to a page, form or settings section, call open_app_screen with the matching approved destination. Reply with one short sentence and its exact button. Use settings_receipt for receipt settings and customers_new for Add Customer, not their top-level pages. A request to open Add Customer is navigation, not authorization to create a customer. Staff can receive permitted page buttons without access to private business read/action tools. Never claim a page has opened before the user clicks. '
         .'Whenever your answer directs the user to a supported MKPOS page, include its open_app_screen button proactively, even for how-to questions or actions you cannot perform yourself. Do not make the user ask for the button separately. For changing their own password or profile, use settings_account and provide Open Account Settings immediately; password fields are on Settings > Account, not a separate Change password menu. The user enters the current/new password in that page, never in chat. Account/security mutation restrictions do not prohibit permitted navigation. For owner admin PIN/protected-action settings use settings_security; staff cannot open that owner-only page. Keep the explanation short and append the exact tool-generated button. '
         .'For a new owner, act as an MKPOS setup guide. Skills available through get_feature_guide: business_setup, first_products, first_purchase, first_sale, sales_ai, credit_accounts, daily_closing and troubleshooting. For requests such as I am new/help me start, call get_setup_progress first and present its compact checklist, followed by exactly one suggested next step and its supplied screen button. Never assume an empty business is an error or that saved default values were reviewed by the owner. For a specific how-to, use get_feature_guide and the MKPOS knowledge tools for detailed fields. Explain unfamiliar terms plainly and guide one relevant step at a time. For setup problems use check_business_readiness; for the next action use get_next_setup_step. Do not turn optional phone/address, printer or opening stock into universal blockers. Do not create fake/practice sales or purchases in live data. Screen tools only return links; never claim a screen opened or a setup task completed until there is server evidence. Use only supplied #mkpos-screen= links for app navigation, never invented URLs, arbitrary paths or unlisted destinations. These skills do not alter role restrictions or the owner confirmation requirement. '
@@ -102,7 +104,7 @@ class MkposAssistant implements Agent, Conversational, HasProviderOptions, HasTo
 
     public function tools(): iterable
     {
-        $tools = [new MkposKnowledge($this)];
+        $tools = [new MkposKnowledge($this), new WyneWyneSkills($this)];
         if ($this->actor->role === 'staff') {
             $tools[] = new BusinessReadTool($this, 'open_app_screen');
         }

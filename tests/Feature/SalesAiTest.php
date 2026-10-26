@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Ai\Agents\SalesImageRepresentative;
 use App\Ai\Agents\SalesRepresentative;
 use App\Ai\Agents\SystemAgent;
 use App\Models\PlatformAdmin;
@@ -12,6 +13,7 @@ use App\Services\SalesAi\PublicTools;
 use App\Services\SalesAi\Runner;
 use App\Services\SalesAi\Settings;
 use App\Services\SalesAi\Wallet;
+use Carbon\CarbonImmutable;
 use Illuminate\Foundation\Testing\DatabaseTransactions;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Cache;
@@ -73,6 +75,68 @@ class SalesAiTest extends TestCase
         $message = $this->postJson('/api/ecommerce/chat/'.$this->thread.'/messages', ['body' => $body, 'client_id' => $key ?? (string) Str::uuid()])->assertOk()->json('message.id');
 
         return (string) DB::table('sales_ai_runs')->where('business_id', $this->business)->where('trigger_message_id', $message)->value('id');
+    }
+
+    public function test_sales_image_turns_keep_product_and_shop_payment_skills_without_office_escalation(): void
+    {
+        $this->enable();
+        DB::table('sales_ai_wallets')->where('business_id', $this->business)->update(['balance_micros' => 10_000_000_000]);
+        $fields = ['summary' => 'Please review the verified shop choices in this conversation.', 'payment_status' => 'unknown',
+            ...array_fill_keys(['amount', 'currency', 'provider', 'recipient_name', 'recipient_account', 'transaction_reference', 'paid_at'], '')];
+        SalesImageRepresentative::fake([['kind' => 'product'] + $fields, ['kind' => 'shop_payment'] + $fields]);
+        foreach (['product', 'shop_payment'] as $kind) {
+            $id = $this->send('Please help with this');
+            $run = DB::table('sales_ai_runs')->where('id', $id)->first();
+            $path = UploadedFile::fake()->image('product.png')->store('shop-chat-images', 'local');
+            DB::table('shop_chat_messages')->where('id', $run->trigger_message_id)->update(['image_path' => $path, 'image_mime' => 'image/png', 'image_expires_at' => now('UTC')->addDay()]);
+            app(Runner::class)->process($id);
+            $this->assertSame('completed', DB::table('sales_ai_runs')->where('id', $id)->value('status'));
+            $this->assertSame($fields['summary'], DB::table('shop_chat_messages')->where('sales_ai_run_id', $id)->value('body'));
+        }
+        $this->assertSame(0, DB::table('error_reports')->where('business_id', $this->business)->count());
+        SalesImageRepresentative::assertPrompted(function ($prompt) {
+            $names = collect($prompt->agent->tools())->map(fn ($tool) => $tool->name())->all();
+            $this->assertContains('find_product_from_image', $names);
+            $this->assertContains('submit_order_payment_proof', $names);
+            $this->assertContains('request_human', $names);
+
+            return count($prompt->attachments) === 1;
+        });
+        $thread = DB::table('shop_chat_threads')->where('uuid', $this->thread)->first();
+        $settings = app(Settings::class)->get($this->business);
+        $settings['tool_permissions'] = [];
+        $agent = new SalesImageRepresentative($thread, $settings);
+        $this->assertSame(['request_human'], collect($agent->tools())->map(fn ($tool) => $tool->name())->all());
+        $this->assertStringContainsString('budget', $agent->instructions());
+        $this->assertStringContainsString('Never compare a shop order receipt against MKPOS', $agent->instructions());
+        $this->assertStringContainsString('customer confirmation', $agent->instructions());
+    }
+
+    public function test_image_scope_and_unknown_error_escalation_are_bound_to_this_shop(): void
+    {
+        $this->enable();
+        DB::table('sales_ai_wallets')->where('business_id', $this->business)->update(['balance_micros' => 10_000_000_000]);
+        $fields = ['summary' => 'MKPOS internal error needs investigation.', 'payment_status' => 'unknown',
+            ...array_fill_keys(['amount', 'currency', 'provider', 'recipient_name', 'recipient_account', 'transaction_reference', 'paid_at'], '')];
+        SalesImageRepresentative::fake([['kind' => 'error_unknown'] + $fields, ['kind' => 'unrelated'] + $fields]);
+        foreach (['error_unknown', 'unrelated'] as $kind) {
+            $id = $this->send('Read the screenshot');
+            $run = DB::table('sales_ai_runs')->where('id', $id)->first();
+            $image = UploadedFile::fake()->image('error.png');
+            $path = $image->store('shop-chat-images', 'local');
+            DB::table('shop_chat_messages')->where('id', $run->trigger_message_id)->update(['image_path' => $path,
+                'image_mime' => 'image/png', 'image_expires_at' => now('UTC')->addDay()]);
+            app(Runner::class)->process($id);
+            app(Runner::class)->process($id);
+            $this->assertSame('completed', DB::table('sales_ai_runs')->where('id', $id)->value('status'));
+            $reply = DB::table('shop_chat_messages')->where('sales_ai_run_id', $id)->value('body');
+            $this->assertStringContainsString($kind === 'unrelated' ? 'not related to the MKPOS system' : 'submitted to the admin Office', $reply);
+        }
+        $this->assertSame(1, DB::table('error_reports')->where('business_id', $this->business)->count());
+        $report = DB::table('error_reports')->where('business_id', $this->business)->first();
+        $this->assertNull($report->user_id);
+        $this->assertSame('shop', $report->app);
+        $this->assertCount(1, Storage::disk('local')->allFiles('error-report-images'));
     }
 
     private function response(): array
@@ -316,7 +380,7 @@ class SalesAiTest extends TestCase
 
     public function test_owner_wallet_pagination_and_usage_charts_use_business_midnight_and_only_own_usage(): void
     {
-        $this->travelTo(\Carbon\CarbonImmutable::parse('2026-10-25 18:00:00', 'UTC'));
+        $this->travelTo(CarbonImmutable::parse('2026-10-25 18:00:00', 'UTC'));
         DB::table('businesses')->where('id', $this->business)->update(['timezone' => 'Asia/Yangon']);
         $other = $this->withHeader('Authorization', '')->withHeader('X-MKPOS-Auth', 'token')->postJson('/api/auth/register', ['business_name' => 'Other usage fixture', 'owner_name' => 'Other', 'email' => Str::uuid().'@example.test', 'password' => 'password123', 'password_confirmation' => 'password123'])->assertCreated()->json();
         foreach ([[$this->business, 'usage', -1234567, '2026-10-25 17:29:59'], [$this->business, 'usage', -2000000, '2026-10-25 17:30:00'],
@@ -410,10 +474,13 @@ class SalesAiTest extends TestCase
             $messages = $request->data()['messages'];
             $system = collect($messages)->firstWhere('role', 'system')['content'];
             $this->assertStringContainsString('current public assistant name', $system);
-            foreach (['Wyne Sales Helper', 'Ask for the preferred bag size.', 'Warm and concise.', 'Delivery within two business days.'] as $setting) $this->assertStringContainsString($setting, $system);
+            foreach (['Wyne Sales Helper', 'Ask for the preferred bag size.', 'Warm and concise.', 'Delivery within two business days.'] as $setting) {
+                $this->assertStringContainsString($setting, $system);
+            }
             $history = collect($messages)->firstWhere('role', 'assistant')['content'];
             $this->assertStringContainsString('Human shop representative', $history);
             $this->assertStringContainsString('Min Min', $history);
+
             return true;
         });
         $this->assertDatabaseHas('shop_chat_messages', ['sales_ai_run_id' => $id, 'is_ai' => true, 'ai_name' => 'Wyne Sales Helper']);
@@ -430,6 +497,7 @@ class SalesAiTest extends TestCase
     {
         $this->withToken($this->owner['access_token']);
         $method = DB::table('payment_methods')->insertGetId(['bank' => 'KBZPay', 'account_no' => '099999999', 'account_name' => 'Platform', 'is_active' => true, 'created_at' => now(), 'updated_at' => now()]);
+
         return ['request_key' => (string) Str::uuid(), 'amount' => 1000, 'payment_method_id' => $method, 'payment_screenshot' => UploadedFile::fake()->image('receipt.png', 242, 322)];
     }
 
@@ -484,6 +552,7 @@ class SalesAiTest extends TestCase
         $body = $this->topupBody();
         SystemAgent::fake(function () use ($body) {
             DB::table('payment_methods')->where('id', $body['payment_method_id'])->update(['account_no' => '091111111']);
+
             return ['readable' => true, 'payment_status' => 'completed', 'amount' => '1000', 'currency' => 'MMK', 'recipient_account' => '******9999',
                 'recipient_name' => 'Platform', 'provider' => 'KBZPay', 'transaction_reference' => 'OCR-CHANGED', 'paid_at' => '', 'notes' => ''];
         });

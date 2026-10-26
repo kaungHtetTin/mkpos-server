@@ -3,6 +3,8 @@
 namespace App\Http\Controllers\Office;
 
 use App\Http\Controllers\Controller;
+use App\Services\TelegramSupport\Groups;
+use App\Services\TelegramSupport\Settings;
 use App\Services\TelegramSupport\TelegramClient;
 use Carbon\CarbonImmutable;
 use Illuminate\Http\Request;
@@ -44,7 +46,11 @@ class TelegramSupportGroupsController extends Controller
             ->selectRaw('MAX(CASE WHEN m.status = ? THEN m.updated_at END) as last_reply_at', ['delivered'])
             ->selectRaw('SUM(CASE WHEN m.uses_ai = ? AND m.created_at >= ? THEN 1 ELSE 0 END) as requests_today', [true, now('Asia/Yangon')->startOfDay()->utc()])
             ->groupBy('c.chat_id')->get()->keyBy('chat_id');
+        $settings = app(Settings::class)->get();
         foreach ($groups as $group) {
+            $group->reply_blocker = ! $settings['enabled'] ? 'service_disabled' : (! $settings['groups_enabled'] ? 'group_replies_disabled'
+                : (! $settings['bot_username'] ? 'bot_username_missing' : ($group->status !== 'approved' ? 'not_approved' : (! $group->is_member ? 'not_a_member' : null))));
+            $group->last_update = app(Groups::class)->diagnostic($group);
             $group->last_reply_at = $activity->get($group->chat_id)?->last_reply_at;
             $group->requests_today = (int) ($activity->get($group->chat_id)?->requests_today ?? 0);
             $group->chat_id = (string) $group->chat_id;

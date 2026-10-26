@@ -2,6 +2,7 @@
 
 namespace App\Services\TelegramSupport;
 
+use Carbon\CarbonImmutable;
 use Illuminate\Support\Facades\Schema;
 
 class Connection
@@ -28,6 +29,10 @@ class Connection
 
         return ['bot_id' => $id, 'bot_username' => $me['result']['username'] ?? null,
             'webhook_status' => $current === '' ? 'not_registered' : ($current === $url ? 'registered' : 'different'),
+            'group_privacy_enabled' => ! ($me['result']['can_read_all_group_messages'] ?? false),
+            'username_matches_saved' => ! empty($settings['bot_username']) && strcasecmp($settings['bot_username'], $me['result']['username'] ?? '') === 0,
+            'message_updates_enabled' => isset($info['result']['allowed_updates']) ? ($info['result']['allowed_updates'] === [] || in_array('message', $info['result']['allowed_updates'], true)) : null,
+            'last_delivery_error_at' => ! empty($info['result']['last_error_date']) ? CarbonImmutable::createFromTimestampUTC((int) $info['result']['last_error_date'])->toIso8601String() : null,
             'pending_updates' => (int) ($info['result']['pending_update_count'] ?? 0), 'checked_at' => now('UTC')->toIso8601String()];
     }
 
@@ -42,6 +47,6 @@ class Connection
             'allowed_updates' => ['message', 'my_chat_member'], 'max_connections' => 1, 'drop_pending_updates' => false]);
         abort_unless($result['ok'], 503, 'Telegram webhook registration did not succeed. Try again shortly.');
 
-        return [...$info, 'webhook_status' => 'registered'];
+        return [...$info, 'webhook_status' => 'registered', 'username_matches_saved' => true];
     }
 }

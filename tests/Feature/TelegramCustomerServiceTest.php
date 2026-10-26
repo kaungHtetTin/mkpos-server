@@ -5,10 +5,13 @@ namespace Tests\Feature;
 use App\Ai\Agents\CustomerServiceAgent;
 use App\Ai\Agents\TelegramImageReader;
 use App\Ai\Tools\CustomerServiceKnowledge;
+use App\Ai\Tools\CustomerServiceSkills;
 use App\Http\Client\RefreshTelegramTyping;
 use App\Models\PlatformAdmin;
 use App\Services\AiAssistantSettings;
+use App\Services\AiImagePolicy;
 use App\Services\AiUsageReport;
+use App\Services\TelegramSupport\Groups;
 use App\Services\TelegramSupport\Inbox;
 use App\Services\TelegramSupport\ReceiptNotices;
 use App\Services\TelegramSupport\Runner;
@@ -57,6 +60,13 @@ class TelegramCustomerServiceTest extends TestCase
             $table->unsignedInteger('output_tokens')->default(0);
             $table->timestamp('created_at')->nullable();
         });
+        Schema::create('payment_methods', function (Blueprint $table) {
+            $table->id();
+            $table->boolean('is_active')->default(true);
+            $table->string('bank');
+            $table->string('account_name');
+            $table->string('account_no');
+        });
         Schema::create('ai_messages', fn (Blueprint $table) => $table->id());
         foreach (['2026_10_26_000005_create_customer_service_agent.php', '2026_10_26_000006_create_telegram_support_settings.php', '2026_10_26_000008_add_telegram_support_groups.php', '2026_10_27_000001_telegram_images_and_receipt_notices.php', '2026_10_25_000002_create_ai_balance_book_tables.php', '2026_10_25_000003_add_cached_input_tokens_to_ai_usage.php'] as $file) {
             (require database_path('migrations/'.$file))->up();
@@ -83,6 +93,51 @@ class TelegramCustomerServiceTest extends TestCase
     {
         return ['update_id' => $update, 'message' => ['message_id' => $update, 'text' => $text,
             'chat' => ['id' => $chat, 'type' => 'private'], 'from' => ['id' => $chat, 'is_bot' => false, 'language_code' => 'en']]];
+    }
+
+    public function test_group_diagnostics_identify_missing_username_and_trigger_without_storing_message_text(): void
+    {
+        $this->receive($this->groupUpdate())->assertOk();
+        $this->approveGroups();
+        DB::table('telegram_support_settings')->update(['bot_username' => null]);
+        $this->receive($this->groupUpdate(2))->assertOk();
+        $group = DB::table('telegram_support_groups')->first();
+        $this->assertSame('bot_username_missing', app(Groups::class)->diagnostic($group)['reason']);
+        $admin = new PlatformAdmin(['name' => 'Fixture', 'email' => 'fixture@example.test', 'is_active' => true, 'role' => 'super_admin']);
+        $admin->id = 1;
+        $this->actingAs($admin, 'office');
+        $response = $this->getJson('/api/office/telegram-support/groups')->assertOk()->assertJsonPath('groups.0.reply_blocker', 'bot_username_missing')
+            ->assertJsonPath('groups.0.last_update.reason', 'bot_username_missing');
+        $this->assertStringNotContainsString('What is MKPOS?', $response->getContent());
+        DB::table('telegram_support_settings')->update(['bot_username' => 'fixture_support_bot']);
+        $ordinary = $this->groupUpdate(3);
+        unset($ordinary['message']['entities']);
+        $this->receive($ordinary)->assertOk();
+        $this->assertSame('no_matching_trigger', app(Groups::class)->diagnostic($group)['reason']);
+        $ordinary['update_id'] = 4;
+        $ordinary['message']['from']['is_bot'] = true;
+        $this->receive($ordinary)->assertOk();
+        $this->assertSame('bot_or_anonymous_sender', app(Groups::class)->diagnostic($group)['reason']);
+        $this->assertSame(0, DB::table('jobs')->count());
+    }
+
+    public function test_group_diagnostics_distinguish_disabled_group_replies_from_accepted_help(): void
+    {
+        $this->receive($this->groupUpdate())->assertOk();
+        $this->approveGroups();
+        $group = DB::table('telegram_support_groups')->first();
+        DB::table('telegram_support_settings')->update(['groups_enabled' => false]);
+        $this->receive($this->groupUpdate(2))->assertOk();
+        $this->assertSame('group_replies_disabled', app(Groups::class)->diagnostic($group)['reason']);
+        $this->approveGroups();
+        $help = $this->groupUpdate(3);
+        $help['message']['text'] = '/help@fixture_support_bot';
+        $help['message']['entities'] = [['type' => 'bot_command', 'offset' => 0, 'length' => 25]];
+        $this->receive($help)->assertOk();
+        $this->assertSame('notice_queued', app(Groups::class)->diagnostic($group)['reason']);
+        app(Runner::class)->process($this->id(3));
+        $this->assertSame('delivered', DB::table('customer_service_messages')->value('status'));
+        CustomerServiceAgent::assertNeverPrompted();
     }
 
     private function photoUpdate(int $update = 1, bool $document = false): array
@@ -117,6 +172,60 @@ class TelegramCustomerServiceTest extends TestCase
         TelegramImageReader::fake([$report]);
 
         return $report;
+    }
+
+    public function test_unknown_error_does_not_claim_report_delivery_without_admin_group(): void
+    {
+        $this->imageFixture(kind: 'error_unknown');
+        DB::table('telegram_support_settings')->update(['admin_group_chat_id' => null]);
+        $this->receive($this->photoUpdate())->assertOk();
+        app(Runner::class)->process($this->id());
+        $this->assertStringContainsString('No admin group report could be queued', Crypt::decryptString(DB::table('customer_service_messages')->value('reply')));
+        $this->assertSame(0, DB::table('customer_service_receipt_notices')->count());
+    }
+
+    public function test_unknown_error_routes_once_to_admin_even_when_receipt_notices_are_off(): void
+    {
+        $this->imageFixture(notices: false, kind: 'error_unknown');
+        $this->receive($this->photoUpdate())->assertOk();
+        app(Runner::class)->process($this->id());
+        $this->assertStringContainsString('queued for the configured admin', Crypt::decryptString(DB::table('customer_service_messages')->value('reply')));
+        app(ReceiptNotices::class)->process($this->id());
+        app(ReceiptNotices::class)->process($this->id());
+        $this->assertSame('sent', DB::table('customer_service_receipt_notices')->value('status'));
+        $sent = Http::recorded(fn ($r) => str_ends_with($r->url(), '/sendPhoto'));
+        $this->assertCount(1, $sent);
+        $this->assertStringContainsString('MKPOS ERROR', $sent->first()[0]['caption']);
+        $this->assertSame(-100777, $sent->first()[0]['chat_id']);
+    }
+
+    public function test_unrelated_image_and_known_error_never_create_admin_notices(): void
+    {
+        foreach (['unrelated', 'error_known'] as $index => $kind) {
+            $this->imageFixture(kind: $kind);
+            $this->receive($this->photoUpdate(100 + $index))->assertOk();
+            $id = DB::table('customer_service_messages')->where('update_id', 100 + $index)->value('id');
+            app(Runner::class)->process($id);
+            $reply = Crypt::decryptString(DB::table('customer_service_messages')->where('id', $id)->value('reply'));
+            $this->assertSame($kind === 'unrelated' ? 'This image is not related to the MKPOS system.' : 'Visible screenshot details.', $reply);
+        }
+        $this->assertSame(0, DB::table('customer_service_receipt_notices')->count());
+    }
+
+    public function test_receipt_checks_only_current_active_methods_and_masked_accounts_are_inconclusive(): void
+    {
+        $policy = app(AiImagePolicy::class);
+        $report = $this->imageFixture();
+        $this->assertSame('no_active_methods', $policy->paymentMethod($report)['status']);
+        $id = DB::table('payment_methods')->insertGetId(['bank' => 'Fixture Pay', 'account_name' => 'Fixture merchant', 'account_no' => '091234']);
+        $this->assertSame('inconclusive', $policy->paymentMethod($report)['status']);
+        $report['recipient_account'] = '091234';
+        $this->assertSame('matches_active_recipient', $policy->paymentMethod($report)['status']);
+        $this->assertFalse($policy->paymentMethod($report)['funds_verified']);
+        DB::table('payment_methods')->where('id', $id)->update(['is_active' => false]);
+        $this->assertSame('no_active_methods', $policy->paymentMethod($report)['status']);
+        DB::table('payment_methods')->insert(['bank' => 'Other Pay', 'account_name' => 'Fixture merchant', 'account_no' => '091234']);
+        $this->assertSame('does_not_match_active_recipient', $policy->paymentMethod($report)['status']);
     }
 
     public function test_receipt_image_is_read_only_in_worker_and_admin_gets_one_manual_review_notice(): void
@@ -829,6 +938,52 @@ class TelegramCustomerServiceTest extends TestCase
         CustomerServiceAgent::assertNeverPrompted();
     }
 
+    public function test_kaung_kaung_identity_and_public_support_workflows_have_no_private_tools_or_writes(): void
+    {
+        $agent = new CustomerServiceAgent(language: 'my');
+        $this->assertStringContainsString('Your name is Kaung Kaung', $agent->instructions());
+        $this->assertStringContainsString('not a human administrator', $agent->instructions());
+        $this->assertStringContainsString('clearing pending transactions', $agent->instructions());
+        $tool = new CustomerServiceSkills($agent);
+        $queries = [];
+        DB::listen(function ($query) use (&$queries) {
+            $queries[] = $query->sql;
+        });
+        $list = json_decode($tool->handle(new ToolRequest(['topic' => 'all'])), true);
+        $this->assertSame([], $queries);
+        $this->assertSame('Kaung Kaung', $list['name']);
+        $this->assertCount(13, $list['skills']);
+        $this->assertArrayNotHasKey('steps', $list['skills']['plans']);
+        foreach ($list['skills'] as $skill) {
+            foreach ($skill['tools'] as $name) {
+                $this->assertArrayHasKey($name, CustomerServiceKnowledge::TOOLS);
+            }
+        }
+        $guide = json_decode($tool->handle(new ToolRequest(['topic' => 'subscription_payments'])), true);
+        $this->assertNotEmpty($guide['skills']['subscription_payments']['steps']);
+        $this->assertStringContainsString('do not verify bank funds', implode(' ', $guide['skills']['subscription_payments']['steps']));
+        $this->assertContains('get_customer_service_skills', array_map(fn ($item) => $item->name(), iterator_to_array($agent->tools())));
+        $this->assertStringNotContainsString('Kaung Kaung', (new TelegramImageReader)->instructions());
+        $this->assertStringContainsString('Kaung Kaung', (new TelegramImageReader(identity: 'Kaung Kaung'))->instructions());
+    }
+
+    public function test_start_and_help_use_kaung_kaung_with_images_on_or_off_without_ai_usage(): void
+    {
+        $this->imageFixture();
+        foreach ([false, true] as $index => $images) {
+            DB::table('telegram_support_settings')->update(['images_enabled' => $images]);
+            $this->receive($this->update($images ? '/help' : '/start', 301 + $index))->assertOk();
+            $message = DB::table('customer_service_messages')->where('update_id', 301 + $index)->first();
+            $this->assertFalse((bool) $message->uses_ai);
+            $this->assertStringContainsString('Kaung Kaung', Crypt::decryptString($message->reply));
+            if ($images) {
+                $this->assertStringContainsString('error screenshots', Crypt::decryptString($message->reply));
+            }
+        }
+        $this->assertSame(0, DB::table('ai_balance_entries')->count());
+        Http::assertNothingSent();
+    }
+
     public function test_public_agent_tools_cannot_acquire_owner_or_admin_capabilities(): void
     {
         $agent = new CustomerServiceAgent;
@@ -865,7 +1020,9 @@ class TelegramCustomerServiceTest extends TestCase
         Http::assertNotSent(fn ($request) => str_ends_with($request->url(), '/setWebhook'));
         $this->artisan('telegram-support:setup', ['--register' => true])->assertSuccessful();
         Http::assertSent(fn ($request) => str_ends_with($request->url(), '/setWebhook') && $request['secret_token'] === self::SECRET
-            && $request['allowed_updates'] === ['message'] && $request['max_connections'] === 1 && $request['drop_pending_updates'] === false);
+            && $request['allowed_updates'] === ['message', 'my_chat_member'] && $request['max_connections'] === 1 && $request['drop_pending_updates'] === false);
+        $this->assertSame('fixture_support_bot', app(Settings::class)->get()['bot_username']);
+        $this->assertNotNull(app(Settings::class)->get()['last_registered_at']);
     }
 
     public function test_setup_preserves_a_different_existing_webhook(): void

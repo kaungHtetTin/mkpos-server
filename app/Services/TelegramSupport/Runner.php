@@ -4,8 +4,10 @@ namespace App\Services\TelegramSupport;
 
 use App\Ai\Agents\CustomerServiceAgent;
 use App\Ai\Agents\TelegramImageReader;
+use App\Ai\Skills\KaungKaungService;
 use App\Services\AiAssistantSettings;
 use App\Services\AiBalanceBook;
+use App\Services\AiImagePolicy;
 use App\Services\AiProviderCredentials;
 use App\Tenancy\TenantContext;
 use Illuminate\Support\Facades\Cache;
@@ -108,7 +110,7 @@ class Runner
             if ($hasImage && ! app(Settings::class)->get()['images_enabled']) {
                 throw new \RuntimeException('Images disabled');
             }
-            $agent = $hasImage ? new TelegramImageReader($message->language) : new CustomerServiceAgent($history, $message->language);
+            $agent = $hasImage ? new TelegramImageReader($message->language, identity: KaungKaungService::NAME) : new CustomerServiceAgent($history, $message->language);
             app(AiProviderCredentials::class)->activate();
             $answer = app(TypingIndicator::class)->during($message, $conversation, function () use ($agent, $message, $hasImage) {
                 $attachments = $hasImage ? [app(ImageInput::class)->attachment(Crypt::decryptString($message->image_file_id_encrypted), (int) $message->bot_id)] : [];
@@ -132,18 +134,9 @@ class Runner
             $report = null;
             $reply = $answer->text;
             if ($hasImage) {
-                $report = validator($answer->toArray(), ['kind' => 'required|in:receipt,general,unreadable', 'summary' => 'required|string|max:1200',
-                    'payment_status' => 'required|in:completed,pending,failed,unknown',
-                    ...array_fill_keys(['amount', 'currency', 'provider', 'recipient_name', 'recipient_account', 'transaction_reference', 'paid_at'], 'present|nullable|string|max:200')])->validate();
-                $reply = $report['summary'];
-                if ($report['kind'] === 'receipt') {
-                    $reply = $message->language === 'my' ? "Receipt မှာ မြင်ရသော အချက်အလက်များ — admin က စစ်ဆေးရန် လိုပါသည်။\n" : "Visible receipt details — manual review required.\n";
-                    foreach (['amount', 'currency', 'provider', 'recipient_name', 'recipient_account', 'transaction_reference', 'paid_at', 'payment_status'] as $field) {
-                        $reply .= str_replace('_', ' ', $field).': '.($report[$field] ?: 'Unknown')."\n";
-                    }
-                    $reply .= $message->language === 'my' ? 'ငွေအမှန်တကယ်ရရှိမှုနှင့် receipt အစစ်အမှန်ဖြစ်မှုကို အတည်မပြုနိုင်ပါ။ Admin က manual စစ်ဆေးရပါမည်။'
-                        : 'Funds and receipt authenticity are not verified. An administrator must check manually.';
-                }
+                $policy = app(AiImagePolicy::class);
+                $report = $policy->report($answer->toArray());
+                $reply = $policy->reply($report);
             }
             DB::transaction(function () use ($message, $conversation, $agent, $answer, $reply, $report) {
                 $current = DB::table('customer_service_conversations')->where('id', $conversation->id)->lockForUpdate()->first();
@@ -159,8 +152,14 @@ class Runner
                     'input_tokens' => $answer->usage->inputTokens, 'output_tokens' => $answer->usage->outputTokens,
                     'cached_input_tokens' => $answer->usage->cacheReadInputTokens, 'tools' => json_encode(array_values(array_unique($agent->usedTools))),
                     'charged_at' => now('UTC'), 'updated_at' => now('UTC')]);
-                if ($canDeliver && ($report['kind'] ?? '') === 'receipt') {
-                    app(ReceiptNotices::class)->reserve($message);
+                if ($canDeliver && in_array($report['kind'] ?? '', ['receipt', 'error_unknown'], true)) {
+                    $reserved = app(ReceiptNotices::class)->reserve($message, $report['kind'] === 'error_unknown');
+                    if ($report['kind'] === 'error_unknown') {
+                        $notice = $reserved
+                            ? 'I cannot reliably explain this MKPOS error. An image report is queued for the configured admin Telegram group.'
+                            : 'I cannot reliably explain this MKPOS error. No admin group report could be queued; please contact MKPOS support.';
+                        DB::table('customer_service_messages')->where('id', $message->id)->update(['reply' => Crypt::encryptString($notice)]);
+                    }
                 }
             });
         } catch (\Throwable $error) {

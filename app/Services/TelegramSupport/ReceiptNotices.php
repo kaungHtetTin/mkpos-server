@@ -10,16 +10,20 @@ use Illuminate\Support\Facades\Schema;
 
 class ReceiptNotices
 {
-    public function reserve(object $message): void
+    public function reserve(object $message, bool $errorReport = false): bool
     {
         $settings = app(Settings::class)->get();
-        if (! $settings['receipt_notices_enabled'] || ! $settings['admin_group_chat_id']) {
-            return;
+        if ((! $errorReport && ! $settings['receipt_notices_enabled']) || ! $settings['admin_group_chat_id']
+            || ! DB::table('telegram_support_groups')->where('bot_id', $message->bot_id)->where('chat_id', $settings['admin_group_chat_id'])
+                ->where('is_member', true)->where('status', '!=', 'disabled')->exists()) {
+            return false;
         }
         DB::table('customer_service_receipt_notices')->insertOrIgnore(['message_id' => $message->id,
             'bot_id' => $message->bot_id, 'chat_id' => $settings['admin_group_chat_id'], 'thread_id' => $settings['admin_group_thread_id'],
             'created_at' => now('UTC'), 'updated_at' => now('UTC')]);
         DB::afterCommit(fn () => $this->dispatch($message->id));
+
+        return true;
     }
 
     public function dispatch(string $id): void
@@ -47,7 +51,9 @@ class ReceiptNotices
             $settings = app(Settings::class)->get();
             $target = DB::table('telegram_support_groups')->where('bot_id', $notice->bot_id)->where('chat_id', $notice->chat_id)
                 ->where('is_member', true)->where('status', '!=', 'disabled')->exists();
-            if (! $settings['enabled'] || ! $settings['images_enabled'] || ! $settings['receipt_notices_enabled']
+            $report = $message && $message->image_report_encrypted ? json_decode(Crypt::decryptString($message->image_report_encrypted), true, flags: JSON_THROW_ON_ERROR) : [];
+            $isError = ($report['kind'] ?? '') === 'error_unknown';
+            if (! $settings['enabled'] || ! $settings['images_enabled'] || (! $isError && ! $settings['receipt_notices_enabled'])
                 || TelegramClient::idFor((string) $settings['bot_token']) !== (int) $notice->bot_id
                 || (string) $settings['admin_group_chat_id'] !== (string) $notice->chat_id || (int) $settings['admin_group_thread_id'] !== (int) $notice->thread_id
                 || ! $target || ! $message || $message->status === 'cancelled' || ! $message->image_report_encrypted || ! $message->image_file_id_encrypted
@@ -61,6 +67,11 @@ class ReceiptNotices
             $caption = "PAYMENT RECEIPT — MANUAL REVIEW REQUIRED\nScreenshot details only. Funds and authenticity NOT verified.\n";
             foreach (['amount', 'currency', 'provider', 'recipient_name', 'recipient_account', 'transaction_reference', 'paid_at', 'payment_status'] as $field) {
                 $caption .= str_replace('_', ' ', $field).': '.mb_substr(str_replace(["\r", "\n"], ' ', (string) ($report[$field] ?? '')), 0, 65)."\n";
+            }
+            if ($isError) {
+                $caption = "MKPOS ERROR - ADMIN REVIEW REQUIRED\n".mb_substr($report['summary'], 0, 650)."\n";
+            } elseif (isset($report['payment_method_check'])) {
+                $caption .= 'Current recipient: '.$report['payment_method_check']['status']."\n";
             }
             $caption .= 'Sender ID: '.($conversation->sender_id ?: $conversation->chat_id)."\nSource chat/message: ".$conversation->chat_id.'/'.$message->telegram_message_id."\nReview ID: ".$message->id;
             DB::table('customer_service_receipt_notices')->where('message_id', $id)->update(['status' => 'sending', 'updated_at' => now('UTC')]);

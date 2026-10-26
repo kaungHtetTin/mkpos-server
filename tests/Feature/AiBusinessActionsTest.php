@@ -301,7 +301,8 @@ class AiBusinessActionsTest extends TestCase
     {
         $agent = new MkposAssistant($this->owner, conversationId: $this->conversation, messageId: $this->messageId);
         $names = array_map(fn ($t) => method_exists($t, 'name') ? $t->name() : class_basename($t), $agent->tools());
-        $this->assertCount(42, $names);
+        $this->assertCount(43, $names);
+        $this->assertContains('get_wyne_wyne_skills', $names);
         $this->assertNotContains('adjust_stock', $names);
         foreach ([['update_product', ['record_id' => 1, 'stock' => 900]], ['create_customer', ['name' => 'Evil', 'business_id' => 2]], ['create_expense', ['title' => 'Bad', 'amount' => -1]]] as [$name, $data]) {
             $result = json_decode((new BusinessActionTool($agent, $name))->handle(new ToolRequest(['data' => $data])), true);

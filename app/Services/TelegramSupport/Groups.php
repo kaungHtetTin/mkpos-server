@@ -2,11 +2,29 @@
 
 namespace App\Services\TelegramSupport;
 
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 
 class Groups
 {
+    public function diagnostic(object $group, ?string $reason = null): ?array
+    {
+        try {
+            $key = 'telegram-group-diagnostic:'.$group->bot_id.':'.$group->chat_id;
+            if ($reason !== null) {
+                $value = ['reason' => $reason, 'checked_at' => now('UTC')->toIso8601String()];
+                Cache::put($key, $value, 86400 * 7);
+
+                return $value;
+            }
+
+            return Cache::get($key);
+        } catch (\Throwable) {
+            return null;
+        }
+    }
+
     public function observe(array $update, int $botId): ?object
     {
         if (! Schema::hasTable('telegram_support_groups')) {

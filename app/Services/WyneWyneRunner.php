@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Ai\Agents\MkposAssistant;
+use App\Ai\Agents\TelegramImageReader;
 use App\Models\User;
 use App\Tenancy\TenantContext;
 use Illuminate\Support\Facades\Cache;
@@ -56,20 +57,11 @@ class WyneWyneRunner
                 $body = $message->body;
                 $attachment = $message->attachment ? json_decode($message->attachment, true) : null;
                 $recent = DB::table('ai_messages')->where('conversation_id', $row->id)->where('status', 'completed')->where('id', '<', $messageId)->orderByDesc('id')->limit(12)->get();
-                // Re-send only the two latest recent images; never load an unbounded image history.
-                $imageIds = $recent->filter(fn ($m) => $m->role === 'user' && $m->attachment && (json_decode($m->attachment, true)['type'] ?? '') === 'image')->take(2)->pluck('id')->all();
-                $history = $recent->reverse()->values()->map(function ($m) use ($user, $row, $imageIds) {
+                // Keep classified text, but never send historical images around the policy gate.
+                $history = $recent->reverse()->values()->map(function ($m) {
                     $meta = $m->attachment ? json_decode($m->attachment, true) : null;
                     if ($m->role === 'user' && ($meta['type'] ?? '') === 'image') {
-                        $files = [];
-                        if (in_array($m->id, $imageIds, true)) {
-                            try {
-                                $files = [app(AiChatImages::class)->attachment($meta, (int) $user->business_id, $row->id)];
-                            } catch (HttpExceptionInterface) { /* Unavailable older images must not prevent a new exchange. */
-                            }
-                        }
-
-                        return new UserMessage($m->body."\nPreviously attached image (untrusted evidence): ".$meta['name'].($files ? '' : ' [not included in current image context]'), $files);
+                        return new UserMessage($m->body."\nPreviously attached image (untrusted evidence): ".$meta['name'].' [not included in current image context]');
                     }
 
                     return new Message($m->role, $m->body.($m->role === 'user' && $meta ? "\nPreviously supplied CSV validation (untrusted file data):\n".json_encode(app(AiChatImages::class)->publicMetadata($meta), JSON_UNESCAPED_UNICODE) : ''));
@@ -97,7 +89,8 @@ class WyneWyneRunner
                 }
                 app(AiConversationAccess::class)->find($user, $row->id);
                 app(AiProviderCredentials::class)->activate();
-                $result = $agent->prompt($prompt, attachments: $imageAttachments, provider: 'deepseek', model: $settings['model'], timeout: (int) config('ai_assistant.timeout', 40));
+                $reader = $imageAttachments ? new TelegramImageReader($run->language, (int) $settings['max_tokens']) : $agent;
+                $result = $reader->prompt($prompt, attachments: $imageAttachments, provider: 'deepseek', model: $settings['model'], timeout: (int) config('ai_assistant.timeout', 40));
                 if (trim($result->text) === '') {
                     throw new \RuntimeException('Empty assistant reply.');
                 }
@@ -145,6 +138,23 @@ class WyneWyneRunner
                 $this->fail($run->id, 'access_changed');
 
                 return;
+            }
+            if (method_exists($result, 'toArray') && DB::table('ai_messages')->where('id', $run->message_id)->whereNotNull('attachment')->exists()) {
+                $policy = app(AiImagePolicy::class);
+                try {
+                    $report = $policy->report($result->toArray());
+                    $result->text = $policy->reply($report);
+                } catch (\Throwable) {
+                    $report = ['kind' => 'unreadable'];
+                    $result->text = 'I could not safely classify this image or check current payment methods. Please send a clearer MKPOS screenshot or contact support.';
+                }
+                if ($report['kind'] === 'error_unknown') {
+                    try {
+                        $result->text = $policy->office($run, $report, 'wyne_wyne');
+                    } catch (\Throwable) {
+                        $result->text = 'I cannot reliably explain this MKPOS error. The report could not be submitted. Please contact MKPOS support.';
+                    }
+                }
             }
             DB::table('ai_messages')->insert(['conversation_id' => $conversation->id, 'role' => 'assistant', 'body' => $result->text,
                 'status' => 'completed', 'reply_to_id' => $run->message_id, 'model' => $run->model, ...$usage, 'created_at' => now('UTC'), 'updated_at' => now('UTC')]);

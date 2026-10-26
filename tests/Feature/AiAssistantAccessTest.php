@@ -79,7 +79,7 @@ class AiAssistantAccessTest extends TestCase
         $this->assertFalse($access['can_read_business_data']);
         $this->assertSame('owner_required', $access['access_reason']);
         $agent = new MkposAssistant($staff);
-        $this->assertCount(2, $agent->tools());
+        $this->assertSame(['MkposKnowledge', 'get_wyne_wyne_skills', 'open_app_screen'], collect($agent->tools())->map(fn ($tool) => method_exists($tool, 'name') ? $tool->name() : class_basename($tool))->all());
         $this->assertStringContainsString('their assigned role does not permit access', $agent->instructions());
         $this->assertStringContainsString('Access management', $agent->instructions());
         $this->assertStringContainsString('Do not tell a restricted user to open Reports', $agent->instructions());
@@ -99,7 +99,7 @@ class AiAssistantAccessTest extends TestCase
         $this->assertSame('owner_only', $access['ai_business_data_policy']);
         $this->assertFalse($access['can_read_business_data']);
         $this->assertStringContainsString('Do not claim that granting the module permission will unlock owner-only AI tools', $agent->instructions());
-        $this->assertCount(2, $agent->tools());
+        $this->assertSame(['MkposKnowledge', 'get_wyne_wyne_skills', 'open_app_screen'], collect($agent->tools())->map(fn ($tool) => method_exists($tool, 'name') ? $tool->name() : class_basename($tool))->all());
     }
 
     public function test_owner_disabled_module_is_distinguished_from_a_staff_permission_failure(): void
@@ -158,7 +158,7 @@ class AiAssistantAccessTest extends TestCase
             $this->assertStringContainsString('show the business-local date range and currency before the table', $system);
             $this->assertStringContainsString('Keep access-denied replies brief rather than forcing them into a table', $system);
             $this->assertStringContainsString('Do not disclose or repeat previously retrieved private business values', $system);
-            $this->assertCount(2, $request['tools']);
+            $this->assertSame(['MkposKnowledge', 'get_wyne_wyne_skills', 'open_app_screen'], array_column(array_column($request['tools'], 'function'), 'name'));
 
             return Http::response(['id' => 'restricted-reply', 'object' => 'chat.completion', 'model' => 'deepseek-flash',
                 'choices' => [['index' => 0, 'message' => ['role' => 'assistant', 'content' => 'Your current staff role does not allow Reports access. Please ask your business owner to review your assigned role in Access management; I can still explain how the reports work.'], 'finish_reason' => 'stop']],

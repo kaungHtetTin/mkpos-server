@@ -46,7 +46,7 @@ class AiBusinessToolsTest extends TestCase
     public function test_all_twelve_capabilities_are_owner_only_tenant_scoped_and_read_only(): void
     {
         $this->assertCount(21, BusinessReadTool::DESCRIPTIONS);
-        $this->assertCount(26, (new MkposAssistant($this->owner))->tools());
+        $this->assertCount(27, (new MkposAssistant($this->owner))->tools());
         $reads = [];
         DB::listen(function ($query) use (&$reads) {
             $reads[] = $query->sql;
@@ -65,7 +65,7 @@ class AiBusinessToolsTest extends TestCase
         }
         $staff = clone $this->owner;
         $staff->role = 'staff';
-        $this->assertCount(2, (new MkposAssistant($staff))->tools());
+        $this->assertSame(['MkposKnowledge', 'get_wyne_wyne_skills', 'open_app_screen'], collect((new MkposAssistant($staff))->tools())->map(fn ($tool) => method_exists($tool, 'name') ? $tool->name() : class_basename($tool))->all());
         $this->assertSame('business_access_denied', $this->invoke('search_sales', [], $staff)['error']);
     }
 
@@ -173,7 +173,8 @@ class AiBusinessToolsTest extends TestCase
         Http::fake(['api.deepseek.com/*' => function ($request) use (&$calls) {
             $calls++;
             $names = array_column(array_column($request['tools'], 'function'), 'name');
-            $this->assertCount(26, array_unique($names));
+            $this->assertCount(27, array_unique($names));
+            $this->assertContains('get_wyne_wyne_skills', $names);
             $this->assertContains('get_business_context', $names);
             $this->assertContains('search_sales', $names);
             $this->assertSame($calls === 1 ? ['type' => 'function', 'function' => ['name' => 'get_business_context']] : 'auto', $request['tool_choice']);
