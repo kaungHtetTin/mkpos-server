@@ -41,7 +41,7 @@ class WorkerHealth
                     }
 
                     return $seen->greaterThanOrEqualTo($now->subSeconds((int) config(
-                        in_array($worker, ['sales_ai', 'wyne_wyne', 'customer_service', 'default_queue'], true) ? 'worker_health.queue_stale_seconds' : 'worker_health.periodic_stale_seconds'
+                        $row->state !== 'cron_idle' && in_array($worker, ['sales_ai', 'wyne_wyne', 'customer_service', 'default_queue'], true) ? 'worker_health.queue_stale_seconds' : 'worker_health.periodic_stale_seconds'
                     )));
                 });
                 $latest = $active->first() ?? $instances->first();

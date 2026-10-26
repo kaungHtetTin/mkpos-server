@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Console\Commands\CronQueueWork;
 use App\Models\PlatformAdmin;
 use App\Models\User;
 use App\Services\WorkerHeartbeat;
@@ -25,6 +26,51 @@ use Tests\TestCase;
 
 class WorkerHealthTest extends TestCase
 {
+    public function test_cron_worker_is_healthy_between_minutes_but_expires_without_another_run(): void
+    {
+        $heartbeat = app(WorkerHeartbeat::class);
+        $heartbeat->cronMode(true);
+        $heartbeat->queue('wyne-wyne', 'wyne-wyne');
+        Event::dispatch(new WorkerStopping(0));
+        $heartbeat->cronMode(false);
+        $this->travel(70)->seconds();
+        $this->getJson('/api/health/workers')->assertJsonPath('workers.wyne_wyne.status', 'healthy');
+        $this->travel(111)->seconds();
+        $this->getJson('/api/health/workers')->assertJsonPath('workers.wyne_wyne.status', 'stale');
+    }
+
+    public function test_cron_command_skips_a_locked_queue_and_bounds_the_worker_when_unlocked(): void
+    {
+        $lock = fopen(storage_path('framework/cron-worker-wyne-wyne.lock'), 'c');
+        flock($lock, LOCK_EX);
+        try {
+            $this->artisan('cron:work', ['queue' => 'wyne-wyne'])->assertSuccessful();
+            $this->assertSame(0, DB::table('worker_heartbeats')->count());
+        } finally {
+            flock($lock, LOCK_UN);
+            fclose($lock);
+        }
+        $command = new class extends CronQueueWork
+        {
+            public array $invocations = [];
+
+            public function call($command, array $arguments = [])
+            {
+                $this->invocations[] = [$command, $arguments];
+
+                return 0;
+            }
+        };
+        $command->setLaravel($this->app);
+        $this->assertSame(0, $command->run(new ArrayInput(['queue' => 'wyne-wyne']), new NullOutput));
+        $this->assertSame([['queue:work', [
+            'connection' => 'wyne-wyne', '--queue' => 'wyne-wyne', '--stop-when-empty' => true,
+            '--max-time' => 45, '--sleep' => 1, '--timeout' => 360, '--tries' => 60, '--no-interaction' => true,
+        ]]], $command->invocations);
+        $this->assertSame('cron_idle', DB::table('worker_heartbeats')->where('worker', 'wyne_wyne')->value('state'));
+        $this->artisan('cron:work', ['queue' => 'unknown'])->assertFailed();
+    }
+
     protected function setUp(): void
     {
         parent::setUp();

@@ -17,6 +17,13 @@ class WorkerHeartbeat
 
     private int $lastWarning = 0;
 
+    private bool $cron = false;
+
+    public function cronMode(bool $enabled): void
+    {
+        $this->cron = $enabled;
+    }
+
     public function schedulerFailed(): void
     {
         $this->schedulerFailed = true;
@@ -65,7 +72,7 @@ class WorkerHeartbeat
             if ($state === 'loop' && ($this->lastWrites[$worker] ?? 0) > time() - 10) {
                 continue;
             }
-            $this->beat($worker, $state === 'loop' ? 'idle' : $state,
+            $this->beat($worker, $this->cron && in_array($state, ['loop', 'idle'], true) ? 'cron_idle' : ($state === 'loop' ? 'idle' : $state),
                 $state === 'busy' ? max(1, min(3600, $timeout ?? 360)) + 60 : null,
                 $state === 'idle' && ! $failed, $failed);
         }
@@ -74,7 +81,7 @@ class WorkerHeartbeat
     public function stopping(): void
     {
         foreach (array_keys($this->queueWorkers) as $worker) {
-            $this->beat($worker, 'stopped');
+            $this->beat($worker, $this->cron ? 'cron_idle' : 'stopped');
         }
     }
 
@@ -85,7 +92,7 @@ class WorkerHeartbeat
                 return;
             }
             $now = now('UTC');
-            $instance = gethostname().(in_array($worker, ['sales_ai', 'wyne_wyne', 'customer_service', 'default_queue'], true) ? ':'.getmypid() : '');
+            $instance = gethostname().(in_array($worker, ['sales_ai', 'wyne_wyne', 'customer_service', 'default_queue'], true) ? ($this->cron ? ':cron' : ':'.getmypid()) : '');
             $values = ['worker' => $worker, 'state' => $state, 'last_seen_at' => $now,
                 'busy_until' => $busySeconds ? $now->copy()->addSeconds($busySeconds) : null];
             if ($success) {
