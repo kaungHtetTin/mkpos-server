@@ -1,0 +1,8 @@
+# The Shop uses hash routes, so its web root only needs a static entry point.
+Options -MultiViews -Indexes
+DirectoryIndex index.html
+RewriteEngine On
+
+RewriteRule (^|/)\.(?!well-known(?:/|$)) - [F,L]
+# API calls use the configured Laravel origin, not the Shop's static host.
+RewriteRule ^(?:api|sanctum)(?:/|$) - [R=404,L]
