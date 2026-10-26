@@ -2,8 +2,11 @@
 
 namespace Tests\Feature;
 
+use App\Ai\Agents\SystemAgent;
 use App\Models\PlatformAdmin;
 use App\Models\User;
+use App\Services\AiAssistantSettings;
+use App\Services\DeepSeekPricing;
 use App\Services\McpSupportAccess;
 use App\Services\ProductWriter;
 use App\Services\RealtimeActivity;
@@ -12,6 +15,7 @@ use App\Services\SubscriptionApprovalEmail;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Http\Request;
 use Illuminate\Http\UploadedFile;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Http;
@@ -172,6 +176,13 @@ class McpSupportTest extends TestCase
             (require database_path('migrations/'.$migration))->up();
         }
         (require database_path('migrations/2026_10_24_000001_create_mcp_support_tables.php'))->up();
+        (require database_path('migrations/2026_10_25_000005_create_system_agent_reviews.php'))->up();
+        (require database_path('migrations/2026_10_25_000006_create_owner_payment_validations.php'))->up();
+        (require database_path('migrations/2026_10_25_000002_create_ai_balance_book_tables.php'))->up();
+        // Manual approval requires the existing shared receipt-claim safeguard.
+        (require database_path('migrations/2026_10_25_000016_create_payment_receipt_claims.php'))->up();
+        Schema::table('ai_balance_entries', fn (Blueprint $table) => $table->unsignedBigInteger('cached_input_tokens')->nullable());
+        DB::table('ai_balance_accounts')->update(['balance_nanos' => 1000000000]);
         DB::table('businesses')->insert([['id' => 1, 'name' => 'One'], ['id' => 2, 'name' => 'Two']]);
         $this->owner = User::create(['business_id' => 1, 'name' => 'Owner', 'email' => 'owner@example.test', 'password' => Hash::make('test-password'), 'role' => 'owner', 'is_active' => true]);
         $this->admin = PlatformAdmin::create(['name' => 'Admin', 'email' => 'admin@example.test', 'password' => Hash::make('test-password'), 'is_active' => true]);
@@ -188,6 +199,17 @@ class McpSupportTest extends TestCase
         return app(McpSupportAccess::class)->issue($type, match ($type) {
             'owner' => $this->owner, 'admin' => $this->admin, 'customer' => $this->customer,
         }, $scopes)['access_token'];
+    }
+
+    private function enableOwnerValidation(): void
+    {
+        config()->set('cache.default', 'array');
+        config()->set('ai.providers.deepseek.key', 'test-key');
+        $this->mock(AiAssistantSettings::class, fn ($mock) => $mock->shouldReceive('get')->andReturn(['enabled' => true, 'configured' => true]));
+        Cache::put('ai.deepseek.pricing.v2', ['source_url' => DeepSeekPricing::SOURCE, 'fetched_at' => now()->toIso8601String(),
+            'rates' => ['deepseek-flash' => ['input' => .3, 'output' => 1.2, 'cached_input' => .006]]], 3600);
+        SystemAgent::fake([['readable' => true, 'payment_status' => 'completed', 'amount' => '30000', 'currency' => 'Ks',
+            'recipient_account' => '091111111', 'recipient_name' => 'Recipient', 'provider' => 'KPay', 'transaction_reference' => 'TXN-123456', 'paid_at' => now()->toIso8601String(), 'notes' => '']]);
     }
 
     private function rpc(string $endpoint, string $name, array $data = [], ?string $token = null, string $method = 'tools/call')
@@ -277,6 +299,7 @@ class McpSupportTest extends TestCase
 
     public function test_evidence_submission_is_private_owned_and_does_not_approve_funds(): void
     {
+        $this->enableOwnerValidation();
         $token = $this->token();
         $upload = $this->withHeader('Authorization', 'Bearer '.$token)->post('/mcp/evidence', ['file' => UploadedFile::fake()->image('proof.png')])
             ->assertOk()->assertDontSee('file_path')->json('upload_id');
@@ -285,6 +308,8 @@ class McpSupportTest extends TestCase
             ->assertJsonPath('result.structuredContent.status', 'pending')->assertJsonPath('result.structuredContent.funds_confirmed', false);
         $this->rpc('/mcp/account', 'submit_subscription_payment_proof', $intent, $token)->assertJsonPath('result.structuredContent.request_id', $result->json('result.structuredContent.request_id'));
         $this->assertSame(1, DB::table('subscription_requests')->count());
+        $this->assertDatabaseHas('system_agent_reviews', ['payment_request_id' => $result->json('result.structuredContent.request_id'), 'status' => 'completed']);
+        $this->assertDatabaseHas('subscription_requests', ['id' => $result->json('result.structuredContent.request_id'), 'requested_amount' => 30000, 'requested_currency' => 'Ks', 'status' => 'pending']);
         $this->rpc('/mcp/account', 'submit_subscription_payment_proof', $this->intent(array_diff_key($intent, array_flip(['confirmed', 'idempotency_key']))), $token)->assertJsonPath('result.isError', true);
         $this->assertSame(0, DB::table('subscription_payments')->count());
         Http::assertNothingSent();
@@ -304,6 +329,32 @@ class McpSupportTest extends TestCase
         $this->rpc('/mcp/admin', 'reject_subscription_payment', $this->intent(['request_id' => $request, 'admin_note' => 'Cannot reject approved']), $admin)->assertJsonPath('result.isError', true);
         $pending = DB::table('subscription_requests')->insertGetId(['business_id' => 1, 'subscription_plan_id' => 1]);
         $this->rpc('/mcp/admin', 'reject_subscription_payment', $this->intent(['request_id' => $pending, 'admin_note' => 'Recipient did not match']), $admin)->assertJsonPath('result.structuredContent.status', 'rejected');
+    }
+
+    public function test_system_agent_mcp_checks_owner_proof_before_a_request_exists(): void
+    {
+        $this->enableOwnerValidation();
+        $owner = $this->token();
+        $this->rpc('/mcp/system-agent', '', [], null, 'tools/list')->assertStatus(401);
+        $this->rpc('/mcp/system-agent', '', [], $this->token('admin'), 'tools/list')->assertStatus(401);
+        $this->rpc('/mcp/system-agent', '', [], $owner, 'tools/list')->assertJsonCount(1, 'result.tools')->assertJsonPath('result.tools.0.name', 'check_payment_screenshot');
+        $upload = $this->withHeader('Authorization', 'Bearer '.$owner)->post('/mcp/evidence', ['file' => UploadedFile::fake()->image('proof.png')])->assertOk()->json('upload_id');
+        $args = ['upload_id' => $upload, 'subscription_plan_id' => 1, 'payment_method_id' => 1];
+        $this->rpc('/mcp/system-agent', 'check_payment_screenshot', $args, $this->token('owner', ['read']))->assertJsonPath('result.isError', true);
+        $this->rpc('/mcp/system-agent', 'check_payment_screenshot', $args, $owner)->assertJsonPath('result.structuredContent.validation_passed', true)->assertJsonPath('result.structuredContent.transaction_id', 'TXN-123456');
+        $this->assertSame(0, DB::table('subscription_requests')->count());
+        $this->assertSame(1, DB::table('owner_payment_validations')->count());
+        Http::assertNothingSent();
+    }
+
+    public function test_manual_office_approval_saves_the_reviewed_transaction_reference(): void
+    {
+        $id = DB::table('subscription_requests')->insertGetId(['business_id' => 1, 'subscription_plan_id' => 1,
+            'payment_bank' => 'KPay', 'transaction_id' => 'AI-EXTRACTED-123']);
+        $this->actingAs($this->admin, 'office')->postJson('/api/office/subscription-requests/'.$id.'/approve', ['transaction_id' => 'BANK-CHECKED-456'])
+            ->assertOk();
+        $this->assertDatabaseHas('subscription_requests', ['id' => $id, 'transaction_id' => 'BANK-CHECKED-456', 'status' => 'approved', 'reviewed_by_admin_id' => $this->admin->id]);
+        $this->assertSame(1, DB::table('subscription_payments')->count());
     }
 
     public function test_refunds_enforce_ownership_amount_reservation_and_review_transfer_states(): void

@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Models\User;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Storage;
 use Throwable;
 
@@ -21,6 +22,15 @@ class OfficeBusinessDeletion
             $found = DB::table('businesses')->whereIn('id', $ids)->orderBy('id')->lockForUpdate()->pluck('id')
                 ->map(fn ($id) => (int) $id)->all();
             abort_if($found !== $ids, 404, 'One or more businesses were not found. Refresh the list and try again.');
+
+            // Business locks serialize with Sales AI claims and top-up reviews.
+            // Allow an active provider call to settle before permanently deleting it.
+            if (Schema::hasTable('sales_ai_runs')) {
+                abort_if(DB::table('sales_ai_runs')->whereIn('business_id', $ids)->where('status', 'processing')->exists(), 409, 'A Sales AI reply is being generated. Try deleting the business after it finishes.');
+                foreach (['sales_ai_entries', 'sales_ai_topups', 'sales_ai_runs', 'sales_ai_settings', 'sales_ai_wallets'] as $table) {
+                    DB::table($table)->whereIn('business_id', $ids)->delete();
+                }
+            }
 
             $screenshots = DB::table('subscription_requests')->whereIn('business_id', $ids)
                 ->whereNotNull('payment_screenshot_path')->pluck('payment_screenshot_path')->all();
@@ -41,7 +51,7 @@ class OfficeBusinessDeletion
         $disk = Storage::disk('local');
         $failedPaths = [];
         foreach ($ids as $id) {
-            foreach (["product-photos/{$id}", "business-logos/{$id}"] as $directory) {
+            foreach (["product-photos/{$id}", "business-logos/{$id}", "sales-ai-payment-proofs/{$id}", "sales-ai-action-proofs/{$id}"] as $directory) {
                 try {
                     if ($disk->directoryExists($directory) && ! $disk->deleteDirectory($directory)) {
                         $failedPaths[] = $directory;

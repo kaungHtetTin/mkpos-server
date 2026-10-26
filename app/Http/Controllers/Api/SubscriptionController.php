@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Services\OwnerPaymentValidation;
 use App\Services\SubscriptionService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -11,9 +12,7 @@ use Illuminate\Validation\Rule;
 
 class SubscriptionController extends Controller
 {
-    public function __construct(private SubscriptionService $subscriptions)
-    {
-    }
+    public function __construct(private SubscriptionService $subscriptions) {}
 
     public function plans(): array
     {
@@ -52,19 +51,19 @@ class SubscriptionController extends Controller
     {
         $businessId = (int) $request->user('web')->business_id;
         $query = DB::table('subscription_payments as payments')
-                ->join('subscription_plans as plans', 'plans.id', '=', 'payments.subscription_plan_id')
-                ->where('payments.business_id', $businessId)
-                ->select(
-                    'payments.id',
-                    'payments.type',
-                    'payments.amount',
-                    'payments.currency',
-                    'payments.duration_days',
-                    'payments.note',
-                    'payments.paid_at',
-                    'plans.name as plan_name',
-                    'plans.slug as plan_slug'
-                );
+            ->join('subscription_plans as plans', 'plans.id', '=', 'payments.subscription_plan_id')
+            ->where('payments.business_id', $businessId)
+            ->select(
+                'payments.id',
+                'payments.type',
+                'payments.amount',
+                'payments.currency',
+                'payments.duration_days',
+                'payments.note',
+                'payments.paid_at',
+                'plans.name as plan_name',
+                'plans.slug as plan_slug'
+            );
         $total = (clone $query)->count();
         $limit = $request->has('limit') ? max(1, min((int) $request->query('limit'), 100)) : 100;
         $offset = max(0, (int) $request->query('offset', 0));
@@ -79,43 +78,30 @@ class SubscriptionController extends Controller
             'subscription_plan_id' => ['required', Rule::exists('subscription_plans', 'id')
                 ->where('is_active', true)
                 ->where('is_public', true)
-                ->where('is_system', false)],
+                ->where('is_system', 0)],
             'payment_method_id' => ['required', Rule::exists('payment_methods', 'id')->where('is_active', true)],
             'payment_screenshot' => ['required', 'image', 'mimes:jpeg,jpg,png,webp', 'max:5120'],
             'message' => ['nullable', 'string', 'max:1000'],
         ]);
         $businessId = (int) $request->user('web')->business_id;
         $paymentMethod = DB::table('payment_methods')->where('id', $data['payment_method_id'])->first();
+        $ownerId = (int) $request->user('web')->id;
+        $plan = DB::table('subscription_plans')->where('id', $data['subscription_plan_id'])->first();
+        abort_unless($plan && $plan->is_active && $plan->is_public && ! $plan->is_system, 422, 'The selected plan is unavailable.');
         abort_if(! $paymentMethod || ! $paymentMethod->is_active, 422, 'The selected payment method is unavailable');
         $screenshotPath = $request->file('payment_screenshot')->store('subscription-payment-screenshots', 'local');
 
         try {
-            $id = DB::transaction(function () use ($businessId, $data, $paymentMethod, $screenshotPath) {
-                DB::table('subscription_requests')->where('business_id', $businessId)->where('status', 'pending')
-                    ->update(['status' => 'rejected', 'admin_note' => 'Replaced by a newer request', 'reviewed_at' => now(), 'updated_at' => now()]);
-
-                $requestId = DB::table('subscription_requests')->insertGetId([
-                    'business_id' => $businessId,
-                    'subscription_plan_id' => $data['subscription_plan_id'],
-                    'payment_method_id' => $paymentMethod->id,
-                    'payment_bank' => $paymentMethod->bank,
-                    'payment_account_name' => $paymentMethod->account_name,
-                    'payment_account_no' => $paymentMethod->account_no,
-                    'status' => 'pending',
-                    'message' => $data['message'] ?? '',
-                    'payment_screenshot_path' => $screenshotPath,
-                    'created_at' => now(),
-                    'updated_at' => now(),
-                ]);
-                app(\App\Services\RealtimeActivity::class)->record('office', $businessId, 'subscription.requested', [
-                    'title' => 'New subscription request', 'message' => DB::table('businesses')->where('id', $businessId)->value('name'),
-                    'target' => 'subscription-request', 'entity_id' => (int) $requestId,
-                ], 'subscription-request:'.$requestId);
-                return $requestId;
-            });
+            $validator = app(OwnerPaymentValidation::class);
+            $validation = $validator->check($ownerId, $businessId, $plan, $paymentMethod, $screenshotPath);
+            $id = $validator->submit($validation, $ownerId, $businessId, (int) $plan->id, (int) $paymentMethod->id, $screenshotPath, $data['message'] ?? '');
         } catch (\Throwable $error) {
             Storage::disk('local')->delete($screenshotPath);
             throw $error;
+        }
+
+        if (DB::table('subscription_requests')->where('id', $id)->value('payment_screenshot_path') !== $screenshotPath) {
+            Storage::disk('local')->delete($screenshotPath);
         }
 
         return response()->json(['request_id' => $id, 'subscription' => $this->subscriptions->status($businessId)], 201);

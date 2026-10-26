@@ -77,7 +77,7 @@ class ShopController extends Controller
         return response()->file(Storage::disk('local')->path($path), ['Cache-Control' => 'no-store', 'X-Content-Type-Options' => 'nosniff']);
     }
 
-    private function checkoutData(Request $request, bool $submit): array
+    public function checkoutData(Request $request, bool $submit): array
     {
         $rules = [
             'coupon_code' => ['nullable', 'string', 'max:40', 'regex:/^[A-Za-z0-9_-]+$/'],

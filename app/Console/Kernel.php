@@ -16,6 +16,11 @@ class Kernel extends ConsoleKernel
     {
         // Shop orders have no automatic processing deadline.
         $schedule->command('shop-chat:expire-images')->everyMinute()->withoutOverlapping();
+        $schedule->command('sales-ai:process --limit=10')->everyMinute()->withoutOverlapping(10);
+        $schedule->command('wyne-wyne:recover --limit=50')->everyMinute()->withoutOverlapping();
+        $schedule->command('customer-service:recover --limit=50')->everyMinute()->withoutOverlapping();
+        $schedule->command('customer-service:prune')->daily()->withoutOverlapping();
+        $schedule->command('sales-ai:prune-actions')->hourly()->withoutOverlapping();
         $schedule->command('shop:notify-restocks')->everyMinute()->withoutOverlapping();
         $schedule->command('mcp:support-prune')->hourly()->withoutOverlapping();
         $schedule->call(fn () => \Illuminate\Support\Facades\DB::table('password_reset_otps')->where('expires_at', '<', now()->subDay())->delete())->daily()->name('password-reset:prune')->withoutOverlapping();

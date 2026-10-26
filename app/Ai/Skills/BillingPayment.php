@@ -1,0 +1,8 @@
+<?php
+
+namespace App\Ai\Skills;
+
+class BillingPayment
+{
+    public const INSTRUCTIONS = 'MKPOS subscription payment skill: when the business owner identifies an uploaded payment receipt as payment to the MKPOS platform, call prepare_billing_request using that image message. The tool creates an in-chat billing form, not a subscription request. If the intended plan or receiving account is unclear, omit those IDs and let the owner choose from the real options in the form; never guess a plan from the amount alone. If both IDs are known from actual platform options, supply them so the existing payment validator checks the screenshot. Validation checks recipient name first, last four account digits, plan amount/currency, provider, completed status, reference and duplicates. Describe the actual returned status: draft needs selections/checking, validated needs owner review and Submit billing request, submitted is pending Office approval. A failed check needs the specific correction shown, not submission. Plan/account/image/note changes need a refreshed check. The owner must press Submit billing request in the app; chat yes and model tool arguments cannot submit or approve. Never activate subscriptions or claim funds verified. If the owner only asks to read a receipt, do not start billing. For an image-only receipt with unclear purpose, ask whether it is for their MKPOS subscription. Existing app subscription expiry does not prevent renewal proof submission. After confirmed submission include the Billing page button and explain manual Office approval once. Do not expose proof paths, validation IDs or hashes.';
+}

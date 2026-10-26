@@ -1,0 +1,25 @@
+MKPOS owner-to-staff AI history privacy fix
+Date: 2026-10-26 (Asia/Rangoon)
+
+Command:
+php vendor/phpunit/phpunit/phpunit --no-progress --filter 'AiAssistantTest|AiAssistantAccessTest|AiBusinessActionsTest|AiBusinessToolsTest|AiBusinessAdvisorTest|AiOwnerOnboardingTest|SystemPaymentReviewTest'
+Result: OK (133 tests, 1901 assertions)
+
+Command:
+php vendor/phpunit/phpunit/phpunit --no-progress --filter 'AiManagementTest|AiAssistantEntitlementTest|AiPriceCheckerTest'
+Result: OK (35 tests, 545 assertions)
+
+Command:
+php vendor/phpunit/phpunit/phpunit --no-progress --filter test_audit artifacts/security-audit
+Result: OK (7 tests, 28 assertions)
+
+Total: 175 tests, 2474 assertions, all passed.
+
+PHP syntax checks passed for the controller, agent, access service and migration.
+Tests used isolated SQLite memory with mocked provider HTTP/AI responses.
+
+Local database update:
+Verified effective environment=local, driver=mysql, loopback host, database=mkpos and no connection URL override before migration.
+Applied only 2026_10_26_000002_protect_ai_conversation_history.
+Verified privacy column exists and ai_messages row count is unchanged.
+No real AI requests or financial actions were performed.

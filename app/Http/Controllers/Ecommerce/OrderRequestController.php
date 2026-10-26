@@ -19,10 +19,17 @@ class OrderRequestController extends Controller
 
     public function store(Request $request): array
     {
-        $data = $request->validate(['type' => ['required', 'in:cancellation,return'], 'reason' => ['required', 'string', 'min:5', 'max:2000'],
+        $data = $request->validate(['type' => ['required', 'in:cancellation,return,change'], 'reason' => ['required', 'string', 'min:5', 'max:2000'],
+            'requested_changes' => ['required_if:type,change', 'nullable', 'array:address,phone,notes,items'], 'requested_changes.address' => ['sometimes', 'string', 'max:2000'], 'requested_changes.phone' => ['sometimes', 'string', 'max:80'], 'requested_changes.notes' => ['sometimes', 'string', 'max:2000'], 'requested_changes.items' => ['sometimes', 'array', 'min:1', 'max:100'], 'requested_changes.items.*' => ['array:product_id,quantity'], 'requested_changes.items.*.product_id' => ['required', 'integer', 'min:1', 'distinct'], 'requested_changes.items.*.quantity' => ['required', 'numeric', 'between:0.001,100000', 'regex:/^\d+(\.\d{1,3})?$/'],
             'photo' => ['nullable', 'image', 'mimes:jpg,jpeg,png,webp', 'max:2048']]);
         abort_unless(trim($data['reason']) !== '', 422, 'Enter a reason for your request.');
         $order = $this->authorized($request);
+        if ($data['type'] === 'change') {
+            abort_unless(!empty($data['requested_changes']), 422, 'Specify the requested changes.');
+            foreach ($data['requested_changes']['items'] ?? [] as $item) {
+                abort_unless(DB::table('ecommerce_product_settings')->where('business_id', $order->business_id)->where('product_id', $item['product_id'])->where('published', true)->exists(), 422, 'Requested product is unavailable in this shop.');
+            }
+        }
         $path = $request->file('photo')?->store('shop-return-photos/'.$order->business_id, 'local');
         try {
             return DB::transaction(function () use ($order, $data, $path) {
@@ -33,12 +40,14 @@ class OrderRequestController extends Controller
                     return $this->commerce->orderView($order);
                 }
                 if ($data['type'] === 'cancellation') abort_if(in_array($order->status, ['completed', 'cancelled', 'expired', 'return_pending']), 409, 'This order cannot receive a cancellation request.');
-                else abort_unless($order->status === 'completed' && !$order->sale_voided && $order->payment_status === 'paid', 409, 'Only a paid completed order can receive a return/refund request.');
+                elseif ($data['type'] === 'return') abort_unless($order->status === 'completed' && !$order->sale_voided && $order->payment_status === 'paid', 409, 'Only a paid completed order can receive a return/refund request.');
+                else abort_if(in_array($order->status, ['completed', 'cancelled', 'expired', 'dispatched', 'return_pending']), 409, 'Contact the shop for changes to this order.');
                 $automatic = $data['type'] === 'cancellation' && $order->status === 'pending' && $order->payment_status === 'unpaid';
                 DB::table('shop_order_requests')->insert(['business_id' => $order->business_id, 'order_id' => $order->id,
                     'type' => $data['type'], 'status' => $automatic ? 'approved' : 'pending', 'reason' => trim($data['reason']),
+                    ...($data['type'] === 'change' ? ['requested_changes' => json_encode($data['requested_changes'], JSON_THROW_ON_ERROR)] : []),
                     'photo_path' => $data['type'] === 'return' ? $path : null, 'created_at' => now(), 'updated_at' => now()]);
-                if ($data['type'] === 'cancellation' && $path) Storage::disk('local')->delete($path);
+                if ($data['type'] !== 'return' && $path) Storage::disk('local')->delete($path);
                 $this->commerce->event($order->business_id, $order->id, $data['type'].'_requested', null, trim($data['reason']));
                 if ($automatic) {
                     $this->commerce->transition($order->business_id, $order->id, 'cancelled', null, trim($data['reason']));
@@ -60,7 +69,8 @@ class OrderRequestController extends Controller
             abort_unless($row, 404);
             if ($row->status === $data['status']) return $this->commerce->orderView($order, true);
             abort_unless($row->status === 'pending' || ($row->type === 'return' && $row->status === 'approved' && $data['status'] === 'resolved'), 409, 'This request has already been reviewed.');
-            if ($data['status'] === 'resolved') abort_unless($row->type === 'return' && $order->sale_voided && $order->payment_status === 'refunded', 409, 'Use the controlled sale void and full refund workflow before resolving this request.');
+            if ($row->type === 'change') abort_unless(in_array($data['status'], ['resolved', 'rejected']), 422, 'Handle the requested change with the customer, then mark resolved or rejected. This does not edit order snapshots.');
+            if ($data['status'] === 'resolved' && $row->type !== 'change') abort_unless($row->type === 'return' && $order->sale_voided && $order->payment_status === 'refunded', 409, 'Use the controlled sale void and full refund workflow before resolving this request.');
             if ($row->type === 'cancellation' && $data['status'] === 'approved') {
                 abort_if(in_array($order->status, ['completed', 'expired']), 409, 'This order can no longer be cancelled.');
                 if (in_array($order->status, ['dispatched', 'return_pending'])) {

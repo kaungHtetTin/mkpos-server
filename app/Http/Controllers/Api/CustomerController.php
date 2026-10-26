@@ -2,6 +2,9 @@
 
 namespace App\Http\Controllers\Api;
 
+use App\Services\BusinessRecordWriter;
+use App\Support\AppTime;
+use App\Tenancy\TenantContext;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 
@@ -41,7 +44,7 @@ class CustomerController extends ApiController
     public function store(Request $request)
     {
         $data = $this->validatedCustomer($request);
-        $id = DB::table('customers')->insertGetId($data + ['is_active' => true, 'created_at' => now(), 'updated_at' => now()]);
+        $id = DB::table('customers')->insertGetId($data + ['business_id' => app(TenantContext::class)->requireId(), 'is_active' => true, 'created_at' => now(), 'updated_at' => now()]);
 
         return (array) DB::table('customers')->where('id', $id)->select('*')->selectRaw('0 as balance')->first();
     }
@@ -103,11 +106,14 @@ class CustomerController extends ApiController
                     $item = (array) $row;
                     $item['photo_url'] = $item['photo_path'] ? '/products/'.$item['product_id'].'/photo?v='.strtotime((string) $item['product_updated_at']) : null;
                     unset($item['photo_path'], $item['product_updated_at']);
+
                     return $item;
                 })->all();
+
                 return $sale;
             }, $result['items']);
         }
+
         return $result;
     }
 
@@ -179,6 +185,7 @@ class CustomerController extends ApiController
         if (isset($result['items'])) {
             $result['summary'] = array_map(fn ($value) => (int) $value, (array) $summaryRow);
         }
+
         return $result;
     }
 
@@ -206,16 +213,10 @@ class CustomerController extends ApiController
 
     private function validatedCustomer(Request $request): array
     {
-        $data = $request->validate(['name' => ['required', 'string', 'max:255'], 'phone' => ['nullable', 'string', 'max:255'], 'email' => ['nullable', 'email', 'max:255'], 'address' => ['nullable', 'string'], 'note' => ['nullable', 'string']]);
-        if (array_key_exists('email', $data)) $data['email'] = ! empty($data['email']) ? strtolower(trim($data['email'])) : null;
-        foreach (['phone', 'address', 'note'] as $field) {
-            $data[$field] = $data[$field] ?? '';
-        }
-
-        return $data;
+        return app(BusinessRecordWriter::class)->validate('customer', $request->all());
     }
 
-    private function validatedPayment(Request $request, bool $includeCustomer = false): array
+    public function validatedPayment(Request $request, bool $includeCustomer = false): array
     {
         $rules = ['amount' => ['required', 'integer', 'min:1'], 'direction' => ['required', 'in:customer_to_shop,shop_to_customer'], 'payment_method' => ['nullable', 'string', 'max:255'], 'note' => ['nullable', 'string']];
         if ($includeCustomer) {
@@ -265,7 +266,7 @@ class CustomerController extends ApiController
     {
         $start = $request->query('start', $request->query('date_from'));
         $end = $request->query('end', $request->query('date_to'));
-        \App\Support\AppTime::filterDays($query, $start, $end, $column);
+        AppTime::filterDays($query, $start, $end, $column);
         if (($status = $request->query('status', 'all')) !== 'all') {
             $query->where('status', $status);
         }

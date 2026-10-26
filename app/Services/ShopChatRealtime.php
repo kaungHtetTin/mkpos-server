@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 
@@ -25,6 +26,11 @@ class ShopChatRealtime
 
     public function changed(object $thread, int $messageId): void
     {
+        if (! config('shop_chat.realtime_enabled')) return;
+        // Handling changes have no new message. Reuse the last identifier so the
+        // existing socket contract accepts the event and clients reload the mode.
+        if ($messageId < 1) $messageId = (int) DB::table('shop_chat_messages')->where('thread_id', $thread->id)->max('id');
+        if ($messageId < 1) return;
         $channels = ['private-shop.chat.business.'.$thread->business_id, 'private-shop.chat.thread.'.$thread->uuid];
         if ($thread->platform_customer_id ?? null) $channels[] = 'private-shop.chat.customer.'.$thread->platform_customer_id;
         $this->publish($channels,
@@ -38,12 +44,13 @@ class ShopChatRealtime
             $body = json_encode(['channels' => $channels, 'event' => $event, 'data' => $data]);
             $timestamp = (string) time();
             $url = config('shop_chat.publish_scheme').'://'.config('shop_chat.publish_host').':'.config('shop_chat.publish_port').'/events';
-            Http::timeout(2)->withHeaders(['X-Chat-Timestamp' => $timestamp,
+            Http::connectTimeout(3)->timeout(5)->withHeaders(['X-Chat-Timestamp' => $timestamp,
                 'X-Chat-Signature' => hash_hmac('sha256', $timestamp.'.'.$body, config('shop_chat.secret'))])
                 ->withBody($body, 'application/json')->post($url)->throw();
         } catch (\Throwable $error) {
             // The database is authoritative; polling recovers messages after a socket outage.
-            Log::warning('Shop realtime delivery unavailable', ['event' => $event]);
+            Log::warning('Shop realtime delivery unavailable', ['event' => $event, 'exception_class' => get_class($error),
+                'http_status' => $error instanceof \Illuminate\Http\Client\RequestException ? $error->response->status() : null]);
         }
     }
 }

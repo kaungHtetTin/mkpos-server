@@ -79,6 +79,9 @@ class SubscriptionService
             ->select('requests.*', 'plans.name as plan_name', 'plans.price', 'plans.currency')
             ->latest('requests.id')
             ->first();
+        if ($pending) {
+            unset($pending->payment_transaction_key);
+        }
 
         if ($pending) {
             $pending->payment_screenshot_uploaded = (bool) $pending->payment_screenshot_path;

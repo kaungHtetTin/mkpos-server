@@ -2,11 +2,14 @@
 
 namespace Tests\Feature;
 
+use App\Http\Controllers\LandingController;
+use Illuminate\Foundation\Testing\DatabaseTransactions;
+use Illuminate\Support\Facades\DB;
 use Tests\TestCase;
 
 class LandingPageTest extends TestCase
 {
-    use \Illuminate\Foundation\Testing\DatabaseTransactions;
+    use DatabaseTransactions;
 
     public function test_office_features_and_administrator_guide_are_public(): void
     {
@@ -28,21 +31,21 @@ class LandingPageTest extends TestCase
 
     public function test_public_pages_use_office_branding_and_validated_color_fallback(): void
     {
-        \Illuminate\Support\Facades\DB::table('platform_branding')->where('id', 1)->update([
+        DB::table('platform_branding')->where('id', 1)->update([
             'primary_color' => '#4f46e5', 'logo_path' => 'platform-branding/test-logo.png',
             'icon_path' => 'platform-branding/test-icon.webp', 'favicon_path' => 'platform-branding/test-favicon.png',
         ]);
         foreach (['/', '/documentation/office', '/plans', '/tutorials'] as $path) {
             $this->get($path)->assertOk()
-                ->assertSee('--green: #4f46e5;', false)
+                ->assertSee('--theme-primary: #4f46e5;', false)
                 ->assertSee('content="#4f46e5"', false)
                 ->assertSee('/api/branding/assets/logo?v=', false)
                 ->assertSee('/api/branding/assets/icon?v=', false)
                 ->assertSee('/api/branding/assets/favicon?v=', false)
                 ->assertDontSee('platform-branding/test-logo.png');
         }
-        \Illuminate\Support\Facades\DB::table('platform_branding')->where('id', 1)->update(['primary_color' => 'red;/*']);
-        $this->get('/')->assertOk()->assertSee('--green: #0e684e;', false)->assertDontSee('red;/*', false);
+        DB::table('platform_branding')->where('id', 1)->update(['primary_color' => 'red;/*']);
+        $this->get('/')->assertOk()->assertSee('--theme-primary: #0e684e;', false)->assertDontSee('red;/*', false);
     }
 
     public function test_public_links_use_configured_app_subdomains(): void
@@ -84,7 +87,7 @@ class LandingPageTest extends TestCase
     public function test_product_guide_is_public_and_documents_platform_limits(): void
     {
         $this->get('/documentation')->assertOk()->assertSee('Documentation');
-        foreach (\App\Http\Controllers\LandingController::TOPICS as $key => $info) {
+        foreach (LandingController::TOPICS as $key => $info) {
             $response = $this->get('/documentation/'.$key)->assertOk()->assertSee($info[0])
                 ->assertSee('aria-label="On this page"', false);
             preg_match_all('/<h2 id="([^"]+)">/', $response->getContent(), $sections);
@@ -105,9 +108,10 @@ class LandingPageTest extends TestCase
     public function test_package_page_uses_published_billing_plans(): void
     {
         $this->get('/plans')->assertOk()->assertViewHas('plans', function ($plans) {
-            $expected = \Illuminate\Support\Facades\DB::table('subscription_plans')
+            $expected = DB::table('subscription_plans')
                 ->where('is_active', true)->where('is_public', true)->where('is_system', false)
                 ->orderBy('sort_order')->orderBy('price')->pluck('name');
+
             return $plans->pluck('name')->all() === $expected->all();
         })->assertSee('Package plans')->assertSee('Free trial');
         $this->view('landing.plans', ['plans' => collect()])->assertSee('No paid packages are currently published.');

@@ -43,6 +43,15 @@ class ActivityAlertController extends Controller
         if (isset($scope['business_id']) && $items->contains(fn ($item) => str_starts_with($item['event'], 'subscription.'))) {
             $result['subscription'] = app(SubscriptionService::class)->status($scope['business_id']);
         }
+        if (isset($scope['business_id']) && $items->contains(fn ($item) => str_starts_with($item['event'], 'sales_ai.'))) {
+            $ids = $items->where('target', 'sales-ai-topup')->pluck('entity_id')->unique()->all();
+            $result['sales_ai'] = [
+                'wallet' => app(\App\Services\SalesAi\Wallet::class)->view($scope['business_id']),
+                'wallet_changed' => $items->contains(fn ($item) => in_array($item['event'], ['sales_ai.topup.approved', 'sales_ai.wallet.adjusted'], true)),
+                'requests' => DB::table('sales_ai_topups')->where('business_id', $scope['business_id'])->whereIn('id', $ids)
+                    ->get()->map(fn ($row) => app(\App\Services\SalesAi\Topups::class)->present($row))->all(),
+            ];
+        }
         return $result;
     }
 }

@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use App\Models\PlatformAdmin;
+use App\Support\ThemePalette;
 use Illuminate\Foundation\Testing\DatabaseTransactions;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\DB;
@@ -22,7 +23,8 @@ class OfficeManagementTest extends TestCase
 
     public function test_admin_crud_permissions_password_security_and_audit_identity(): void
     {
-        $owner = $this->admin(); $operator = $this->admin('admin');
+        $owner = $this->admin();
+        $operator = $this->admin('admin');
         $this->getJson('/api/office/admins')->assertUnauthorized();
         $this->actingAs($operator, 'office')->getJson('/api/office/admins')->assertForbidden();
         $this->putJson('/api/office/branding', ['primary_color' => '#123456'])->assertForbidden();
@@ -47,7 +49,8 @@ class OfficeManagementTest extends TestCase
 
     public function test_subscription_default_and_per_payment_book_keep_historical_balances_and_actor(): void
     {
-        $admin = $this->admin(); $this->actingAs($admin, 'office');
+        $admin = $this->admin();
+        $this->actingAs($admin, 'office');
         $bank = $this->postJson('/api/office/bank-books', ['name' => 'Receipt '.Str::random(8), 'is_active' => true])->assertOk()->json('items');
         $bank = end($bank)['id'];
         $business = DB::table('businesses')->insertGetId(['name' => 'Management shop', 'slug' => Str::uuid()]);
@@ -109,7 +112,10 @@ class OfficeManagementTest extends TestCase
         $this->getJson('/api/branding')->assertOk();
         $this->actingAs($this->admin(), 'office');
         $this->putJson('/api/office/branding', ['primary_color' => 'red; color:black'])->assertUnprocessable();
-        $this->putJson('/api/office/branding', ['primary_color' => '#4f46e5'])->assertOk()->assertJsonPath('primary_color', '#4f46e5');
+        $preview = (string) Str::uuid();
+        DB::table('platform_theme_previews')->insert(['id' => $preview, 'admin_id' => auth('office')->id(), 'primary_color' => '#4f46e5',
+            'palettes' => json_encode(ThemePalette::generate('#4f46e5')), 'rationale' => 'Test palette', 'created_at' => now()]);
+        $this->putJson('/api/office/branding', ['primary_color' => '#4f46e5', 'preview_id' => $preview])->assertOk()->assertJsonPath('primary_color', '#4f46e5');
         $this->post('/api/office/branding/logo', ['image' => UploadedFile::fake()->image('logo.png', 80, 80)], ['Accept' => 'application/json'])->assertOk();
         $this->get('/api/branding/assets/logo')->assertOk()->assertHeader('X-Content-Type-Options', 'nosniff');
         $this->post('/api/office/branding/favicon', ['image' => UploadedFile::fake()->create('bad.svg', 1, 'image/svg+xml')], ['Accept' => 'application/json'])->assertUnprocessable();

@@ -67,6 +67,9 @@ class SubscriptionApprovalEmailTest extends TestCase
     {
         $requestId = $this->requestId();
         $this->actingAs($this->admin, 'office')->postJson('/api/office/subscription-requests/'.$requestId.'/approve', ['price_paid' => 22000])->assertOk();
+        $linkedPeriod = DB::table('subscription_requests')->where('id', $requestId)->value('business_subscription_id');
+        $this->assertNotNull($linkedPeriod);
+        $this->assertSame((int) $this->owner->business_id, (int) DB::table('business_subscriptions')->where('id', $linkedPeriod)->value('business_id'));
         $this->assertCount(0, $this->mailer->sent);
         $this->callbacks(); $this->callbacks();
         $this->assertCount(1, $this->mailer->sent);

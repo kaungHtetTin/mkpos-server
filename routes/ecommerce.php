@@ -28,6 +28,12 @@ Route::prefix('ecommerce')->middleware(['throttle:shop-public', \App\Http\Middle
         Route::post('/chat/{uuid}/read', [\App\Http\Controllers\Ecommerce\ChatController::class, 'customerRead']);
         Route::post('/chat/{uuid}/presence', [\App\Http\Controllers\Ecommerce\ChatController::class, 'customerPresence'])->middleware('throttle:60,1');
         Route::post('/chat/{uuid}/messages', [\App\Http\Controllers\Ecommerce\ChatController::class, 'customerSend'])->middleware('throttle:60,1');
+        Route::post('/chat/{uuid}/handoff', [\App\Http\Controllers\Ecommerce\ChatController::class, 'customerHandoff'])->middleware('throttle:20,1');
+        Route::get('/chat/{uuid}/sales-actions/{id}', [\App\Http\Controllers\Ecommerce\SalesAiActionController::class, 'show'])->whereUuid('id');
+        Route::post('/chat/{uuid}/sales-actions/{id}/review', [\App\Http\Controllers\Ecommerce\SalesAiActionController::class, 'review'])->whereUuid('id')->middleware('throttle:30,1');
+        Route::post('/chat/{uuid}/sales-actions/{id}/confirm', [\App\Http\Controllers\Ecommerce\SalesAiActionController::class, 'confirm'])->whereUuid('id')->middleware('throttle:20,1');
+        Route::post('/chat/{uuid}/sales-actions/{id}/cancel', [\App\Http\Controllers\Ecommerce\SalesAiActionController::class, 'cancel'])->whereUuid('id')->middleware('throttle:30,1');
+        Route::get('/chat/{uuid}/sales-actions/{id}/image', [\App\Http\Controllers\Ecommerce\SalesAiActionController::class, 'image'])->whereUuid('id');
         Route::post('/chat/auth', [\App\Http\Controllers\Ecommerce\ChatController::class, 'customerAuth']);
     });
     Route::post('/customer/register', [CustomerAccountController::class, 'register'])->middleware('throttle:10,1');
@@ -86,6 +92,14 @@ Route::prefix('ecommerce')->middleware(['throttle:shop-public', \App\Http\Middle
 });
 
 Route::prefix('shop-admin')->middleware(['auth:sanctum', 'business'])->group(function () {
+    Route::get('/sales-ai', [\App\Http\Controllers\Ecommerce\SalesAiController::class, 'show']);
+    Route::put('/sales-ai', [\App\Http\Controllers\Ecommerce\SalesAiController::class, 'update']);
+    Route::get('/sales-ai/wallet', [\App\Http\Controllers\Ecommerce\SalesAiController::class, 'wallet']);
+    Route::get('/sales-ai/topups', [\App\Http\Controllers\Ecommerce\SalesAiController::class, 'topups']);
+    Route::post('/sales-ai/topups', [\App\Http\Controllers\Ecommerce\SalesAiController::class, 'submit'])->middleware('throttle:5,1');
+    Route::get('/sales-ai/topups/{id}', [\App\Http\Controllers\Ecommerce\SalesAiController::class, 'detail'])->whereNumber('id');
+    Route::post('/sales-ai/topups/{id}/cancel', [\App\Http\Controllers\Ecommerce\SalesAiController::class, 'cancel'])->whereNumber('id');
+    Route::get('/sales-ai/topups/{id}/screenshot', [\App\Http\Controllers\Ecommerce\SalesAiController::class, 'screenshot'])->whereNumber('id');
     Route::get('/owner-location', [\App\Http\Controllers\Ecommerce\OwnerLocationController::class, 'show']);
     Route::post('/owner-location', [\App\Http\Controllers\Ecommerce\OwnerLocationController::class, 'store']);
 });
@@ -139,6 +153,8 @@ Route::prefix('shop-admin')->middleware(['auth:sanctum', 'business', \App\Http\M
         Route::post('/chat/presence', [\App\Http\Controllers\Ecommerce\ChatController::class, 'ownerPresence'])->middleware('throttle:60,1');
         Route::get('/chat', [\App\Http\Controllers\Ecommerce\ChatController::class, 'index']);
         Route::get('/chat/{uuid}/messages', [\App\Http\Controllers\Ecommerce\ChatController::class, 'ownerMessages']);
+        Route::post('/chat/handoff-all', [\App\Http\Controllers\Ecommerce\ChatController::class, 'ownerHandoffAll'])->middleware(['module:ecommerce_process', 'throttle:10,1']);
+        Route::post('/chat/{uuid}/handoff', [\App\Http\Controllers\Ecommerce\ChatController::class, 'ownerHandoff'])->middleware('throttle:20,1');
         Route::get('/chat/{uuid}/products', [\App\Http\Controllers\Ecommerce\ChatController::class, 'ownerProducts']);
         Route::get('/chat/{uuid}/messages/{id}/image', [\App\Http\Controllers\Ecommerce\ChatController::class, 'ownerImage'])->whereNumber('id');
         Route::post('/chat/{uuid}/read', [\App\Http\Controllers\Ecommerce\ChatController::class, 'ownerRead']);

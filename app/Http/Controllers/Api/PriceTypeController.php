@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Api;
 
+use App\Services\ProductPricing;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 
@@ -65,15 +66,15 @@ class PriceTypeController extends ApiController
         $usage = DB::table('product_prices as pp')->join('products as p', 'p.id', '=', 'pp.product_id')->where('pp.name', $name)->where('p.is_active', true)->where('pp.price', '>', 0)->distinct('pp.product_id')->count('pp.product_id');
         abort_if($usage > 0, 409, "Price type \"{$name}\" is used by {$usage} product(s) and cannot be deleted");
         DB::transaction(function () use ($name, $types) {
-        DB::table('product_prices')->where('name', $name)->delete();
-        DB::table('price_type_rules')->where('name', $name)->delete();
-        $this->saveConfigured($types->reject(fn ($item) => strcasecmp($item, $name) === 0)->values()->all());
+            DB::table('product_prices')->where('name', $name)->delete();
+            DB::table('price_type_rules')->where('name', $name)->delete();
+            $this->saveConfigured($types->reject(fn ($item) => strcasecmp($item, $name) === 0)->values()->all());
         });
 
         return $this->response();
     }
 
-    private function validated(Request $request): array
+    public function validated(Request $request): array
     {
         return $request->validate(['name' => ['required', 'string', 'max:50'], 'pricing_mode' => ['nullable', 'in:manual,automatic'], 'markup_percent' => ['nullable', 'numeric', 'between:0,1000'],
             'rounding' => ['nullable', 'integer', 'between:1,100000'], 'minimum_profit' => ['nullable', 'integer', 'min:0'], 'apply_to_existing' => ['nullable', 'boolean']]);
@@ -118,9 +119,9 @@ class PriceTypeController extends ApiController
         }
 
         return ['items' => $types->all(), 'usage' => $usage, 'rules' => $types->map(function ($name) use ($rules) {
-        $rule = $rules[$name];
+            $rule = $rules[$name];
 
-        return ['name' => $name, 'pricing_mode' => $rule->pricing_mode, 'markup_percent' => (float) $rule->markup_percent, 'rounding' => (int) $rule->rounding, 'minimum_profit' => (int) $rule->minimum_profit];
+            return ['name' => $name, 'pricing_mode' => $rule->pricing_mode, 'markup_percent' => (float) $rule->markup_percent, 'rounding' => (int) $rule->rounding, 'minimum_profit' => (int) $rule->minimum_profit];
         })->all()];
     }
 
@@ -139,8 +140,7 @@ class PriceTypeController extends ApiController
             return;
         }
         foreach (DB::table('product_prices as pp')->join('products as p', 'p.id', '=', 'pp.product_id')->where('pp.name', $name)->where('pp.is_manual', false)->select('pp.id', 'pp.product_id', 'p.cost')->get() as $row) {
-            $price = max(ceil($row->cost * (1 + $rule->markup_percent / 100)), $row->cost + $rule->minimum_profit);
-            $price = (int) (ceil($price / max($rule->rounding, 1)) * max($rule->rounding, 1));
+            $price = ProductPricing::automatic($row->cost, $rule);
             DB::table('product_prices')->where('id', $row->id)->update(['price' => $price]);
             if (strcasecmp($name, 'Retail') === 0) {
                 DB::table('products')->where('id', $row->product_id)->update(['price' => $price]);

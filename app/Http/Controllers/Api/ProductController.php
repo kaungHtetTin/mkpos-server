@@ -2,9 +2,15 @@
 
 namespace App\Http\Controllers\Api;
 
+use App\Services\EcommerceInventory;
+use App\Services\MarketplaceTaxonomy;
+use App\Services\MerchantMarketplaceCategory;
+use App\Services\ProductWriter;
+use App\Tenancy\TenantContext;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Validation\ValidationException;
 
 class ProductController extends ApiController
 {
@@ -41,9 +47,9 @@ class ProductController extends ApiController
         }
         switch ($request->query('stock_status', 'all')) {
             case 'out_of_stock': $query->where('stock', '<=', 0);
-            break;
+                break;
             case 'low_stock': $query->where('stock', '>', 0)->where('low_stock_threshold', '>', 0)->whereColumn('stock', '<=', 'low_stock_threshold');
-            break;
+                break;
             case 'in_stock':
                 $query->where('stock', '>', 0)->where(fn ($q) => $q->where('low_stock_threshold', '<=', 0)->orWhereColumn('stock', '>', 'low_stock_threshold'));
                 break;
@@ -60,7 +66,7 @@ class ProductController extends ApiController
 
     public function marketplaceCategories(): array
     {
-        return ['items' => app(\App\Services\MarketplaceTaxonomy::class)->categories()->filter(fn ($category) => $category['effective_active'])->sortBy('path')->values()];
+        return ['items' => app(MarketplaceTaxonomy::class)->categories()->filter(fn ($category) => $category['effective_active'])->sortBy('path')->values()];
     }
 
     public function categories()
@@ -164,7 +170,7 @@ class ProductController extends ApiController
 
     public function store(Request $request)
     {
-        $writer = app(\App\Services\ProductWriter::class);
+        $writer = app(ProductWriter::class);
         $data = $writer->validate($request);
 
         return DB::transaction(fn () => $this->find($writer->create($data, (int) $request->user('web')->id)));
@@ -173,24 +179,10 @@ class ProductController extends ApiController
     public function update(Request $request, int $id)
     {
         abort_if(! DB::table('products')->where('id', $id)->exists(), 404, 'Product not found');
-        $data = app(\App\Services\ProductWriter::class)->validate($request, $id, true);
+        $data = app(ProductWriter::class)->validate($request, $id, true);
 
         return DB::transaction(function () use ($data, $id, $request) {
-            app(\App\Services\MerchantMarketplaceCategory::class)->lock($data);
-            $old = DB::table('products')->where('id', $id)->lockForUpdate()->first();
-            app(\App\Services\EcommerceInventory::class)->assertEditable($old, $data);
-            DB::table('products')->where('id', $id)->update(['name' => $data['name'], 'sku' => $data['sku'] ?? '', 'barcode' => trim($data['barcode'] ?? ''),
-                'category' => $data['category'] ?? '', 'base_unit' => $data['base_unit'], 'purchase_unit' => $data['purchase_unit'],
-                'purchase_conversion_factor' => $data['purchase_conversion_factor'], 'price' => $data['price'], 'cost' => $data['cost'] ?? 0, 'base_cost' => $data['cost'] ?? 0,
-                'stock' => $data['stock'] ?? 0, 'low_stock_threshold' => $data['low_stock_threshold'] ?? 0,
-                'is_active' => $data['is_active'] ?? true, 'updated_at' => now()]);
-            app(\App\Services\ProductWriter::class)->savePrices($id, $data['prices'] ?? [], $data['price']);
-            app(\App\Services\ProductWriter::class)->saveOnlineDescription($id, $data);
-            app(\App\Services\MerchantMarketplaceCategory::class)->save($id, $data, (int) $request->user('web')->id);
-            $change = (float) ($data['stock'] ?? 0) - (float) $old->stock;
-            if ($change != 0) {
-                $this->insertMovement($id, $data['name'], 'manual_adjustment', $change, 'product', $id, 'Product stock edited');
-            }
+            app(ProductWriter::class)->update($id, $data, (int) $request->user('web')->id);
 
             return $this->find($id);
         });
@@ -200,19 +192,21 @@ class ProductController extends ApiController
     {
         $data = $request->validate(['ids' => ['required', 'array', 'min:1', 'max:1000'],
             'ids.*' => ['required', 'integer', 'min:1', 'distinct']]);
-        $businessId = app(\App\Tenancy\TenantContext::class)->requireId();
+        $businessId = app(TenantContext::class)->requireId();
+
         return DB::transaction(function () use ($data, $businessId) {
             $products = DB::table('products')->where('business_id', $businessId)->whereIn('id', $data['ids'])
                 ->where('is_active', true)->orderBy('id')->lockForUpdate()->get();
             if ($products->count() !== count($data['ids'])) {
-                throw \Illuminate\Validation\ValidationException::withMessages(['ids' => 'Some selected products are no longer available. Refresh the list and select them again.']);
+                throw ValidationException::withMessages(['ids' => 'Some selected products are no longer available. Refresh the list and select them again.']);
             }
             foreach ($products as $product) {
-                abort_if(app(\App\Services\EcommerceInventory::class)->reserved($product->id, $businessId) > 0, 409,
+                abort_if(app(EcommerceInventory::class)->reserved($product->id, $businessId) > 0, 409,
                     "Resolve online orders for {$product->name} before deleting these products.");
             }
             DB::table('products')->where('business_id', $businessId)->whereIn('id', $data['ids'])
                 ->update(['is_active' => false, 'updated_at' => now()]);
+
             return ['ok' => true, 'deleted_count' => $products->count()];
         });
     }
@@ -222,8 +216,9 @@ class ProductController extends ApiController
         return DB::transaction(function () use ($id) {
             $product = DB::table('products')->where('id', $id)->where('is_active', true)->lockForUpdate()->first();
             abort_unless($product, 404, 'Product not found');
-            abort_if(app(\App\Services\EcommerceInventory::class)->reserved($id, $product->business_id) > 0, 409, 'Resolve online orders before archiving this product.');
+            abort_if(app(EcommerceInventory::class)->reserved($id, $product->business_id) > 0, 409, 'Resolve online orders before archiving this product.');
             DB::table('products')->where('id', $id)->update(['is_active' => false, 'updated_at' => now()]);
+
             return ['ok' => true];
         });
     }
@@ -235,7 +230,7 @@ class ProductController extends ApiController
         return DB::transaction(function () use ($data, $id) {
             $product = DB::table('products')->where('id', $id)->lockForUpdate()->first();
             abort_if(! $product, 404, 'Product not found');
-            app(\App\Services\EcommerceInventory::class)->assertRemaining($product, (float) $product->stock + (float) $data['quantity']);
+            app(EcommerceInventory::class)->assertRemaining($product, (float) $product->stock + (float) $data['quantity']);
             DB::table('products')->where('id', $id)->increment('stock', (float) $data['quantity'], ['updated_at' => now()]);
             $this->insertMovement($id, $product->name, 'manual_adjustment', (float) $data['quantity'], 'product', $id, $data['reason'] ?? '');
 
@@ -266,12 +261,12 @@ class ProductController extends ApiController
         $productIds = array_column($products, 'id');
         $prices = DB::table('product_prices')->whereIn('product_id', $productIds)->orderBy('name')->get()->groupBy('product_id');
         $descriptions = DB::table('ecommerce_product_settings')
-            ->where('business_id', app(\App\Tenancy\TenantContext::class)->requireId())
+            ->where('business_id', app(TenantContext::class)->requireId())
             ->whereIn('product_id', $productIds)->pluck('description', 'product_id');
-        $reserved = DB::table('ecommerce_stock_reservations')->where('business_id', app(\App\Tenancy\TenantContext::class)->requireId())
+        $reserved = DB::table('ecommerce_stock_reservations')->where('business_id', app(TenantContext::class)->requireId())
             ->whereIn('product_id', $productIds)->where('status', 'active')->select('product_id')->selectRaw('SUM(quantity) as quantity')->groupBy('product_id')->pluck('quantity', 'product_id');
         $dispatched = DB::table('ecommerce_stock_reservations as r')->join('ecommerce_orders as o', 'o.id', '=', 'r.order_id')
-            ->where('r.business_id', app(\App\Tenancy\TenantContext::class)->requireId())->whereIn('r.product_id', $productIds)
+            ->where('r.business_id', app(TenantContext::class)->requireId())->whereIn('r.product_id', $productIds)
             ->where('r.status', 'active')->whereIn('o.status', ['dispatched', 'return_pending'])->select('r.product_id')->selectRaw('SUM(r.quantity) as quantity')->groupBy('r.product_id')->pluck('quantity', 'r.product_id');
         foreach ($products as &$product) {
             unset($product['active_barcode']);
@@ -298,6 +293,6 @@ class ProductController extends ApiController
         $product = DB::table('products')->where('id', $id)->first();
         abort_if(! $product, 404, 'Product not found');
 
-        return $this->attachPrices([(array) $product])[0] + app(\App\Services\MerchantMarketplaceCategory::class)->details($id, (int) $product->business_id);
+        return $this->attachPrices([(array) $product])[0] + app(MerchantMarketplaceCategory::class)->details($id, (int) $product->business_id);
     }
 }

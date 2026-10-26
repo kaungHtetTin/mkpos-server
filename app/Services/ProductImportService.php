@@ -66,7 +66,7 @@ class ProductImportService
             if (count(array_unique($headers)) !== count($headers) || in_array('', $headers, true)) {
                 $this->fileError('Column headings must be non-empty and unique.');
             }
-            $configured = explode(',', DB::table('settings')->where('key', 'price_types')->value('value') ?: 'Retail');
+            $configured = explode(',', DB::table('settings')->where('business_id', $businessId)->where('key', 'price_types')->value('value') ?: 'Retail');
             $types = collect([...$configured, 'Retail', 'Wholesale', 'Credit'])->map('trim')->filter()
                 ->unique(fn ($name) => mb_strtolower($name))->values()->all();
             $rows = [];
@@ -227,7 +227,7 @@ class ProductImportService
     private function duplicate(array $payload): ?string
     {
         foreach (['barcode', 'sku'] as $field) {
-            if (($payload[$field] ?? '') !== '' && DB::table('products')->where('is_active', true)->where($field, $payload[$field])->exists()) {
+            if (($payload[$field] ?? '') !== '' && DB::table('products')->where('business_id', $this->tenant->requireId())->where('is_active', true)->where($field, $payload[$field])->exists()) {
                 return 'An active product already uses this '.$field.'. Existing products are kept unchanged.';
             }
         }

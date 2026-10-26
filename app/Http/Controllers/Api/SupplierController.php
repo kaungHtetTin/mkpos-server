@@ -2,7 +2,9 @@
 
 namespace App\Http\Controllers\Api;
 
+use App\Services\BusinessRecordWriter;
 use App\Support\SupplierBalance;
+use App\Tenancy\TenantContext;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 
@@ -41,7 +43,7 @@ class SupplierController extends ApiController
     public function store(Request $request)
     {
         $data = $this->validated($request);
-        $id = DB::table('suppliers')->insertGetId($data + ['is_active' => true, 'created_at' => now(), 'updated_at' => now()]);
+        $id = DB::table('suppliers')->insertGetId($data + ['business_id' => app(TenantContext::class)->requireId(), 'is_active' => true, 'created_at' => now(), 'updated_at' => now()]);
 
         return $this->find($id);
     }
@@ -127,6 +129,7 @@ class SupplierController extends ApiController
         if (isset($result['items'])) {
             $result['summary'] = array_map(fn ($value) => (int) $value, (array) $summaryRow);
         }
+
         return $result;
     }
 
@@ -168,15 +171,10 @@ class SupplierController extends ApiController
 
     private function validated(Request $request): array
     {
-        $data = $request->validate(['name' => ['required', 'string', 'max:255'], 'phone' => ['nullable', 'string', 'max:255'], 'address' => ['nullable', 'string'], 'contact_person' => ['nullable', 'string', 'max:255'], 'note' => ['nullable', 'string']]);
-        foreach (['phone', 'address', 'contact_person', 'note'] as $field) {
-            $data[$field] = $data[$field] ?? '';
-        }
-
-        return $data;
+        return app(BusinessRecordWriter::class)->validate('supplier', $request->all());
     }
 
-    private function validatedPayment(Request $request, bool $includeSupplier = false): array
+    public function validatedPayment(Request $request, bool $includeSupplier = false): array
     {
         $rules = ['amount' => ['required', 'integer', 'min:1'], 'direction' => ['required', 'in:shop_to_supplier,supplier_to_shop'], 'payment_method' => ['nullable', 'string', 'max:255'], 'note' => ['nullable', 'string']];
         if ($includeSupplier) {

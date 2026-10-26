@@ -2,6 +2,8 @@
 
 namespace App\Http\Controllers\Api;
 
+use App\Services\BusinessRecordWriter;
+use App\Tenancy\TenantContext;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 
@@ -29,7 +31,7 @@ class ExpenseController extends ApiController
     public function store(Request $request)
     {
         $data = $this->validated($request);
-        $id = DB::table('expenses')->insertGetId($data + ['status' => 'completed', 'created_at' => now(), 'updated_at' => now()]);
+        $id = DB::table('expenses')->insertGetId($data + ['business_id' => app(TenantContext::class)->requireId(), 'status' => 'completed', 'created_at' => now(), 'updated_at' => now()]);
 
         return (array) DB::table('expenses')->where('id', $id)->first();
     }
@@ -62,13 +64,7 @@ class ExpenseController extends ApiController
 
     private function validated(Request $request): array
     {
-        $data = $request->validate(['title' => ['required', 'string', 'max:255'], 'category' => ['nullable', 'string', 'max:255'], 'amount' => ['required', 'integer', 'min:1'],
-            'payment_method' => ['nullable', 'string', 'max:255'], 'expense_date' => ['nullable', 'date'], 'note' => ['nullable', 'string']]);
-        $data['category'] = $data['category'] ?? '';
-        $data['payment_method'] = $data['payment_method'] ?? 'Cash';
-        $data['expense_date'] = $data['expense_date'] ?? now()->toDateString();
-
-        return $data;
+        return app(BusinessRecordWriter::class)->validate('expense', $request->all());
     }
 
     private function filtered(Request $request, string $defaultStatus = 'all', bool $dates = true)

@@ -29,6 +29,15 @@ return [
     */
 
     'connections' => [
+        'customer-service' => [
+            'driver' => 'database', 'table' => 'jobs', 'queue' => 'customer-service', 'retry_after' => 600, 'after_commit' => true,
+        ],
+        'wyne-wyne' => [
+            'driver' => 'database', 'table' => 'jobs', 'queue' => 'wyne-wyne', 'retry_after' => 600, 'after_commit' => true,
+        ],
+        'sales-ai' => [
+            'driver' => 'database', 'table' => 'jobs', 'queue' => 'sales-ai', 'retry_after' => 600, 'after_commit' => true,
+        ],
 
         'sync' => [
             'driver' => 'sync',

@@ -5,7 +5,7 @@
     $brandFavicon = $branding['favicon_url'] ?: asset('app/branding/mkicon.png');
 @endphp
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="{{ $branding['theme_mode'] }}">
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -24,14 +24,26 @@
     <link rel="stylesheet" href="{{ asset('landing/tutorials.css') }}">
     <style>
         :root {
-            --green: {{ $branding['primary_color'] }};
-            --green-2: {{ \App\Support\PlatformBranding::shade($branding['primary_color'], .15, 0) }};
-            --green-3: {{ $branding['primary_color'] }};
-            --ink-deep: {{ \App\Support\PlatformBranding::shade($branding['primary_color'], .45, 0) }};
-            --lime: {{ \App\Support\PlatformBranding::shade($branding['primary_color'], .82, 255) }};
-            --lime-soft: {{ \App\Support\PlatformBranding::shade($branding['primary_color'], .94, 255) }};
+            color-scheme: {{ $branding['theme_mode'] }};
+            @foreach($branding['palettes'][$branding['theme_mode']] as $role => $value)
+            --theme-{{ str_replace('_', '-', $role) }}: {{ $value }};
+            @endforeach
         }
     </style>
+    <script type="module">
+        import { applyPlatformTheme } from '{{ asset('landing/themeRuntime.js') }}';
+        const refreshTheme = async () => {
+            if (document.visibilityState === 'hidden') return;
+            try {
+                const response = await fetch(@json(url('/api/branding')), {cache: 'no-store', headers: {Accept: 'application/json'}});
+                if (response.ok) { const branding = await response.json(); applyPlatformTheme(branding); document.querySelector('meta[name="theme-color"]').content = branding.primary_color; }
+            } catch { /* Keep the server-rendered theme offline. */ }
+        };
+        window.setInterval(refreshTheme, 30000);
+        window.addEventListener('focus', refreshTheme);
+        window.addEventListener('online', refreshTheme);
+        document.addEventListener('visibilitychange', refreshTheme);
+    </script>
     <title>@yield('title', 'MKPOS')</title>
 </head>
 <body>

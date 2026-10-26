@@ -5,7 +5,7 @@
 .guide-sidebar a[aria-current], .guide-link:hover { background: var(--lime-soft); }
 .guide-content { min-width: 0; }
 .guide-sidebar { max-height: calc(100vh - 100px); overflow-y: auto; }
-.manual-contents { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; margin-bottom: 14px; padding: 12px; border: 1px solid var(--line); border-radius: 6px; background: white; font-size: 13px; }
+.manual-contents { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; margin-bottom: 14px; padding: 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--theme-surface); font-size: 13px; }
 .manual-contents strong { flex-basis: 100%; }
 .manual-contents a { text-decoration: underline; text-underline-offset: 3px; line-height: 1.6; }
 .manual-chapter h2 { font-size: 21px; line-height: 1.35; margin: 26px 0 10px; padding-top: 14px; border-top: 1px solid var(--line); scroll-margin-top: 90px; }
@@ -26,16 +26,16 @@
 .plan-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr)); gap: 14px; }
 .plan-card { display: flex; flex-direction: column; gap: 12px; }
 .plan-card h2 { font-size: 25px; }
-.plan-card .plan-price { font-size: 24px; font-weight: 800; color: var(--green); }
+.plan-card .plan-price { font-size: 24px; font-weight: 800; color: var(--theme-primary-text); }
 .plan-price small { font-size: 13px; font-weight: 500; }
 .plan-card .button { margin-top: auto; }
 .plan-help { margin-top: 20px; }
 @media(max-width: 760px) { .guide-page { grid-template-columns: 1fr; gap: 16px; } .guide-sidebar { position: static; flex-direction: row; flex-wrap: wrap; } }
 .nav-wrap { min-height: 64px; gap: 20px; }
 .desktop-nav { gap: 18px; }
-.desktop-nav a[aria-current] { color: var(--green-3); }
+.desktop-nav a[aria-current] { color: var(--theme-primary-text); }
 .desktop-nav a[aria-current]::after { width: 100%; height: 3px; }
-.mobile-nav a[aria-current] { color: var(--green); background: var(--lime-soft); box-shadow: inset 3px 0 var(--green-3); }
+.mobile-nav a[aria-current] { color: var(--theme-primary-text); background: var(--lime-soft); box-shadow: inset 3px 0 var(--green-3); }
 .hero { padding: 60px 0 70px; }
 .hero-grid { gap: 36px; grid-template-columns: 1fr 1.1fr; }
 .hero h1 { font-size: clamp(42px, 4.2vw, 62px); line-height: 1.05; margin: 18px 0; }
@@ -74,16 +74,16 @@
 footer { padding-top: 32px; }
 .footer-main { padding-bottom: 24px; gap: 32px; }
 .docs-links { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 18px; }
-.docs-links a { padding: 9px 12px; border: 1px solid var(--line); border-radius: 7px; background: white; font-size: 13px; font-weight: 700; }
+.docs-links a { padding: 9px 12px; border: 1px solid var(--line); border-radius: 7px; background: var(--theme-surface); font-size: 13px; font-weight: 700; }
 a:focus-visible, summary:focus-visible, .docs-table-wrap:focus-visible { outline: 3px solid var(--green-3); outline-offset: 3px; }
 .docs-links a:hover { background: var(--lime-soft); }
 .docs-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
-.docs-card { min-width: 0; padding: 22px; border: 1px solid var(--line); border-radius: 12px; background: white; scroll-margin-top: 80px; }
+.docs-card { min-width: 0; padding: 22px; border: 1px solid var(--line); border-radius: 12px; background: var(--theme-surface); scroll-margin-top: 80px; }
 .docs-card-wide { grid-column: 1 / -1; }
 .docs-card h3 { margin: 8px 0 14px; font-size: 20px; line-height: 1.3; }
-.docs-card p, .docs-card li, .docs-card dd { font-size: 14px; line-height: 1.65; color: #496158; }
+.docs-card p, .docs-card li, .docs-card dd { font-size: 14px; line-height: 1.65; color: var(--theme-text-muted); }
 .docs-card p { margin: 8px 0; }
-.landing-home .pricing-card { display: flex; align-items: center; justify-content: space-between; gap: 28px; padding: 30px 36px; background: #eaf4ee; }
+.landing-home .pricing-card { display: flex; align-items: center; justify-content: space-between; gap: 28px; padding: 30px 36px; background: var(--theme-background); }
 .landing-home .pricing-card h2 { margin: 8px 0; }
 .landing-home .pricing-card .button { flex: 0 0 auto; }
 .documentation { padding-block: 24px; }

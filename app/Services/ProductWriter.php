@@ -14,7 +14,8 @@ class ProductWriter
         return DB::transaction(function () use ($data, $userId) {
             app(MerchantMarketplaceCategory::class)->lock($data);
             $now = now();
-            $id = DB::table('products')->insertGetId(['name' => $data['name'], 'sku' => $data['sku'] ?? '', 'barcode' => trim($data['barcode'] ?? ''),
+            $businessId = app(TenantContext::class)->requireId();
+            $id = DB::table('products')->insertGetId(['business_id' => $businessId, 'name' => $data['name'], 'sku' => $data['sku'] ?? '', 'barcode' => trim($data['barcode'] ?? ''),
                 'category' => $data['category'] ?? '', 'base_unit' => $data['base_unit'], 'purchase_unit' => $data['purchase_unit'],
                 'purchase_conversion_factor' => $data['purchase_conversion_factor'], 'price' => $data['price'], 'cost' => $data['cost'] ?? 0,
                 'base_cost' => $data['cost'] ?? 0, 'stock' => $data['stock'] ?? 0, 'low_stock_threshold' => $data['low_stock_threshold'] ?? 0,
@@ -23,23 +24,51 @@ class ProductWriter
             $this->saveOnlineDescription($id, $data);
             app(MerchantMarketplaceCategory::class)->save($id, $data, $userId);
             if (($data['stock'] ?? 0) != 0) {
-                DB::table('stock_movements')->insert(['product_id' => $id, 'product_name' => $data['name'], 'movement_type' => 'opening_stock', 'quantity_change' => (float) $data['stock'], 'reference_type' => 'product', 'reference_id' => $id, 'note' => 'Initial product stock', 'created_at' => $now]);
+                DB::table('stock_movements')->insert(['business_id' => $businessId, 'product_id' => $id, 'product_name' => $data['name'], 'movement_type' => 'opening_stock', 'quantity_change' => (float) $data['stock'], 'reference_type' => 'product', 'reference_id' => $id, 'note' => 'Initial product stock', 'created_at' => $now]);
             }
 
             return $id;
         });
     }
 
+    public function update(int $id, array $data, int $userId): void
+    {
+        DB::transaction(function () use ($id, $data, $userId) {
+            $businessId = app(TenantContext::class)->requireId();
+            app(MerchantMarketplaceCategory::class)->lock($data);
+            $query = DB::table('products')->where('business_id', $businessId)->where('id', $id);
+            $old = (clone $query)->lockForUpdate()->first();
+            abort_unless($old, 404, 'Product not found');
+            app(EcommerceInventory::class)->assertEditable($old, $data);
+            $query->update(['name' => $data['name'], 'sku' => $data['sku'] ?? '', 'barcode' => trim($data['barcode'] ?? ''),
+                'category' => $data['category'] ?? '', 'base_unit' => $data['base_unit'], 'purchase_unit' => $data['purchase_unit'],
+                'purchase_conversion_factor' => $data['purchase_conversion_factor'], 'price' => $data['price'], 'cost' => $data['cost'] ?? 0, 'base_cost' => $data['cost'] ?? 0,
+                'stock' => $data['stock'] ?? 0, 'low_stock_threshold' => $data['low_stock_threshold'] ?? 0,
+                'is_active' => $data['is_active'] ?? true, 'updated_at' => now()]);
+            $this->savePrices($id, $data['prices'] ?? [], $data['price']);
+            $this->saveOnlineDescription($id, $data);
+            app(MerchantMarketplaceCategory::class)->save($id, $data, $userId);
+            $change = (float) ($data['stock'] ?? 0) - (float) $old->stock;
+            if ($change != 0) {
+                DB::table('stock_movements')->insert(['business_id' => $businessId, 'product_id' => $id, 'product_name' => $data['name'],
+                    'movement_type' => 'manual_adjustment', 'quantity_change' => $change, 'reference_type' => 'product', 'reference_id' => $id,
+                    'note' => 'Product stock edited', 'created_at' => now()]);
+            }
+        });
+    }
+
     public function validate(Request $request, ?int $id = null, bool $update = false, bool $checkExistingBarcode = true): array
     {
         $finite = static function ($attribute, $value, $fail) {
-            if (is_numeric($value) && !is_finite((float) $value)) $fail('The '.$attribute.' must be a finite number.');
+            if (is_numeric($value) && ! is_finite((float) $value)) {
+                $fail('The '.$attribute.' must be a finite number.');
+            }
         };
         $data = $request->validate(['name' => ['required', 'string', 'max:255'], 'sku' => ['nullable', 'string', 'max:255'],
             'marketplace_category_id' => ['sometimes', 'nullable', 'integer', 'min:1'],
             'marketplace_category_version' => [Rule::requiredIf(fn () => $request->exists('marketplace_category_id')), 'integer', 'min:0'],
             'online_description' => ['sometimes', 'nullable', 'string', 'max:4000'],
-            'barcode' => ['nullable', 'string', 'max:255', ...($checkExistingBarcode ? [Rule::unique('products', 'barcode')->ignore($id)->where(fn ($q) => $q->where('is_active', true))] : [])],
+            'barcode' => ['nullable', 'string', 'max:255', ...($checkExistingBarcode ? [Rule::unique('products', 'barcode')->ignore($id)->where(fn ($q) => $q->where('business_id', app(TenantContext::class)->requireId())->where('is_active', true))] : [])],
             'category' => ['nullable', 'string', 'max:255'], 'base_unit' => ['nullable', 'string', 'max:50'],
             'purchase_unit' => ['nullable', 'string', 'max:50'], 'purchase_conversion_factor' => ['nullable', 'numeric', 'min:1', 'max:1000000', $finite],
             'price' => ['required', 'integer', 'min:0'], 'cost' => ['nullable', 'integer', 'min:0'],
@@ -72,14 +101,16 @@ class ProductWriter
 
     public function savePrices(int $productId, array $prices, int $fallback): void
     {
+        $businessId = app(TenantContext::class)->requireId();
+        abort_unless(DB::table('products')->where('business_id', $businessId)->where('id', $productId)->exists(), 404);
         if (! $prices) {
             $prices = [['name' => 'Retail', 'price' => $fallback, 'is_manual' => true]];
         }
-        DB::table('product_prices')->where('product_id', $productId)->delete();
+        DB::table('product_prices')->where('business_id', $businessId)->where('product_id', $productId)->delete();
         foreach ($prices as $price) {
-            DB::table('product_prices')->insert(['product_id' => $productId, 'name' => trim($price['name']), 'price' => $price['price'], 'is_manual' => $price['is_manual'] ?? true]);
+            DB::table('product_prices')->insert(['business_id' => $businessId, 'product_id' => $productId, 'name' => trim($price['name']), 'price' => $price['price'], 'is_manual' => $price['is_manual'] ?? true]);
         }
         $primary = collect($prices)->first(fn ($price) => strcasecmp($price['name'], 'Retail') === 0) ?? $prices[0];
-        DB::table('products')->where('id', $productId)->update(['price' => $primary['price']]);
+        DB::table('products')->where('business_id', $businessId)->where('id', $productId)->update(['price' => $primary['price']]);
     }
 }

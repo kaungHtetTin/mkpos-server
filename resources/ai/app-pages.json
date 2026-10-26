@@ -1,0 +1,168 @@
+{
+  "settings": {
+    "module": "settings",
+    "label": "Open Settings",
+    "mobile_path": "/settings"
+  },
+  "products": {
+    "module": "products",
+    "label": "Open Products",
+    "mobile_path": "/products"
+  },
+  "purchases": {
+    "module": "purchases",
+    "label": "Open Purchases",
+    "mobile_path": "/purchases"
+  },
+  "sell": {
+    "module": "sell",
+    "label": "Open Sell",
+    "mobile_path": "/sell"
+  },
+  "sales": {
+    "module": "sales",
+    "label": "Open Sales",
+    "mobile_path": "/sales"
+  },
+  "customers": {
+    "module": "customers",
+    "label": "Open Customers",
+    "mobile_path": "/customers"
+  },
+  "suppliers": {
+    "module": "suppliers",
+    "label": "Open Suppliers",
+    "mobile_path": "/suppliers"
+  },
+  "expenses": {
+    "module": "expenses",
+    "label": "Open Expenses",
+    "mobile_path": "/expenses"
+  },
+  "reports": {
+    "module": "reports",
+    "label": "Open Reports",
+    "mobile_path": "/reports"
+  },
+  "billing": {
+    "module": "billing",
+    "label": "Open Billing",
+    "mobile_path": "/billing",
+    "owner_only": true
+  },
+  "transactions": {
+    "module": "transactions",
+    "label": "Open Transactions",
+    "mobile_path": "/transactions"
+  },
+  "products_new": {
+    "module": "products",
+    "label": "Add Product",
+    "mobile_path": "/products/new",
+    "action": "new"
+  },
+  "customers_new": {
+    "module": "customers",
+    "label": "Add Customer",
+    "mobile_path": "/customers/new",
+    "action": "new"
+  },
+  "suppliers_new": {
+    "module": "suppliers",
+    "label": "Add Supplier",
+    "mobile_path": "/suppliers/new",
+    "action": "new"
+  },
+  "purchases_new": {
+    "module": "purchases",
+    "label": "New Purchase",
+    "mobile_path": "/purchases/new",
+    "action": "new"
+  },
+  "expenses_new": {
+    "module": "expenses",
+    "label": "Add Expense",
+    "mobile_path": "/expenses/new",
+    "action": "new"
+  },
+  "settings_shop": {
+    "module": "settings",
+    "label": "Open Business Settings",
+    "mobile_path": "/settings/shop",
+    "tab": "shop",
+    "owner_only": true
+  },
+  "settings_receipt": {
+    "module": "settings",
+    "label": "Open Receipt Settings",
+    "mobile_path": "/settings/receipt",
+    "tab": "receipt"
+  },
+  "settings_barcode": {
+    "module": "settings",
+    "label": "Open Barcode Settings",
+    "mobile_path": "/settings/barcode",
+    "tab": "barcode"
+  },
+  "settings_printer": {
+    "module": "settings",
+    "label": "Open Printer Settings",
+    "mobile_path": "/settings/printer",
+    "tab": "printer"
+  },
+  "settings_payments": {
+    "module": "settings",
+    "label": "Open Payment Methods",
+    "mobile_path": "/settings/payments",
+    "tab": "payments",
+    "owner_only": true
+  },
+  "settings_prices": {
+    "module": "settings",
+    "label": "Open Price Types",
+    "mobile_path": "/settings/prices",
+    "tab": "prices",
+    "owner_only": true
+  },
+  "settings_language": {
+    "module": "settings",
+    "label": "Open Language Settings",
+    "mobile_path": "/settings/language",
+    "tab": "language",
+    "owner_only": true
+  },
+  "settings_timezone": {
+    "module": "settings",
+    "label": "Open Business Time Zone",
+    "mobile_path": "/settings/timezone",
+    "tab": "timezone",
+    "owner_only": true
+  },
+  "settings_account": {
+    "module": "settings",
+    "label": "Open Account Settings",
+    "mobile_path": "/settings/account",
+    "tab": "account"
+  },
+  "settings_security": {
+    "module": "settings",
+    "label": "Open Security Settings",
+    "mobile_path": "/settings/security",
+    "tab": "security",
+    "owner_only": true
+  },
+  "sales_ai": {
+    "module": "shop",
+    "label": "Open Sales AI Configuration",
+    "mobile_path": "/shop/sales-ai/configure",
+    "tab": "sales-ai",
+    "owner_only": true
+  },
+  "sales_ai_topups": {
+    "module": "shop",
+    "label": "Open Sales AI Top-ups",
+    "mobile_path": "/shop/sales-ai/topups",
+    "tab": "sales-ai-topups",
+    "owner_only": true
+  }
+}

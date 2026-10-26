@@ -28,7 +28,13 @@ class McpSupportTools
             return $this->execute($tool, $context, $data);
         }
 
-        return DB::transaction(function () use ($tool, $context, $data) {
+        $prepared = null;
+        if ($tool === 'submit_subscription_payment_proof' && ! DB::table('mcp_support_actions')->where('actor_type', $context['type'])->where('actor_id', $context['id'])
+            ->where('tool', $tool)->where('idempotency_key', $data['idempotency_key'])->exists()) {
+            $prepared = $this->validateOwnerProof($context, $data);
+        }
+
+        return DB::transaction(function () use ($tool, $context, $data, $prepared) {
             $table = ['owner' => 'users', 'customer' => 'platform_customers', 'admin' => 'platform_admins'][$context['type']];
             DB::table($table)->where('id', $context['id'])->lockForUpdate()->first();
             $arguments = $data;
@@ -42,7 +48,7 @@ class McpSupportTools
 
                 return json_decode($previous->result, true);
             }
-            $result = $this->execute($tool, $context, $data);
+            $result = $this->execute($tool, $context, $data, $prepared);
             DB::table('mcp_support_actions')->insert($lookup + ['arguments_hash' => $hash,
                 'result' => json_encode($result, JSON_THROW_ON_ERROR), 'created_at' => now(), 'updated_at' => now()]);
 
@@ -50,7 +56,7 @@ class McpSupportTools
         }, 3);
     }
 
-    private function execute(string $tool, array $context, array $data): array
+    private function execute(string $tool, array $context, array $data, ?object $prepared = null): array
     {
         $businessId = $context['type'] === 'owner' ? (int) $context['actor']->business_id : null;
         if ($tool === 'get_my_profile') {
@@ -89,7 +95,7 @@ class McpSupportTools
                 ->select('b.id', 'b.type', 'b.amount', 'b.currency', 'b.duration_days', 'b.paid_at', 'p.name as plan_name'), $data);
         }
         if ($tool === 'submit_subscription_payment_proof') {
-            return $this->submitProof($context, $data);
+            return $this->submitProof($context, $data, $prepared);
         }
         if ($tool === 'request_refund') {
             return $this->requestRefund($businessId, $data);
@@ -143,7 +149,19 @@ class McpSupportTools
         return ['updated' => true, 'profile' => app(CustomerAccountController::class)->profile($http)['customer']];
     }
 
-    private function submitProof(array $context, array $data): array
+    public function validateOwnerProof(array $context, array $data): object
+    {
+        $upload = DB::table('mcp_support_evidence')->where('id', $data['upload_id'])->where('actor_type', 'owner')->where('actor_id', $context['id'])
+            ->whereNull('consumed_at')->where('expires_at', '>', now())->first();
+        abort_unless($upload && Storage::disk('local')->exists($upload->file_path), 404, 'Upload an unexpired payment screenshot from this owner account first.');
+        $plan = DB::table('subscription_plans')->where('id', $data['subscription_plan_id'])->where('is_active', true)->where('is_public', true)->where('is_system', false)->first();
+        $method = DB::table('payment_methods')->where('id', $data['payment_method_id'])->where('is_active', true)->first();
+        abort_unless($plan && $method, 422, 'Choose an active public plan and payment method.');
+
+        return app(OwnerPaymentValidation::class)->check($context['id'], (int) $context['actor']->business_id, $plan, $method, $upload->file_path);
+    }
+
+    private function submitProof(array $context, array $data, ?object $prepared): array
     {
         $upload = DB::table('mcp_support_evidence')->where('id', $data['upload_id'])->where('actor_type', 'owner')
             ->where('actor_id', $context['id'])->whereNull('consumed_at')->where('expires_at', '>', now())->lockForUpdate()->first();
@@ -153,16 +171,24 @@ class McpSupportTools
         $method = DB::table('payment_methods')->where('id', $data['payment_method_id'])->where('is_active', true)->first();
         abort_unless($plan && $method, 422, 'Choose a currently active public plan and payment method.');
         $businessId = (int) $context['actor']->business_id;
+        abort_unless($prepared, 422, 'Check the payment screenshot before submitting.');
         DB::table('businesses')->where('id', $businessId)->lockForUpdate()->first();
+        $validator = app(OwnerPaymentValidation::class);
+        $existing = $validator->assertSubmission($prepared, $context['id'], $businessId, $plan, $method);
+        if ($existing) {
+            return ['request_id' => $existing, 'status' => 'pending', 'funds_confirmed' => false, 'note' => 'This payment proof is already pending manual review.'];
+        }
         DB::table('subscription_requests')->where('business_id', $businessId)->where('status', 'pending')
             ->update(['status' => 'rejected', 'admin_note' => 'Replaced by a newer request', 'reviewed_at' => now(), 'updated_at' => now()]);
         // Reuse the private uploaded image; no model-supplied path or remote URL is accepted.
         $id = DB::table('subscription_requests')->insertGetId([
+            ...app(SystemPaymentReview::class)->snapshot($plan),
             'business_id' => $businessId, 'subscription_plan_id' => $plan->id, 'payment_method_id' => $method->id,
             'payment_bank' => $method->bank, 'payment_account_name' => $method->account_name, 'payment_account_no' => $method->account_no,
             'status' => 'pending', 'message' => $data['message'] ?? '', 'payment_screenshot_path' => $upload->file_path,
             'created_at' => now(), 'updated_at' => now(),
         ]);
+        $validator->attach($prepared, (int) $id, $method);
         DB::table('mcp_support_evidence')->where('id', $upload->id)->update(['consumed_at' => now(), 'updated_at' => now()]);
         app(RealtimeActivity::class)->record('office', $businessId, 'subscription.requested', [
             'title' => 'New subscription request', 'message' => DB::table('businesses')->where('id', $businessId)->value('name'),

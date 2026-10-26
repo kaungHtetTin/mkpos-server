@@ -1,0 +1,14 @@
+[program:mkpos-wyne-wyne]
+directory=/var/www/mkpos/laravel
+command=/usr/bin/php /var/www/mkpos/laravel/artisan queue:work wyne-wyne --queue=wyne-wyne --sleep=2 --timeout=360 --tries=60 --no-interaction
+user=www-data
+numprocs=1
+autostart=true
+autorestart=true
+stopasgroup=true
+killasgroup=true
+stopwaitsecs=420
+redirect_stderr=true
+stdout_logfile=/var/log/supervisor/mkpos-wyne-wyne.log
+stdout_logfile_maxbytes=10MB
+stdout_logfile_backups=5

@@ -2,6 +2,12 @@
 
 namespace App\Http\Controllers\Api;
 
+use App\Services\EcommerceService;
+use App\Services\SalePostingService;
+use App\Support\AppTime;
+use App\Support\BusinessLogo;
+use App\Support\ReceiptRenderer;
+use App\Tenancy\TenantContext;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
@@ -13,7 +19,7 @@ class SaleController extends ApiController
     {
         $query = DB::table('sales')->leftJoin('customers', 'customers.id', '=', 'sales.customer_id')->select('sales.*', 'customers.name as customer_name')
             ->selectRaw('(SELECT COUNT(*) FROM sale_items WHERE sale_items.sale_id = sales.id) as item_count');
-        \App\Support\AppTime::filterDays($query, $request->query('start'), $request->query('end'), 'sales.created_at');
+        AppTime::filterDays($query, $request->query('start'), $request->query('end'), 'sales.created_at');
         if (($status = $request->query('status', 'all')) !== 'all') {
             $query->where('sales.status', $status);
         }
@@ -175,15 +181,15 @@ class SaleController extends ApiController
             ->orderBy('si.id')
             ->select('si.*', 'p.sku', 'p.photo_path', 'p.updated_at as product_updated_at', DB::raw("COALESCE(p.base_unit, 'Unit') as unit_name"))
             ->get()->map(function ($row) {
-            $item = (array) $row;
-            $item['quantity'] = (float) $item['quantity'];
-            $item['foc_quantity'] = (float) $item['foc_quantity'];
-            $item['line_type'] = 'product';
-            $item['photo_url'] = $item['photo_path'] ? '/products/'.$item['product_id'].'/photo?v='.strtotime((string) $item['product_updated_at']) : null;
-            unset($item['photo_path'], $item['product_updated_at']);
+                $item = (array) $row;
+                $item['quantity'] = (float) $item['quantity'];
+                $item['foc_quantity'] = (float) $item['foc_quantity'];
+                $item['line_type'] = 'product';
+                $item['photo_url'] = $item['photo_path'] ? '/products/'.$item['product_id'].'/photo?v='.strtotime((string) $item['product_updated_at']) : null;
+                unset($item['photo_path'], $item['product_updated_at']);
 
-            return $item;
-        })->all();
+                return $item;
+            })->all();
 
         return $result;
     }
@@ -199,16 +205,17 @@ class SaleController extends ApiController
     public function receipt(int $id): array
     {
         $sale = $this->show($id);
-        $settings = \App\Support\BusinessLogo::addToSettings(array_merge([
+        $settings = BusinessLogo::addToSettings(array_merge([
             'shop_name' => 'MKPOS Shop', 'shop_title' => '', 'shop_address' => '', 'shop_phone' => '', 'currency' => 'Ks',
             'receipt_footer' => '', 'receipt_show_customer' => '1', 'receipt_show_payment_method' => '1', 'receipt_show_price_type' => '1',
             'receipt_paper_size' => '80mm', 'receipt_header_alignment' => 'center', 'receipt_margin_left' => '3', 'receipt_margin_right' => '3',
             'receipt_header_font_size' => '11', 'receipt_body_font_size' => '8.2', 'receipt_line_height' => '1.45',
         ], DB::table('settings')->pluck('value', 'key')->all()));
         $printSale = $sale;
-        $printSale['created_at'] = \App\Support\AppTime::storage($sale['created_at'])->setTimezone(\App\Support\AppTime::businessTimezone())->toDateTimeString();
-        $receipt = \App\Support\ReceiptRenderer::render($printSale, $settings);
+        $printSale['created_at'] = AppTime::storage($sale['created_at'])->setTimezone(AppTime::businessTimezone())->toDateTimeString();
+        $receipt = ReceiptRenderer::render($printSale, $settings);
         $receipt['sale'] = $sale;
+
         return $receipt;
     }
 
@@ -228,10 +235,12 @@ class SaleController extends ApiController
                 DB::table('products')->where('id', $item->product_id)->increment('stock', $item->quantity + $item->foc_quantity, ['updated_at' => now()]);
                 $this->insertMovement($item->product_id, $item->product_name, 'sale_delete', (float) ($item->quantity + $item->foc_quantity), 'sale', $id, $sale->receipt_no);
             }
-            DB::table('ecommerce_orders')->where('business_id', app(\App\Tenancy\TenantContext::class)->requireId())->where('sale_id', $id)
+            DB::table('ecommerce_orders')->where('business_id', app(TenantContext::class)->requireId())->where('sale_id', $id)
                 ->update(['sale_voided' => true, 'payment_status' => 'refund_pending', 'updated_at' => now()]);
-            $onlineOrder = DB::table('ecommerce_orders')->where('business_id', app(\App\Tenancy\TenantContext::class)->requireId())->where('sale_id', $id)->first();
-            if ($onlineOrder) app(\App\Services\EcommerceService::class)->event($onlineOrder->business_id, $onlineOrder->id, 'sale_voided', request()->user('web')->id);
+            $onlineOrder = DB::table('ecommerce_orders')->where('business_id', app(TenantContext::class)->requireId())->where('sale_id', $id)->first();
+            if ($onlineOrder) {
+                app(EcommerceService::class)->event($onlineOrder->business_id, $onlineOrder->id, 'sale_voided', request()->user('web')->id);
+            }
             DB::table('sale_items')->where('sale_id', $id)->delete();
             DB::table('sales')->where('id', $id)->delete();
 
@@ -239,7 +248,7 @@ class SaleController extends ApiController
         });
     }
 
-    private function validated(Request $request): array
+    public function validated(Request $request): array
     {
         $data = $request->validate(['items' => ['required', 'array', 'min:1'], 'items.*.product_id' => ['required', 'integer', 'exists:products,id'],
             'items.*.product_name' => ['nullable', 'string', 'max:255'], 'items.*.price_type' => ['nullable', 'string', 'max:50'], 'items.*.quantity' => ['required', 'numeric', 'min:0'], 'items.*.foc_quantity' => ['nullable', 'numeric', 'min:0'],
@@ -257,7 +266,8 @@ class SaleController extends ApiController
 
     private function save(?int $id, array $data, ?string $receiptNo = null, ?array $offline = null, array $editableArchivedProductIds = []): array
     {
-        $id = app(\App\Services\SalePostingService::class)->save($id, $data, $receiptNo, $offline, $editableArchivedProductIds);
+        $id = app(SalePostingService::class)->save($id, $data, $receiptNo, $offline, $editableArchivedProductIds);
+
         return $this->show($id);
     }
 }

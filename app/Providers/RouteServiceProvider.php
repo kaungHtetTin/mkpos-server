@@ -29,6 +29,7 @@ class RouteServiceProvider extends ServiceProvider
         $this->configureRateLimiting();
 
         $this->routes(function () {
+            Route::prefix('integrations')->group(base_path('routes/integrations.php'));
             Route::middleware('api')
                 ->prefix('api')
                 ->group(base_path('routes/api.php'));
@@ -59,7 +60,7 @@ class RouteServiceProvider extends ServiceProvider
         }
         RateLimiter::for('api', function (Request $request) {
             $identity = ($request->is('api/office/*') ? 'office:' : 'business:').($request->user()?->id ?: $request->ip());
-            if ($request->isMethod('GET') && $request->is('api/health')) {
+            if ($request->isMethod('GET') && $request->is('api/health', 'api/health/workers')) {
                 return Limit::perMinute(120)->by('health-probes:'.$request->ip());
             }
             $chatBackground = $request->is('api/shop-admin/chat', 'api/shop-admin/chat/*') &&

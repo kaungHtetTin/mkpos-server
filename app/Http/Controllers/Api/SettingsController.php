@@ -2,8 +2,9 @@
 
 namespace App\Http\Controllers\Api;
 
-use App\Support\BusinessLogo;
 use App\Services\BusinessProfile;
+use App\Support\BusinessLogo;
+use App\Support\ReceiptRenderer;
 use App\Tenancy\TenantContext;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -23,7 +24,7 @@ class SettingsController extends ApiController
         'barcode_show_name', 'barcode_show_value',
     ];
 
-    private const DEFAULTS = [
+    public const DEFAULTS = [
         'shop_name' => 'MKPOS Shop', 'shop_title' => '', 'shop_address' => '', 'shop_phone' => '', 'currency' => 'Ks',
         'payment_methods' => 'Cash,Wallet Pay,Banking Pay,KPay,Wave Pay,Credit', 'price_types' => 'Retail', 'receipt_footer' => '',
         'receipt_show_customer' => '1', 'receipt_show_payment_method' => '1', 'receipt_show_price_type' => '1',
@@ -47,9 +48,9 @@ class SettingsController extends ApiController
         return $settings;
     }
 
-    public function update(Request $request): array
+    public static function rules(): array
     {
-        $data = $request->validate(['shop_name' => ['required', 'string', 'max:255'], 'shop_title' => ['nullable', 'string'], 'shop_address' => ['nullable', 'string'],
+        return ['shop_name' => ['required', 'string', 'max:255'], 'shop_title' => ['nullable', 'string'], 'shop_address' => ['nullable', 'string'],
             'shop_phone' => ['nullable', 'string'], 'currency' => ['nullable', 'string', 'max:20'], 'payment_methods' => ['nullable', 'string'],
             'receipt_footer' => ['nullable', 'string'], 'receipt_show_customer' => ['nullable'], 'receipt_show_payment_method' => ['nullable'],
             'receipt_show_price_type' => ['nullable'], 'receipt_paper_size' => ['sometimes', 'required', 'in:50mm,58mm,80mm,85mm,a5,a4'],
@@ -66,7 +67,12 @@ class SettingsController extends ApiController
             'barcode_margin_y_mm' => ['sometimes', 'required', 'numeric', 'between:0,30'],
             'barcode_gap_x_mm' => ['sometimes', 'required', 'numeric', 'between:0,20'],
             'barcode_gap_y_mm' => ['sometimes', 'required', 'numeric', 'between:0,20'],
-            'barcode_show_value' => ['nullable'], 'printer_name' => ['nullable', 'string'], 'language' => ['required', 'in:en,my'], 'admin_pin' => ['nullable', 'string']]);
+            'barcode_show_value' => ['nullable'], 'printer_name' => ['nullable', 'string'], 'language' => ['required', 'in:en,my'], 'admin_pin' => ['nullable', 'string']];
+    }
+
+    public function update(Request $request): array
+    {
+        $data = $request->validate(self::rules());
         $pin = (string) ($data['admin_pin'] ?? '');
         unset($data['admin_pin']);
         $isOwner = $request->user('web')?->role === 'owner';
@@ -132,7 +138,8 @@ class SettingsController extends ApiController
     public function receiptPreview(Request $request): array
     {
         $settings = array_merge($this->index(), $request->except(['receipt_logo_data_url', BusinessLogo::SETTING_KEY]));
-        return \App\Support\ReceiptRenderer::render([
+
+        return ReceiptRenderer::render([
             'id' => 0, 'receipt_no' => 'TEST-PRINT', 'created_at' => now()->toDateTimeString(),
             'customer_name' => 'Sample Customer', 'payment_method' => 'Cash',
             'subtotal' => 1000, 'discount' => 0, 'total' => 1000, 'paid_amount' => 1000, 'credit_amount' => 0,

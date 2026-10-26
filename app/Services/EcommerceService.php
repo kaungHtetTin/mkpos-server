@@ -253,8 +253,8 @@ class EcommerceService
         $result['receipt'] = ['shop_name' => $profile['shop_name'], 'shop_phone' => $profile['shop_phone'], 'shop_address' => $profile['shop_address'],
             'customer_name' => $order->customer_name, 'phone' => $order->phone, 'address' => $order->address];
         $result['customer_requests'] = DB::table('shop_order_requests')->where('business_id', $order->business_id)->where('order_id', $order->id)
-            ->orderBy('id')->get(['id', 'type', 'status', 'reason', 'staff_note', 'created_at', 'updated_at', 'photo_path'])
-            ->map(function ($r) { $r->has_photo = (bool) $r->photo_path; unset($r->photo_path); return $r; })->values();
+            ->orderBy('id')->get(['id', 'type', 'status', 'reason', 'staff_note', 'created_at', 'updated_at', 'photo_path', ...(\Illuminate\Support\Facades\Schema::hasColumn('shop_order_requests', 'requested_changes') ? ['requested_changes'] : [])])
+            ->map(function ($r) { $r->has_photo = (bool) $r->photo_path; unset($r->photo_path); if (isset($r->requested_changes)) $r->requested_changes = json_decode($r->requested_changes, true); return $r; })->values();
         $result['items'] = DB::table('ecommerce_order_items')->where('business_id', $order->business_id)->where('order_id', $order->id)
             ->get(['product_id', 'name', 'unit_name', 'quantity', 'unit_price', 'original_unit_price', 'coupon_discount', 'line_total'])->all();
         $result['payment_reviews'] = DB::table('ecommerce_payments')->where('business_id', $order->business_id)->where('order_id', $order->id)
@@ -275,8 +275,8 @@ class EcommerceService
             'actor_id' => $actor, 'reason' => $reason, 'created_at' => now()]);
         $order = DB::table('ecommerce_orders')->where('business_id', $businessId)->where('id', $id)->first();
         if ($order) {
-            if (in_array($event, ['proof_submitted', 'cancellation_requested', 'return_requested'])) {
-                $title = ['proof_submitted' => 'Payment proof submitted', 'cancellation_requested' => 'Cancellation requested', 'return_requested' => 'Return/refund requested'][$event];
+            if (in_array($event, ['proof_submitted', 'cancellation_requested', 'return_requested', 'change_requested'])) {
+                $title = ['proof_submitted' => 'Payment proof submitted', 'cancellation_requested' => 'Cancellation requested', 'return_requested' => 'Return/refund requested', 'change_requested' => 'Order change requested'][$event];
                 app(RealtimeActivity::class)->record('owner', $businessId, $event, ['title' => $title,
                     'message' => $order->reference.' · '.$order->customer_name, 'target' => 'order', 'order_id' => $id], 'order-event:'.$eventId);
             }

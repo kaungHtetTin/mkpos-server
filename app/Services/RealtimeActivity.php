@@ -34,4 +34,21 @@ class RealtimeActivity
         $this->record('owner', $businessId, $event, ['title' => $titles[$event],
             'message' => $reason ?: ($status['subscription']['plan_name'] ?? 'Your subscription access changed.'), 'target' => 'billing'], $key);
     }
+
+    public function salesAiTopup(object $topup, string $status): void
+    {
+        $amount = \App\Services\SalesAi\Pricing::amount((int) $topup->amount_micros).' MMK';
+        $titles = ['requested' => 'New Sales AI top-up request', 'approved' => 'Sales AI top-up approved',
+            'rejected' => 'Sales AI top-up rejected', 'cancelled' => 'Sales AI top-up cancelled'];
+        $payload = ['title' => $titles[$status], 'target' => 'sales-ai-topup', 'entity_id' => (int) $topup->id,
+            'message' => $status === 'rejected' ? $topup->admin_note : ($status === 'approved' ? $amount.' added to your Sales AI balance.' : $amount)];
+        $business = DB::table('businesses')->where('id', $topup->business_id)->value('name');
+        $this->record('office', (int) $topup->business_id, 'sales_ai.topup.'.$status,
+            [...$payload, 'message' => $business.' · '.$amount, 'silent' => in_array($status, ['approved', 'rejected'], true)],
+            'sales-ai-topup:'.$topup->id.':'.$status.':office');
+        if ($status !== 'requested') {
+            $this->record('owner', (int) $topup->business_id, 'sales_ai.topup.'.$status, $payload,
+                'sales-ai-topup:'.$topup->id.':'.$status.':owner');
+        }
+    }
 }

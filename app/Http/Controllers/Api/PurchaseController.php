@@ -2,6 +2,8 @@
 
 namespace App\Http\Controllers\Api;
 
+use App\Services\EcommerceInventory;
+use App\Services\ProductPricing;
 use App\Support\SupplierBalance;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -98,7 +100,7 @@ class PurchaseController extends ApiController
             $saved = $this->save($id, $data, $existingItems->keyBy('id'));
             $this->refreshCosts(array_unique(array_merge($affected, array_column($data['items'], 'product_id'))));
             foreach (DB::table('products')->whereIn('id', $affected)->get() as $product) {
-                app(\App\Services\EcommerceInventory::class)->assertRemaining($product, (float) $product->stock);
+                app(EcommerceInventory::class)->assertRemaining($product, (float) $product->stock);
             }
 
             return $saved;
@@ -117,7 +119,7 @@ class PurchaseController extends ApiController
                 $affected[] = $item->product_id;
                 $received = (float) $item->base_quantity + (float) $item->base_foc_quantity;
                 $reservedProduct = DB::table('products')->where('id', $item->product_id)->lockForUpdate()->first();
-                app(\App\Services\EcommerceInventory::class)->assertRemaining($reservedProduct, (float) $reservedProduct->stock - $received);
+                app(EcommerceInventory::class)->assertRemaining($reservedProduct, (float) $reservedProduct->stock - $received);
                 DB::table('products')->where('id', $item->product_id)->decrement('stock', $received, ['updated_at' => now()]);
                 $this->insertMovement($item->product_id, $item->product_name, 'purchase_delete', -$received, 'purchase', $id, $purchase->supplier_name);
             }
@@ -129,7 +131,7 @@ class PurchaseController extends ApiController
         });
     }
 
-    private function validated(Request $request): array
+    public function validated(Request $request): array
     {
         return $request->validate(['supplier_id' => ['nullable', 'integer', 'exists:suppliers,id'], 'supplier_name' => ['nullable', 'string', 'max:255'], 'note' => ['nullable', 'string'],
             'reference_no' => ['nullable', 'string', 'max:255'], 'purchase_date' => ['nullable', 'date_format:Y-m-d'], 'expected_delivery' => ['nullable', 'date_format:Y-m-d'],
@@ -174,7 +176,9 @@ class PurchaseController extends ApiController
             'updated_at' => now(),
         ];
         foreach (['reference_no', 'purchase_date', 'expected_delivery'] as $field) {
-            if (array_key_exists($field, $data)) $values[$field] = $data[$field];
+            if (array_key_exists($field, $data)) {
+                $values[$field] = $data[$field];
+            }
         }
         if ($id) {
             DB::table('purchases')->where('id', $id)->update($values);
@@ -242,8 +246,7 @@ class PurchaseController extends ApiController
             ->whereIn('pp.product_id', array_unique($productIds))->where('pp.is_manual', false)->where('rules.pricing_mode', 'automatic')
             ->select('pp.id', 'pp.product_id', 'pp.name', 'pp.price', 'p.name as product_name', 'p.cost', 'rules.markup_percent', 'rules.rounding', 'rules.minimum_profit')->get();
         foreach ($rows as $row) {
-            $price = max(ceil($row->cost * (1 + $row->markup_percent / 100)), $row->cost + $row->minimum_profit);
-            $price = (int) (ceil($price / max($row->rounding, 1)) * max($row->rounding, 1));
+            $price = ProductPricing::automatic($row->cost, $row);
             if ($price !== (int) $row->price) {
                 $changes[] = ['product_id' => $row->product_id, 'product_name' => $row->product_name, 'price_type' => $row->name, 'old_price' => (int) $row->price, 'new_price' => $price];
             }

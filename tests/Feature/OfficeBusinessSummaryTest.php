@@ -13,6 +13,36 @@ class OfficeBusinessSummaryTest extends TestCase
 {
     use DatabaseTransactions;
 
+    public function test_billing_proofs_are_linked_to_the_right_period_and_ambiguous_legacy_proofs_are_not_guessed(): void
+    {
+        $businessId = $this->registerBusiness('Proof Business');
+        $period = DB::table('business_subscriptions')->where('business_id', $businessId)->firstOrFail();
+        $secondId = DB::table('business_subscriptions')->insertGetId(['business_id' => $businessId, 'subscription_plan_id' => $period->subscription_plan_id, 'access_type' => 'paid', 'status' => 'active', 'starts_at' => now(), 'ends_at' => now()->addDays(30), 'price_paid' => 1000, 'created_at' => now(), 'updated_at' => now()]);
+        $linked = DB::table('subscription_requests')->insertGetId(['business_id' => $businessId, 'subscription_plan_id' => $period->subscription_plan_id, 'business_subscription_id' => $secondId, 'status' => 'approved', 'payment_screenshot_path' => 'private/linked.png', 'created_at' => now(), 'updated_at' => now()]);
+        DB::table('subscription_requests')->insert(['business_id' => $businessId, 'subscription_plan_id' => $period->subscription_plan_id, 'status' => 'approved', 'payment_screenshot_path' => 'private/ambiguous.png', 'created_at' => now(), 'updated_at' => now()]);
+        $admin = PlatformAdmin::create(['name' => 'Proof reviewer', 'email' => Str::uuid().'@example.test', 'password' => Hash::make('password123'), 'is_active' => true]);
+        $response = $this->actingAs($admin, 'office')->getJson('/api/office/businesses/'.$businessId)->assertOk()->assertDontSee('private/');
+        $history = collect($response->json('billing_history'))->keyBy('id');
+        $this->assertSame([], $history[$period->id]['payment_proofs']);
+        $this->assertSame([['id' => $linked, 'url' => '/office/subscription-requests/'.$linked.'/payment-screenshot']], $history[$secondId]['payment_proofs']);
+    }
+
+    public function test_detail_includes_only_the_business_sales_ai_balance_and_topups(): void
+    {
+        $businessId = $this->registerBusiness('Billing Business');
+        $otherId = $this->registerBusiness('Other Billing Business');
+        $admin = PlatformAdmin::create(['name' => 'Billing reviewer', 'email' => Str::uuid().'@example.test', 'password' => Hash::make('password123'), 'is_active' => true]);
+        foreach ([$businessId, $otherId] as $id) {
+            DB::table('sales_ai_topups')->insert(['business_id' => $id, 'owner_id' => DB::table('users')->where('business_id', $id)->value('id'), 'request_key' => Str::uuid(), 'amount_micros' => 1000000000,
+                'payment_method_id' => 1, 'payment_account' => json_encode(['bank' => 'KBZPay']), 'screenshot_path' => 'private/fixture.png', 'screenshot_hash' => hash('sha256', (string) $id),
+                'status' => 'approved', 'reviewed_by_admin_id' => $admin->id, 'reviewed_at' => now('UTC'), 'created_at' => now('UTC'), 'updated_at' => now('UTC')]);
+        }
+        $this->actingAs($admin, 'office')->getJson('/api/office/businesses/'.$businessId)->assertOk()
+            ->assertJsonPath('sales_ai_wallet.available', '500.000000')->assertJsonCount(1, 'sales_ai_topups')
+            ->assertJsonPath('sales_ai_topups.0.business_id', $businessId)->assertJsonPath('sales_ai_topups.0.reviewed_by_name', 'Billing reviewer')
+            ->assertDontSee('private/fixture.png');
+    }
+
     public function test_business_detail_includes_a_tenant_scoped_operational_summary(): void
     {
         $businessId = $this->registerBusiness('Summary Business');

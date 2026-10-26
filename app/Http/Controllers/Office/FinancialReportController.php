@@ -3,6 +3,8 @@
 namespace App\Http\Controllers\Office;
 
 use App\Http\Controllers\Controller;
+use App\Services\OfficeMonthlyCashFlow;
+use App\Support\AppTime;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
@@ -33,11 +35,19 @@ class FinancialReportController extends Controller
                     ->orWhere('admins.name', 'like', "%{$search}%");
             });
         }
-        if ($currency = ($data['currency'] ?? '')) $query->where('payments.currency', $currency);
-        if (($data['type'] ?? 'all') !== 'all') $query->where('payments.type', $data['type']);
+        if ($currency = ($data['currency'] ?? '')) {
+            $query->where('payments.currency', $currency);
+        }
+        if (($data['type'] ?? 'all') !== 'all') {
+            $query->where('payments.type', $data['type']);
+        }
 
-        if (!empty($data['from'])) $query->where('payments.paid_at', '>=', \App\Support\AppTime::day($data['from'], config('app.timezone')));
-        if (!empty($data['to'])) $query->where('payments.paid_at', '<', \App\Support\AppTime::day($data['to'], config('app.timezone'))->addDay());
+        if (! empty($data['from'])) {
+            $query->where('payments.paid_at', '>=', AppTime::day($data['from'], config('app.timezone')));
+        }
+        if (! empty($data['to'])) {
+            $query->where('payments.paid_at', '<', AppTime::day($data['to'], config('app.timezone'))->addDay());
+        }
         $total = (clone $query)->count();
         $perPage = (int) ($data['per_page'] ?? 25);
         $lastPage = max(1, (int) ceil($total / $perPage));
@@ -49,7 +59,8 @@ class FinancialReportController extends Controller
             'admins.name as created_by_name'
         )->orderByDesc('payments.paid_at')->orderByDesc('payments.id')
             ->offset(($page - 1) * $perPage)->limit($perPage)->get()->map(function ($row) {
-                $row->paid_at = \App\Support\AppTime::iso($row->paid_at);
+                $row->paid_at = AppTime::iso($row->paid_at);
+
                 return $row;
             })->all();
 
@@ -150,8 +161,13 @@ class FinancialReportController extends Controller
                     : null,
             ],
             'monthly' => $monthly,
+            'monthly_cash_flow' => app(OfficeMonthlyCashFlow::class)->forYear($now->year, $currency),
             'yearly' => $yearly,
-            'recent_sales' => array_map(function ($row) { $row->paid_at = \App\Support\AppTime::iso($row->paid_at); return $row; }, $recentSales),
+            'recent_sales' => array_map(function ($row) {
+                $row->paid_at = AppTime::iso($row->paid_at);
+
+                return $row;
+            }, $recentSales),
         ];
     }
 }
