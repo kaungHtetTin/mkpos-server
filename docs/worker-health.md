@@ -26,14 +26,14 @@ token stored by the Office app. Use the public route for a check without login.
 | Worker | Required | Evidence |
 | --- | --- | --- |
 | `sales_ai` | Yes | Dedicated `sales-ai` connection/queue loop and job events |
-| `wyne_wyne` | Yes | Dedicated `wyne-wyne` connection/queue loop and job events |
+| `wyne_wyne` | No | Replies run directly in HTTP; old worker diagnostics are optional |
 | `customer_service` | When Telegram customer service is enabled | Dedicated `customer-service` queue, configuration and stuck-work checks |
 | `scheduler` | Yes | Actual `schedule:run` start/finish; failed scheduled tasks fail the tick |
 | `payment_validation` | When legacy work is queued/processing, or explicitly configured | Legacy `system-agent:validate-payments` start/finish |
 | `default_queue` | When the default connection uses an asynchronous driver, separate from the two AI queues | Configured default connection and queue events |
 
-Wyne Wyne uses its own worker, separate from Sales AI. The response identifies
-it as `worker_required: true` and `mode: queue`. Current payment-proof submission
+Wyne Wyne runs directly in HTTP. The response identifies
+it as `worker_required: false` and `mode: http`. Current payment-proof submission
 checks still run during web requests and do not need queue workers.
 To require an intentionally deployed legacy payment
 worker even without pending tasks, set
@@ -50,7 +50,7 @@ workers run, one healthy instance is sufficient for that queue group.
 
 Database queues also fail health if ready work has waited over ten minutes or a
 reservation has outlived its queue retry interval. Delayed jobs are measured from
-their availability time. Lost Sales AI/Wyne Wyne dispatches and AI runs processing
+their availability time. Lost Sales AI dispatches and legacy AI runs processing
 longer than ten minutes are detected from the durable run records. Redis/SQS and other
 non-database default queues currently report worker liveness only.
 
@@ -75,8 +75,8 @@ php artisan migrate --path=database/migrations/2026_10_26_000003_create_worker_h
 
 Deploy the new code/configuration and restart long-running queue workers with
 `php artisan queue:restart`; the process supervisor must start their replacement.
-On Windows, run `start-sales-ai.cmd` and `start-wyne-wyne.cmd` again once their
-previous workers exit. Existing
+On Windows, run `start-sales-ai.cmd` again once its previous worker exits.
+Stop the old Wyne Wyne worker; it is no longer used. Existing
 workers loaded before this change cannot emit the new heartbeats.
 
 Keep the minute scheduler active via cron/Task Scheduler using

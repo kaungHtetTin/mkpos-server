@@ -7,6 +7,7 @@ use App\Ai\Agents\TelegramImageReader;
 use App\Ai\Personas\WyneWyne;
 use App\Ai\Tools\ErrorSupportTool;
 use App\Ai\Tools\WyneWyneSkills;
+use App\Jobs\WyneWyneReply;
 use App\Models\PlatformAdmin;
 use App\Models\User;
 use App\Services\AiBalanceBook;
@@ -25,7 +26,6 @@ use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
-use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
@@ -44,8 +44,6 @@ class AiAssistantTest extends TestCase
         config()->set('database.connections.ai_test', ['driver' => 'sqlite', 'database' => ':memory:', 'prefix' => '']);
         DB::setDefaultConnection('ai_test');
         config()->set('cache.default', 'array');
-        // Existing business assertions execute the queued job synchronously with SDK fakes.
-        config(['queue.connections.wyne-wyne.driver' => 'sync', 'queue.connections.wyne-wyne.after_commit' => false]);
         config()->set('ai.providers.deepseek.key', 'test-key-never-return');
         Http::preventStrayRequests();
         Schema::create('businesses', function (Blueprint $t) {
@@ -151,59 +149,64 @@ class AiAssistantTest extends TestCase
         });
     }
 
-    private function processQueuedReply(): void
+    private function stagePendingReply(string $conversation): string
     {
-        $job = Queue::connection('wyne-wyne')->pop('wyne-wyne');
-        $this->assertNotNull($job);
-        $job->fire();
+        $message = DB::table('ai_messages')->insertGetId(['conversation_id' => $conversation, 'client_id' => (string) Str::uuid(),
+            'role' => 'user', 'body' => 'Private report', 'status' => 'pending', 'created_at' => now('UTC'), 'updated_at' => now('UTC')]);
+        $id = (string) Str::uuid();
+        DB::table('ai_runs')->insert(['id' => $id, 'user_id' => $this->owner->id, 'business_id' => 1, 'model' => 'deepseek-flash',
+            'status' => 'pending', 'message_id' => $message, 'actor_role' => 'owner', 'language' => 'en', 'app' => 'business_web',
+            'max_tokens' => 1600, 'pricing' => json_encode(app(AiBalanceBook::class)->pricing('deepseek-flash')),
+            'created_at' => now('UTC'), 'updated_at' => now('UTC')]);
+
+        return $id;
     }
 
-    public function test_background_reply_is_accepted_without_provider_usage_and_duplicate_submission_does_not_enqueue_twice(): void
+    private function processStagedReply(): void
+    {
+        app(WyneWyneRunner::class)->process(DB::table('ai_runs')->whereNotNull('message_id')->value('id'));
+    }
+
+    public function test_http_reply_completes_without_a_worker_and_duplicate_submission_does_not_repeat_usage(): void
     {
         $this->backgroundQueue();
-        MkposAssistant::fake(['Queued fixture reply']);
+        MkposAssistant::fake(['Direct HTTP fixture reply']);
         $conversation = $this->conversation();
         $url = '/api/ai-assistant/conversations/'.$conversation.'/messages';
         $data = ['client_id' => (string) Str::uuid(), 'body' => 'Help me'];
-        $this->postJson($url, $data)->assertStatus(202)->assertJsonPath('pending', true)->assertJsonCount(1, 'items');
-        $this->postJson($url, $data)->assertStatus(202);
+        $this->postJson($url, $data)->assertOk()->assertJsonPath('pending', false)->assertJsonPath('status', 'completed')
+            ->assertJsonCount(2, 'items')->assertJsonPath('items.1.body', 'Direct HTTP fixture reply');
+        $this->postJson($url, $data)->assertOk()->assertJsonPath('items.1.body', 'Direct HTTP fixture reply');
         $this->postJson($url, ['client_id' => $data['client_id'], 'body' => 'Different content'])->assertConflict();
-        $this->postJson($url, ['client_id' => (string) Str::uuid(), 'body' => 'Another question'])->assertConflict();
-        $this->assertSame(1, DB::table('jobs')->count());
-        $this->assertSame('wyne-wyne', DB::table('jobs')->value('queue'));
-        $this->assertSame(1, DB::table('ai_runs')->count());
-        $this->assertSame(0, DB::table('ai_balance_entries')->where('type', 'usage')->count());
-        MkposAssistant::assertNeverPrompted();
-        $this->processQueuedReply();
-        $this->getJson($url.'/'.$data['client_id'].'/delivery')->assertOk()->assertJsonPath('status', 'completed')
-            ->assertJsonPath('pending', false)->assertJsonPath('items.1.body', 'Queued fixture reply');
+        $this->getJson($url.'/'.$data['client_id'].'/delivery')->assertOk()->assertJsonPath('status', 'completed');
         app(WyneWyneRunner::class)->process(DB::table('ai_runs')->value('id'));
         $this->assertSame(0, DB::table('jobs')->count());
+        $this->assertSame(1, DB::table('ai_runs')->count());
         $this->assertSame(1, DB::table('ai_messages')->where('role', 'assistant')->count());
         $this->assertSame(1, DB::table('ai_balance_entries')->where('type', 'usage')->count());
         MkposAssistant::assertPromptedTimes(1);
     }
 
-    public function test_background_worker_rechecks_role_and_active_account_before_using_private_history(): void
+    public function test_runner_rechecks_role_and_active_account_before_using_private_history(): void
     {
         $this->backgroundQueue();
         MkposAssistant::fake(['Never publish']);
         $conversation = $this->conversation();
         $url = '/api/ai-assistant/conversations/'.$conversation.'/messages';
-        $this->postJson($url, ['client_id' => (string) Str::uuid(), 'body' => 'Private report'])->assertStatus(202);
+        $this->stagePendingReply($conversation);
         DB::table('users')->where('id', $this->owner->id)->update(['role' => 'staff']);
-        $this->processQueuedReply();
+        $this->processStagedReply();
         $this->assertSame('failed', DB::table('ai_runs')->value('status'));
         $this->assertSame('access_changed', DB::table('ai_runs')->value('error_code'));
         $this->assertSame(0, DB::table('ai_messages')->where('role', 'assistant')->count());
         MkposAssistant::assertNeverPrompted();
     }
 
-    public function test_background_worker_restores_tenant_context_and_never_uses_the_http_users_business(): void
+    public function test_runner_restores_tenant_context_and_never_uses_the_http_users_business(): void
     {
         $this->backgroundQueue();
         $conversation = $this->conversation();
-        $this->postJson('/api/ai-assistant/conversations/'.$conversation.'/messages', ['client_id' => (string) Str::uuid(), 'body' => 'Hi'])->assertStatus(202);
+        $this->stagePendingReply($conversation);
         $tenant = app(TenantContext::class);
         $tenant->set(2);
         MkposAssistant::fake(function () use ($tenant) {
@@ -211,19 +214,19 @@ class AiAssistantTest extends TestCase
 
             return 'Tenant-scoped fixture';
         });
-        $this->processQueuedReply();
+        $this->processStagedReply();
         $this->assertSame(2, $tenant->id());
         $this->assertSame('completed', DB::table('ai_runs')->value('status'));
     }
 
-    public function test_background_worker_does_not_call_the_provider_after_account_deactivation(): void
+    public function test_runner_does_not_call_the_provider_after_account_deactivation(): void
     {
         $this->backgroundQueue();
         MkposAssistant::fake(['Never publish']);
         $conversation = $this->conversation();
-        $this->postJson('/api/ai-assistant/conversations/'.$conversation.'/messages', ['client_id' => (string) Str::uuid(), 'body' => 'Private report'])->assertStatus(202);
+        $this->stagePendingReply($conversation);
         DB::table('users')->where('id', $this->owner->id)->update(['is_active' => false]);
-        $this->processQueuedReply();
+        $this->processStagedReply();
         $this->assertSame('access_changed', DB::table('ai_runs')->value('error_code'));
         $this->assertSame(0, DB::table('ai_balance_entries')->where('type', 'usage')->count());
         MkposAssistant::assertNeverPrompted();
@@ -234,11 +237,11 @@ class AiAssistantTest extends TestCase
         $this->backgroundQueue();
         MkposAssistant::fake(['Never replay']);
         $conversation = $this->conversation();
-        $this->postJson('/api/ai-assistant/conversations/'.$conversation.'/messages', ['client_id' => (string) Str::uuid(), 'body' => 'Hi'])->assertStatus(202);
-        DB::table('ai_runs')->update(['status' => 'processing', 'started_at' => now('UTC')->subMinutes(11)]);
+        $this->stagePendingReply($conversation);
+        DB::table('ai_runs')->update(['status' => 'processing', 'started_at' => now('UTC')->subMinutes(11), 'updated_at' => now('UTC')->subMinutes(11)]);
         $this->artisan('wyne-wyne:recover')->assertSuccessful();
-        $this->assertSame('worker_interrupted', DB::table('ai_runs')->value('error_code'));
-        $this->processQueuedReply();
+        $this->assertSame('http_interrupted', DB::table('ai_runs')->value('error_code'));
+        $this->processStagedReply();
         MkposAssistant::assertNeverPrompted();
         DB::table('ai_runs')->insert(['id' => (string) Str::uuid(), 'user_id' => $this->owner->id, 'business_id' => 1,
             'model' => 'deepseek-flash', 'status' => 'pending', 'created_at' => now('UTC'), 'updated_at' => now('UTC')]);
@@ -246,23 +249,44 @@ class AiAssistantTest extends TestCase
         $this->assertSame(0, DB::table('jobs')->count());
     }
 
-    public function test_scheduler_recovers_a_lost_dispatch_without_calling_the_provider_itself(): void
+    public function test_cleanup_never_queues_provider_calls_and_expires_only_abandoned_requests(): void
     {
         $this->backgroundQueue();
-        MkposAssistant::fake(['Recovered reply']);
-        $conversation = $this->conversation();
-        $this->postJson('/api/ai-assistant/conversations/'.$conversation.'/messages', ['client_id' => (string) Str::uuid(), 'body' => 'Hi'])->assertStatus(202);
-        DB::table('jobs')->delete();
-        DB::table('ai_runs')->update(['queued_at' => null]);
+        MkposAssistant::fake(['Never replay']);
+        $id = $this->stagePendingReply($this->conversation());
         $this->artisan('wyne-wyne:recover')->assertSuccessful();
+        $this->assertSame('pending', DB::table('ai_runs')->value('status'));
+        $this->travel(11)->minutes();
         $this->artisan('wyne-wyne:recover')->assertSuccessful();
-        $this->assertSame(1, DB::table('jobs')->count());
+        $this->assertSame('failed', DB::table('ai_runs')->value('status'));
+        (new WyneWyneReply($id))->handle(app(WyneWyneRunner::class));
+        $this->assertSame(0, DB::table('jobs')->count());
         MkposAssistant::assertNeverPrompted();
-        $this->processQueuedReply();
-        MkposAssistant::assertPromptedTimes(1);
     }
 
-    public function test_background_provider_failure_is_terminal_until_the_user_explicitly_retries(): void
+    public function test_old_queued_jobs_are_retired_without_using_the_provider(): void
+    {
+        MkposAssistant::fake(['Never run in a worker']);
+        $id = $this->stagePendingReply($this->conversation());
+        (new WyneWyneReply($id))->handle(app(WyneWyneRunner::class));
+        $this->assertSame('failed', DB::table('ai_runs')->value('status'));
+        $this->assertSame('http_retry_required', DB::table('ai_runs')->value('error_code'));
+        $this->assertSame('failed', DB::table('ai_messages')->value('status'));
+        MkposAssistant::assertNeverPrompted();
+    }
+
+    public function test_an_active_reply_blocks_another_request_across_conversations(): void
+    {
+        MkposAssistant::fake(['Never call twice']);
+        $this->stagePendingReply($this->conversation());
+        $other = $this->conversation();
+        $this->postJson('/api/ai-assistant/conversations/'.$other.'/messages',
+            ['client_id' => (string) Str::uuid(), 'body' => 'Another question'])->assertConflict();
+        $this->assertSame(1, DB::table('ai_runs')->count());
+        MkposAssistant::assertNeverPrompted();
+    }
+
+    public function test_http_provider_failure_is_terminal_until_the_user_explicitly_retries(): void
     {
         $this->backgroundQueue();
         $calls = 0;
@@ -276,13 +300,11 @@ class AiAssistantTest extends TestCase
         $conversation = $this->conversation();
         $url = '/api/ai-assistant/conversations/'.$conversation.'/messages';
         $data = ['client_id' => (string) Str::uuid(), 'body' => 'Hi'];
-        $this->postJson($url, $data)->assertStatus(202);
-        $this->processQueuedReply();
+        $this->postJson($url, $data)->assertStatus(503)->assertJsonPath('status', 'failed');
         $this->getJson($url.'/'.$data['client_id'].'/delivery')->assertOk()->assertJsonPath('status', 'failed');
         app(WyneWyneRunner::class)->process(DB::table('ai_runs')->value('id'));
         $this->assertSame(1, $calls);
-        $this->postJson($url, $data)->assertStatus(202);
-        $this->processQueuedReply();
+        $this->postJson($url, $data)->assertOk()->assertJsonPath('items.1.body', 'Explicit retry succeeded');
         $this->assertSame(2, $calls);
         $this->assertSame(2, DB::table('ai_runs')->count());
         $this->assertSame(1, DB::table('ai_messages')->where('role', 'assistant')->count());

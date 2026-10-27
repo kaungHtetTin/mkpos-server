@@ -1,6 +1,7 @@
 # AI workers on cron-only hosting
 
-The scheduler recovers Wyne Wyne and Telegram jobs but does not consume their queues.
+Wyne Wyne uses direct HTTP replies and requires no worker cron. Remove any old
+`cron:work wyne-wyne` entry. The scheduler recovers Telegram jobs but does not consume its queue.
 Upload the updated PHP source before adding these jobs. No migration is required for
 this command (the existing worker-heartbeat migration must already be installed).
 
@@ -8,7 +9,6 @@ Keep the existing `artisan schedule:run` cron. Add separate Custom cron entries,
 each running every minute (`* * * * *`), using the real absolute artisan path:
 
 ```sh
-/opt/alt/php83/usr/bin/php /ABSOLUTE/LARAVEL/PATH/artisan cron:work wyne-wyne
 /opt/alt/php83/usr/bin/php /ABSOLUTE/LARAVEL/PATH/artisan cron:work sales-ai
 ```
 

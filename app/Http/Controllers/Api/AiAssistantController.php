@@ -4,7 +4,6 @@ namespace App\Http\Controllers\Api;
 
 use App\Ai\Personas\WyneWyne;
 use App\Http\Controllers\Controller;
-use App\Jobs\WyneWyneReply;
 use App\Services\AiAssistantEntitlement;
 use App\Services\AiAssistantSettings;
 use App\Services\AiBalanceBook;
@@ -16,11 +15,11 @@ use App\Services\AiWeeklyQuota;
 use App\Services\McpProductImportValidator;
 use App\Services\ProductImportService;
 use App\Services\SubscriptionService;
+use App\Services\WyneWyneRunner;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
@@ -56,7 +55,7 @@ class AiAssistantController extends Controller
         $settings = app(AiAssistantSettings::class)->get();
         abort_unless($settings['storage_ready'] && $settings['enabled'] && $settings['configured'], 503, 'MKPOS AI is not available yet. Please contact platform support.');
 
-        abort_unless(Schema::hasColumn('ai_runs', 'message_id'), 503, 'Wyne Wyne worker setup is required. Please contact platform support.');
+        abort_unless(Schema::hasColumn('ai_runs', 'message_id'), 503, 'Wyne Wyne message tracking setup is required. Please contact platform support.');
 
         return $settings;
     }
@@ -163,7 +162,7 @@ class AiAssistantController extends Controller
         $image = $request->file('image');
         $newImagePath = null;
         $imagePersisted = false;
-        $lock = Cache::lock('mkpos-ai-user-'.$user->id, 240);
+        $lock = Cache::lock('mkpos-ai-user-'.$user->id, 420);
         abort_unless($lock->get(), 409, 'Another AI reply is still processing. Please try again shortly.');
         try {
             $row = app(AiConversationAccess::class)->prepareSend($user, $row->id);
@@ -218,7 +217,7 @@ class AiAssistantController extends Controller
             $runId = (string) Str::uuid();
             $messageId = DB::transaction(function () use ($user, $row, $body, $attachment, $data, $hash, $existing, $settings, $runId, $pricing) {
                 DB::table('users')->where('id', $user->id)->lockForUpdate()->first();
-                // Match worker completion's user-before-wallet lock order.
+                // Match reply completion's user-before-wallet lock order.
                 app(AiBalanceBook::class)->funded(lock: true);
                 abort_if(DB::table('ai_runs')->where('user_id', $user->id)->whereNotNull('message_id')->whereIn('status', ['pending', 'processing'])->exists(), 409, 'Another Wyne Wyne reply is still being prepared. Wait for it to finish.');
                 abort_if(app(AiWeeklyQuota::class)->usage($user->id, $settings['weekly_limit'])['remaining'] === 0, 429, 'Your weekly AI message limit has been reached. It resets Monday at midnight Asia/Yangon.');
@@ -234,12 +233,15 @@ class AiAssistantController extends Controller
                 return $id;
             });
             $imagePersisted = true;
-            try {
-                WyneWyneReply::dispatch($runId)->onConnection('wyne-wyne')->onQueue('wyne-wyne');
-                DB::table('ai_runs')->where('id', $runId)->update(['queued_at' => now('UTC')]);
-            } catch (\Throwable $error) {
-                // The durable pending run is recovered by the scheduler, never run in HTTP.
-                Log::warning('Wyne Wyne queue dispatch unavailable', ['run_id' => $runId, 'exception_class' => get_class($error)]);
+            // Complete this exchange in HTTP; no worker or scheduler starts the model.
+            // Finish saving a reply even when a client disconnects and later reconciles it.
+            ignore_user_abort(true);
+            if (function_exists('set_time_limit')) {
+                set_time_limit(360);
+            }
+            $runner = app(WyneWyneRunner::class);
+            if (! $runner->process($runId)) {
+                $runner->fail($runId, 'reply_busy');
             }
             $exchange = $this->exchange($messageId, $user, $row->id);
             if ($exchange['status'] === 'failed') {

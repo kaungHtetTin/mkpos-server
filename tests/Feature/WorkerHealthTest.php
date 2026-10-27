@@ -30,21 +30,21 @@ class WorkerHealthTest extends TestCase
     {
         $heartbeat = app(WorkerHeartbeat::class);
         $heartbeat->cronMode(true);
-        $heartbeat->queue('wyne-wyne', 'wyne-wyne');
+        $heartbeat->queue('sales-ai', 'sales-ai');
         Event::dispatch(new WorkerStopping(0));
         $heartbeat->cronMode(false);
         $this->travel(70)->seconds();
-        $this->getJson('/api/health/workers')->assertJsonPath('workers.wyne_wyne.status', 'healthy');
+        $this->getJson('/api/health/workers')->assertJsonPath('workers.sales_ai.status', 'healthy');
         $this->travel(111)->seconds();
-        $this->getJson('/api/health/workers')->assertJsonPath('workers.wyne_wyne.status', 'stale');
+        $this->getJson('/api/health/workers')->assertJsonPath('workers.sales_ai.status', 'stale');
     }
 
     public function test_cron_command_skips_a_locked_queue_and_bounds_the_worker_when_unlocked(): void
     {
-        $lock = fopen(storage_path('framework/cron-worker-wyne-wyne.lock'), 'c');
+        $lock = fopen(storage_path('framework/cron-worker-sales-ai.lock'), 'c');
         flock($lock, LOCK_EX);
         try {
-            $this->artisan('cron:work', ['queue' => 'wyne-wyne'])->assertSuccessful();
+            $this->artisan('cron:work', ['queue' => 'sales-ai'])->assertSuccessful();
             $this->assertSame(0, DB::table('worker_heartbeats')->count());
         } finally {
             flock($lock, LOCK_UN);
@@ -62,12 +62,12 @@ class WorkerHealthTest extends TestCase
             }
         };
         $command->setLaravel($this->app);
-        $this->assertSame(0, $command->run(new ArrayInput(['queue' => 'wyne-wyne']), new NullOutput));
+        $this->assertSame(0, $command->run(new ArrayInput(['queue' => 'sales-ai']), new NullOutput));
         $this->assertSame([['queue:work', [
-            'connection' => 'wyne-wyne', '--queue' => 'wyne-wyne', '--stop-when-empty' => true,
+            'connection' => 'sales-ai', '--queue' => 'sales-ai', '--stop-when-empty' => true,
             '--max-time' => 45, '--sleep' => 1, '--timeout' => 360, '--tries' => 60, '--no-interaction' => true,
         ]]], $command->invocations);
-        $this->assertSame('cron_idle', DB::table('worker_heartbeats')->where('worker', 'wyne_wyne')->value('state'));
+        $this->assertSame('cron_idle', DB::table('worker_heartbeats')->where('worker', 'sales_ai')->value('state'));
         $this->artisan('cron:work', ['queue' => 'unknown'])->assertFailed();
     }
 
@@ -113,7 +113,6 @@ class WorkerHealthTest extends TestCase
     private function healthy(): void
     {
         Event::dispatch(new Looping('sales-ai', 'sales-ai'));
-        Event::dispatch(new Looping('wyne-wyne', 'wyne-wyne'));
         foreach (['schedule:run', 'system-agent:validate-payments'] as $command) {
             $this->commandEvent($command, true);
             $this->commandEvent($command, false);
@@ -125,7 +124,7 @@ class WorkerHealthTest extends TestCase
         $this->getJson('/api/health/workers')->assertStatus(503)->assertJsonPath('ok', false)
             ->assertJsonPath('workers.sales_ai.status', 'missing')->assertJsonPath('workers.scheduler.status', 'missing')
             ->assertJsonPath('workers.payment_validation.status', 'missing')->assertJsonPath('workers.default_queue.status', 'not_required')
-            ->assertJsonPath('wyne_wyne.worker_required', true)->assertHeader('Cache-Control', 'no-store, private');
+            ->assertJsonPath('wyne_wyne.worker_required', false)->assertJsonPath('wyne_wyne.mode', 'http')->assertJsonPath('workers.wyne_wyne.status', 'not_required')->assertHeader('Cache-Control', 'no-store, private');
         $this->assertSame(0, DB::table('worker_heartbeats')->count());
         Queue::assertNothingPushed();
         Http::assertNothingSent();

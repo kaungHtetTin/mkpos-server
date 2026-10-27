@@ -6,62 +6,50 @@
 
 This skill adds no tools, shared memory, account linking, messaging, delegation or permissions. Referrals are guidance unless an existing authorized tool confirms an actual handoff/report. Agents must use current verified links/settings, preserve owner/staff and customer/tenant boundaries, and never claim another agent received private history or files. Internal helpers retain their bounded task and structured output. Existing payment matching, manual approval and customer/owner confirmation rules still apply. No migration or frontend build is required; deploy the PHP changes and restart long-running PHP queue workers to load the new prompts. Cron-only commands load them on their next invocation.
 
-## Dedicated Wyne Wyne worker
+## Direct HTTP replies
 
-Wyne Wyne uses the dedicated `wyne-wyne` database queue, separate from Sales AI
-and the application's default queue. A web request validates the message,
-persists its run, snapshots model/pricing/language/app context, and returns HTTP
-202 with `pending: true`. It never calls the model in the web request. Completed
-idempotent replays can return HTTP 200 with the saved exchange. Only one reply
-per user can be pending or processing, including across different conversations.
+Wyne Wyne validates and saves a message, runs the provider immediately in the
+same HTTP request, then returns HTTP 200 with the completed user/assistant
+exchange, proposals, billing forms and weekly usage. It needs no queue worker
+or minute cron job to start a reply. Provider and tool execution time still applies.
+Only one reply per user can run at a time, including across conversations.
 
-Desktop and mobile poll the existing authenticated
-`GET /api/ai-assistant/conversations/{conversation}/messages/{clientId}/delivery`
-endpoint while a reply is pending. It now includes the exchange, terminal status,
-actions, billing forms and current weekly usage. Refreshing or reopening the
-conversation resumes delivery without sending another message. Connectivity
-errors do not automatically retry a model request. Existing message history and
-action lists retain their pagination. No socket server protocol change is needed.
+Desktop, Windows and mobile wait for this response (390-second client timeout).
+The PHP request allows up to 360 seconds, with existing 40-second provider-call
+limits. Configure the web server, PHP-FPM and reverse proxy request timeouts to
+allow at least 400 seconds; hosting hard limits cannot be overridden in PHP.
+Use concurrent PHP request handling so unrelated requests can proceed.
 
-Apply the additive migration, then start the worker:
+The existing message-tracking migration is still required on new installations:
 
 ```sh
 php artisan migrate --path=database/migrations/2026_10_26_000004_queue_wyne_wyne_replies.php --force
-php artisan queue:work wyne-wyne --queue=wyne-wyne --sleep=2 --timeout=360 --tries=60
 ```
 
-On Windows run `start-wyne-wyne.cmd` from the repository root to start a hidden
-background worker. Repeated launch detects the existing process. Both
-`start-mkpos-dev.cmd` and `start-mkpos-prod.cmd` include it. Check without starting
-with `powershell -File scripts/start-wyne-wyne-worker.ps1 -CheckOnly`. Logs are
-`artifacts/wyne-wyne-worker-service.log` and
-`artifacts/wyne-wyne-worker-service-error.log`. The launcher preserves the caller
-directory and is not a process supervisor or an automatic Windows startup task.
-For Linux production supervision, adapt
-`deploy/wyne-wyne-worker.conf.example` to the installation's paths/user. Restart
-workers after deployment with `php artisan queue:restart` and ensure the
-supervisor or launcher starts a replacement.
+Duplicate client IDs return the saved exchange without another provider call or
+charge. Failed replies return HTTP 503 and require an explicit user retry.
+Delivery GET requests are retained to reconcile saved work after a lost HTTP
+connection or reload; normal sends do not poll for a reply. A disconnected
+client does not prevent the server from saving a completed response.
 
-The minute scheduler runs `wyne-wyne:recover --limit=50`. It re-enqueues pending
-runs after a failed dispatch or long-unclaimed queue entry; it never calls the
-provider. Processing runs interrupted for over ten minutes are marked failed,
-without automatic model replay. Existing historical runs have no message link
-and are never replayed by the new worker. Check any pre-deployment unresolved
-messages manually before retrying them. Worker timeout is 360 seconds, queue
-reservation retry is 600 seconds, and busy heartbeat grace is bounded.
+The runner preserves tenant scope, role/subscription checks before generation
+and publication, private attachments, owner approvals and once-only accounting.
+Existing message history, image/CSV uploads, proposals, billing and navigation
+are unchanged. Actual reported provider usage is recorded even when revoked
+access prevents publication.
 
-The worker atomically claims each run once, scopes tenant context for that job,
-and restores context afterward. It rechecks stored role, active account,
-business/conversation access and subscription before generation and before
-publishing. Revoked access suppresses the reply; actual reported provider usage
-is still recorded once. Duplicate jobs cannot repeat model/tool execution or
-charges. Failures require an explicit user retry. Proposal confirmation,
-payment submission, protected native forms and PIN checks keep their existing
-authorization boundaries. Weekly quota is consumed when the request is admitted.
+Remove any `cron:work wyne-wyne` cron entry and stop the old Wyne Wyne worker
+or Supervisor program when deploying. Keep Sales AI, Telegram and the regular
+scheduler running. The Windows combined launchers no longer start Wyne Wyne;
+its old standalone launcher now explains that no worker is required. Old queued
+jobs are retired without model execution and their saved messages can be retried.
+The minute `wyne-wyne:recover` task only marks abandoned requests older than ten
+minutes failed; it never dispatches jobs or replays a provider call.
 
-`GET /api/health/workers` includes the required `workers.wyne_wyne` group and
-reports `wyne_wyne.worker_required: true`, `mode: queue`. Office diagnostics add
-queue age and stuck-run counts; see [worker health](worker-health.md).
+Worker health reports `wyne_wyne.worker_required: false`, `mode: http`.
+A missing Wyne Wyne worker does not make health fail. Existing release archives
+must be regenerated to include this change; uploading current PHP source changes
+the server flow, while rebuilt clients remove the old short response timeout.
 
 ## Conversation privacy after role changes
 

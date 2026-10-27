@@ -7,14 +7,14 @@ use Illuminate\Console\Command;
 
 class CronQueueWork extends Command
 {
-    protected $signature = 'cron:work {queue : sales-ai, wyne-wyne or customer-service}';
+    protected $signature = 'cron:work {queue : sales-ai or customer-service}';
 
     protected $description = 'Drain an AI queue for cron with a process-lifetime overlap lock';
 
     public function handle(WorkerHeartbeat $heartbeat): int
     {
         $queue = (string) $this->argument('queue');
-        if (! in_array($queue, ['sales-ai', 'wyne-wyne', 'customer-service'], true)) {
+        if (! in_array($queue, ['sales-ai', 'customer-service'], true)) {
             $this->error('Unsupported AI queue.');
 
             return self::FAILURE;
