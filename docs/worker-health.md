@@ -84,6 +84,21 @@ Keep the minute scheduler active via cron/Task Scheduler using
 The next actual scheduler tick supplies its heartbeat. Do not run paid recovery
 commands against live pending work just to make the health route green.
 
+### Shared hosts with proc_open disabled
+
+The application scheduler detects whether PHP provides `proc_open`. If unavailable,
+it invokes its Artisan tasks inside the current PHP process using named callbacks.
+The task frequencies, overlap locks and failure reporting remain active. Deploy
+`app/Console/Kernel.php` to apply this fallback; no migration is needed.
+
+Use a hosting cron job to invoke the CLI PHP binary and the absolute path to
+`artisan schedule:run` every minute. Avoid `schedule:work` on these hosts because
+that Laravel command launches subprocesses. Keep the separate Sales AI queue
+worker supervised where hosting permits it; scheduler recovery is a fallback and
+may take up to the next cron tick. The fallback does not fix provider, wallet or
+queue failures. Inspect `sales_ai_runs.reason` and `Sales AI request failed` logs
+if a conversation still switches to human handling without a reply.
+
 Rows are stored centrally in MySQL, so HTTP and worker processes can run on
 different machines without sharing a filesystem cache. Queue rows use a hashed
 host/process identity; periodic commands use a stable hashed host identity.
