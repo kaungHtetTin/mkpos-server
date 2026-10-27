@@ -11,5 +11,5 @@ class ApproveSubscriptionPayment extends SupportTool
 {
     protected string $name = 'approve_subscription_payment';
 
-    protected string $description = 'Admin only: approve a pending subscription request through the existing Office activation and billing workflow. Requires independently verified funds, explicit price_paid, admin_note, confirmed and idempotency_key. A screenshot alone is not verification.';
+    protected string $description = 'Admin only: prepare a subscription payment approval for human review in Office. Does not activate access or record payment until an administrator approves in Office and independently verifies funds. Requires price_paid, admin_note, funds_verified, confirmed and idempotency_key. Share the returned Office link and pending status.';
 }

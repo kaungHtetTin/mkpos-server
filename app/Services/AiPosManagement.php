@@ -179,6 +179,7 @@ class AiPosManagement
             $this->keys($data, ['quantity', 'reason']);
             $data = validator($data, ['quantity' => ['required', 'numeric', 'between:-1000000,1000000', 'not_in:0', 'regex:/^-?\d+(\.\d{1,3})?$/'], 'reason' => 'required|string|min:1|max:2000'])->validate();
             $before = $this->row('products', $id);
+            abort_unless($before['is_active'], 404, 'Product unavailable. Wyne Wyne ignores archived products.');
             $baseline['record'] = $before;
             app(EcommerceInventory::class)->assertRemaining((object) $before, (float) $before['stock'] + $data['quantity']);
             $effect = ['stock' => (float) $before['stock'] + $data['quantity'], 'quantity_change' => $data['quantity'], 'base_unit' => $before['base_unit'], 'reason' => $data['reason']];
@@ -232,6 +233,10 @@ class AiPosManagement
             $type = $v['type'];
             $table = $type === 'expense' ? 'expenses' : $type.'s';
             $before = $this->row($table, $id);
+            if ($type === 'product') {
+                abort_if($action === 'restore', 422, 'Wyne Wyne ignores archived products and cannot restore them.');
+                abort_unless($before['is_active'], 404, 'Product unavailable. Wyne Wyne ignores archived products.');
+            }
             $baseline['record'] = $before;
             $this->keys($data, []);
             if ($type === 'expense') {
@@ -242,9 +247,6 @@ class AiPosManagement
                 abort_unless(in_array($action, ['archive', 'restore']), 422, 'Products and contacts use archive/restore, preserving history.');
                 if ($type === 'product') {
                     abort_if($action === 'archive' && app(EcommerceInventory::class)->reserved($id, $before['business_id']) > 0, 409, 'Resolve online reservations before archiving.');
-                    if ($action === 'restore' && $before['barcode'] !== '') {
-                        abort_if($this->table('products')->where('id', '!=', $id)->where('is_active', true)->where('barcode', $before['barcode'])->exists(), 409, 'An active product uses this barcode.');
-                    }
                 }$route = [$type === 'product' ? ProductController::class : ($type === 'customer' ? CustomerController::class : SupplierController::class), 'destroy'];
             }
             $effect = $type === 'expense' ? ['deleted' => true] : ['is_active' => $action === 'restore'];
@@ -329,6 +331,7 @@ class AiPosManagement
     public function execute(string $operation, array $p, int $userId, array $approval = []): array
     {
         if ($operation === 'manage_business_records' && $p['action'] === 'restore') {
+            abort_if($p['type'] === 'product', 422, 'Wyne Wyne ignores archived products and cannot restore them.');
             $table = $p['type'].'s';
             $this->table($table)->where('id', $p['record_id'])->update(['is_active' => true, 'updated_at' => now()]);
 

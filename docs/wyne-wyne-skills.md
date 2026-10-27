@@ -46,3 +46,9 @@ Business figures require current server evidence, business-local periods, curren
 The existing image policy remains in force for Wyne Wyne. Image replies use the restricted structured image reader; receipt recipient comparison is not funds verification. Unknown MKPOS image errors create the existing Office Error report. Text error reports keep their contact/submission form. This skill update does not broaden image scope to arbitrary product/invoice uploads or let image turns run business mutations.
 
 Deployment: upload the backend patch and run php artisan optimize:clear. Restart persistent workers; bounded cron workers read updated code on their next invocation. This update adds no new migration, cron entry or Office build. If the earlier image-policy migration has not been applied, follow the cumulative package deployment instructions first.
+
+## Archived products
+
+Wyne Wyne always ignores deleted/archived products (`is_active = false`) in product searches, management/catalog reads, direct product details, inventory movement views, price checks and product recommendations. Archived IDs from previous conversations cannot be used to adjust stock, archive again, or restore a product. Product restore is rejected during proposal preparation and execution; customer/supplier restore remains supported. Bulk price-rule updates leave archived product prices untouched.
+
+Original sales, purchase lines and stored stock movements remain preserved. Historical transaction/report totals are not rewritten when a product is archived. No data migration or frontend build is required. Deploy the PHP changes and restart persistent Wyne Wyne workers.

@@ -72,11 +72,13 @@ class ShopCustomerFeaturesTest extends TestCase
         \Illuminate\Support\Facades\Http::assertSent(fn ($request) => json_decode($request->body(), true) === [
             'channels' => ['private-shop.orders.tracking.'.$result['reference'], 'private-shop.orders.customer.'.$this->customer['customer']['id']],
             'event' => 'order.updated', 'data' => ['event_id' => $acceptedId, 'reference' => $result['reference']]]);
-        \Illuminate\Support\Facades\Http::assertSentCount(3); // Submitted customer/owner events, then accepted; rolled-back packing is absent.
+        \Illuminate\Support\Facades\Http::assertSentCount(5);
+        $events = \Illuminate\Support\Facades\Http::recorded()->map(fn ($pair) => json_decode($pair[0]->body(), true)['event'])->countBy()->all();
+        $this->assertEquals(['order.submitted' => 1, 'order.updated' => 2, 'order.changed' => 2], $events);
         DB::beginTransaction();
         $this->postJson("/api/shop-admin/orders/$id/transition", ['status' => 'packing'])->assertOk();
         DB::rollBack();
-        \Illuminate\Support\Facades\Http::assertSentCount(3);
+        \Illuminate\Support\Facades\Http::assertSentCount(5); // The rolled-back packing transition sends nothing.
         $this->assertFalse(DB::table('ecommerce_order_events')->where('order_id', $id)->where('event', 'packing')->exists());
     }
     protected function setUp(): void

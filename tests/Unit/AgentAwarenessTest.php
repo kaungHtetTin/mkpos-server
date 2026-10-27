@@ -44,6 +44,10 @@ class AgentAwarenessTest extends TestCase
             $instructions = $agent->instructions();
             $this->assertStringContainsString(AgentAwareness::INSTRUCTIONS, $instructions, $agent::class);
             $this->assertSame(1, substr_count($instructions, 'MKPOS agent awareness skill:'), $agent::class);
+            $this->assertSame(1, substr_count($instructions, 'Shared communication soul for every MKPOS agent:'), $agent::class);
+            $this->assertStringContainsString('Assume customers, business owners and staff are non-technical people.', $instructions, $agent::class);
+            $this->assertStringContainsString('Give technical detail only when explicitly requested', $instructions, $agent::class);
+            $this->assertStringContainsString('Preserve required structured output, exact field names, enum values and extracted facts', $instructions, $agent::class);
             $this->assertStringContainsString($identity, $instructions, $agent::class);
         }
         $this->assertNotInstanceOf(HasTools::class, new SystemAgent);

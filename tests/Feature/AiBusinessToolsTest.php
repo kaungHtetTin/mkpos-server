@@ -43,6 +43,20 @@ class AiBusinessToolsTest extends TestCase
         return json_decode((new BusinessReadTool(new MkposAssistant($actor ?? $this->owner), $tool))->handle(new ToolRequest($args)), true, flags: JSON_THROW_ON_ERROR);
     }
 
+    public function test_archived_products_are_hidden_even_when_old_ids_are_supplied(): void
+    {
+        DB::table('products')->where('id', 1)->update(['is_active' => false]);
+        $this->assertSame([], $this->read('search_products')['data']['items']);
+        $this->assertSame('record_unavailable', $this->invoke('get_product_details', ['product_id' => 1])['error']);
+        $this->assertSame([], $this->read('get_inventory_report', ['mode' => 'movements'])['data']['items']);
+        $this->assertSame('record_unavailable', $this->invoke('get_inventory_report', ['mode' => 'movements', 'product_id' => 1])['error']);
+        // Archiving must not erase the original invoice or change historical totals.
+        $sales = $this->read('search_sales', ['sale_id' => 1]);
+        $this->assertCount(1, $sales['data']['items']);
+        $this->assertDatabaseHas('sale_items', ['product_id' => 1, 'product_name' => 'Soap']);
+        $this->assertDatabaseHas('stock_movements', ['product_id' => 1]);
+    }
+
     public function test_all_twelve_capabilities_are_owner_only_tenant_scoped_and_read_only(): void
     {
         $this->assertCount(21, BusinessReadTool::DESCRIPTIONS);

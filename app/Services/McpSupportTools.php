@@ -27,6 +27,9 @@ class McpSupportTools
         if (! $write) {
             return $this->execute($tool, $context, $data);
         }
+        if ($audience === 'admin') {
+            return app(McpAdminProposals::class)->prepare($tool, $context, $data);
+        }
 
         $prepared = null;
         if ($tool === 'submit_subscription_payment_proof' && ! DB::table('mcp_support_actions')->where('actor_type', $context['type'])->where('actor_id', $context['id'])
@@ -54,6 +57,13 @@ class McpSupportTools
 
             return $result;
         }, 3);
+    }
+
+    public function executeApprovedAdminAction(string $tool, object $admin, array $data): array
+    {
+        abort_unless(in_array($tool, McpAdminProposals::TOOLS, true) && $admin->is_active, 403);
+
+        return $this->execute($tool, ['type' => 'admin', 'id' => (int) $admin->id, 'actor' => $admin], $data);
     }
 
     private function execute(string $tool, array $context, array $data, ?object $prepared = null): array

@@ -13,6 +13,11 @@ class SupportAdminServer extends Server
 
     protected string $instructions = <<<'TEXT'
         Administrators only. Never expose this connection to customer conversations.
+        All write tools prepare proposals only. Share the returned Office link and
+        awaiting_office_approval status. An administrator must review and approve
+        the exact action in Office before any payment or refund change is applied.
+        confirmed=true does not constitute Office approval. Never claim a prepared
+        proposal has already approved a payment or completed a refund operation.
         Obtain explicit administrator confirmation for each write, with a stable UUID
         idempotency_key per intent. Verify actual receipt of funds independently before
         approving subscription payments; a screenshot alone is not proof of funds.

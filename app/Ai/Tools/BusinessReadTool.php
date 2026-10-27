@@ -28,7 +28,7 @@ class BusinessReadTool implements Tool
         'get_business_context' => 'Read the signed-in owner business name, currency, timezone, local date and available read capabilities. Call first for relative dates. No arguments.',
         'get_business_summary' => 'Read an overview using the same calculations as Reports: sales, expenses, estimated profit, current receivables/payables, inventory and pending shop orders. Dates default to today in business timezone. Current balances are independent of the date range.',
         'search_products' => 'Search active products by name, SKU, barcode or category. Paginated; no date filtering.',
-        'get_product_details' => 'Read one product by required product_id, including units, cost, stock and named selling prices.',
+        'get_product_details' => 'Archived products are unavailable. Read one product by required product_id, including units, cost, stock and named selling prices.',
         'get_inventory_report' => 'Read low_stock (includes out of stock), out_of_stock, all stock, or movements. Use product_id to inspect one product. Movement dates default to today. Stock is current, not historical; stock units can differ between products.',
         'search_sales' => 'Search receipts by query, customer_id or sale_id. Defaults to completed sales today; totals cover all matching receipts, not just the page. Credit amounts are original invoice credit, not current outstanding debt.',
         'search_purchases' => 'Search purchases by supplier name/query, supplier_id or purchase_id. Defaults to completed purchases created today, matching Reports date basis. Credit amounts are original invoice credit, not current outstanding debt.',

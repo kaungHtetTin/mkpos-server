@@ -85,6 +85,9 @@ class AiPriceRuleActions
             }
             $preview[] = ['name' => 'Price rule: '.$name, 'before' => $exists ? $old : null, 'after' => $after + ['apply_to_existing' => (bool) ($change['apply_to_existing'] ?? false)]];
             foreach ($products as $id => &$product) {
+                if (! $product['is_active']) {
+                    continue;
+                }
                 $index = null;
                 foreach ($prices as $i => $p) {
                     if ((int) $p['product_id'] === (int) $id && $p['name'] === $name) {

@@ -16,6 +16,10 @@ class DatabaseSeeder extends Seeder
      */
     public function run()
     {
+        if (app()->environment('production')) {
+            throw new \RuntimeException('Use office:create-admin to provision a production administrator with a private password.');
+        }
+
         PlatformAdmin::firstOrCreate(
             ['email' => 'admin@mkposmyanmar.com'],
             [

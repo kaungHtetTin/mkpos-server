@@ -120,6 +120,17 @@ class AiManagementTest extends TestCase
         $this->assertDatabaseMissing('price_type_rules', ['business_id' => 1, 'name' => 'Wholesale']);
     }
 
+    public function test_price_rule_changes_leave_archived_product_prices_untouched(): void
+    {
+        DB::table('products')->where('id', 1)->update(['is_active' => false]);
+        $prices = DB::table('product_prices')->where('product_id', 1)->get()->map(fn ($row) => (array) $row)->all();
+        $action = $this->prepare([['action' => 'update', 'name' => 'Retail', 'pricing_mode' => 'automatic', 'markup_percent' => 20, 'apply_to_existing' => true]]);
+        $this->assertSame(1, $action['preview']['total']);
+        $this->confirm($action);
+        $this->assertSame($prices, DB::table('product_prices')->where('product_id', 1)->get()->map(fn ($row) => (array) $row)->all());
+        $this->assertEquals(100, DB::table('products')->where('id', 1)->value('price'));
+    }
+
     public function test_price_rule_deletion_guards_and_stale_costs_fail_without_partial_changes(): void
     {
         try {
@@ -199,7 +210,7 @@ class AiManagementTest extends TestCase
         $this->assertEquals(100, DB::table('products')->where('id', 1)->value('cost'));
     }
 
-    public function test_inventory_settlement_and_archive_restore_are_scoped_and_audited(): void
+    public function test_inventory_settlement_and_product_archival_are_scoped_and_restore_is_blocked(): void
     {
         $this->nativeFixture();
         $this->approve($this->propose('manage_inventory', ['action' => 'adjust', 'record_id' => 1, 'data' => ['quantity' => 3, 'reason' => 'Physical count']]));
@@ -210,9 +221,50 @@ class AiManagementTest extends TestCase
         $this->approve($this->propose('manage_account_payments', ['action' => 'delete', 'party' => 'customer', 'record_id' => $p['result']['record_id']]));
         $this->approve($this->propose('manage_business_records', ['action' => 'archive', 'type' => 'product', 'record_id' => 1]));
         $this->assertEquals(0, DB::table('products')->where('id', 1)->value('is_active'));
-        $this->approve($this->propose('manage_business_records', ['action' => 'restore', 'type' => 'product', 'record_id' => 1]));
-        $this->assertEquals(1, DB::table('products')->where('id', 1)->value('is_active'));
+        try {
+            $this->propose('manage_business_records', ['action' => 'restore', 'type' => 'product', 'record_id' => 1]);
+            $this->fail('Archived products must not be restored by Wyne Wyne.');
+        } catch (HttpExceptionInterface $error) {
+            $this->assertSame(422, $error->getStatusCode());
+        }
+        $this->assertEquals(0, DB::table('products')->where('id', 1)->value('is_active'));
         $this->assertEquals(2, DB::connection('business_ai_test')->table('products')->where('id', 2)->value('stock'));
+    }
+
+    public function test_archived_products_are_excluded_from_management_search_and_direct_ids(): void
+    {
+        $this->shopFixture();
+        DB::table('products')->where('id', 1)->update(['is_active' => false]);
+        foreach (['products', 'shop_catalog'] as $resource) {
+            foreach ([[], ['record_id' => 1], ['query' => 'Soap']] as $filter) {
+                $result = app(AiManagementReader::class)->read(['resource' => $resource] + $filter);
+                $this->assertSame([], $result['items']);
+                $this->assertSame(0, $result['total']);
+            }
+        }
+        foreach ([['manage_inventory', ['action' => 'adjust', 'record_id' => 1, 'data' => ['quantity' => 1, 'reason' => 'Count']]],
+            ['manage_business_records', ['action' => 'archive', 'type' => 'product', 'record_id' => 1]]] as [$operation, $input]) {
+            try {
+                $this->propose($operation, $input);
+                $this->fail('Archived product must be unavailable.');
+            } catch (HttpExceptionInterface $error) {
+                $this->assertSame(404, $error->getStatusCode());
+            }
+        }
+        $this->assertEquals(2, DB::table('products')->where('id', 1)->value('stock'));
+        $this->assertDatabaseCount('ai_management_audits', 0);
+    }
+
+    public function test_product_restore_execution_is_blocked_even_for_a_previously_prepared_payload(): void
+    {
+        DB::table('products')->where('id', 1)->update(['is_active' => false]);
+        try {
+            app(\App\Services\AiPosManagement::class)->execute('manage_business_records', ['action' => 'restore', 'type' => 'product', 'record_id' => 1], 1);
+            $this->fail('Product restore must be blocked at execution.');
+        } catch (HttpExceptionInterface $error) {
+            $this->assertSame(422, $error->getStatusCode());
+        }
+        $this->assertEquals(0, DB::table('products')->where('id', 1)->value('is_active'));
     }
 
     private function shopFixture(): void

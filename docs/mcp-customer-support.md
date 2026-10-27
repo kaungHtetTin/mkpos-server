@@ -4,6 +4,22 @@ This implements the customer-service catalogue, form-field guidance, read-only
 product-import template/validation tools, and `get_mkpos_overview` for compatibility. No public endpoint can read a customer's
 private account or execute administrator actions.
 
+Administrator payment and refund write tools prepare a proposal only. Their
+initial response has `status: awaiting_office_approval`, a `proposal_id`, expiry
+and an `office_url`. An administrator reviews the exact action in **Office >
+Payment > Assistant approvals** and explicitly approves or rejects it. The
+chatbot's `confirmed` flag cannot apply the action. Proposals expire after 30
+minutes and are invalidated by changes to the target payment/refund, its plan,
+or the originating administrator/connection. Changed arguments require a new
+idempotency key. A proposal's rejection leaves the underlying request unchanged.
+For a completed proposal, inspect its nested `result` for the actual payment or
+refund state. Refund approval/transfer recording never sends money through a bank.
+
+Deploy migration `2026_10_27_000001_create_mcp_admin_proposals` with the updated
+Office client and refresh tool discovery in connected chatbot hosts. HTTP MCP
+requests with an Origin header must match an exact configured CORS origin;
+server-to-server requests without Origin remain supported.
+
 ## Connections and tools
 
 All MCP connections use Streamable HTTP POST. Prefix paths with the deployed

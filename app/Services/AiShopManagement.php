@@ -226,6 +226,7 @@ class AiShopManagement
                 if ($data['type'] === 'flash_sale') {
                     abort_unless(! empty($data['product_id']), 422, 'Flash sales need a matched product.');
                     $baseline['product'] = $this->row('products', $data['product_id']);
+                    abort_unless($baseline['product']['is_active'], 404, 'Product unavailable. Wyne Wyne ignores archived products.');
                     $baseline['product_prices'] = $this->table('product_prices')->where('product_id', $data['product_id'])->orderBy('name')->lockForUpdate()->get()->map(fn ($r) => (array) $r)->all();
                     $publication = $this->table('ecommerce_product_settings')->where('product_id', $data['product_id'])->lockForUpdate()->first();
                     abort_unless($publication && $baseline['product']['is_active'], 422, 'Choose an active product in the online catalog.');

@@ -78,6 +78,14 @@ class ActivityAlertTest extends TestCase
     public function test_new_subscription_request_alerts_office_and_rejection_alerts_only_its_owner_with_current_access(): void
     {
         Storage::fake('local');
+        config(['cache.default' => 'array', 'ai.providers.deepseek.key' => 'test-key']);
+        $this->mock(\App\Services\AiAssistantSettings::class, fn ($mock) => $mock->shouldReceive('get')->andReturn(['enabled' => true, 'configured' => true]));
+        \Illuminate\Support\Facades\Cache::put('ai.deepseek.pricing.v2', ['source_url' => \App\Services\DeepSeekPricing::SOURCE,
+            'fetched_at' => now()->toIso8601String(), 'rates' => ['deepseek-flash' => ['input' => .3, 'output' => 1.2, 'cached_input' => .006]]], 3600);
+        DB::table('ai_balance_accounts')->where('id', 1)->update(['balance_nanos' => 1000000000]);
+        \App\Ai\Agents\SystemAgent::fake([['readable' => true, 'payment_status' => 'completed', 'amount' => '25000', 'currency' => 'Ks',
+            'recipient_account' => '1234', 'recipient_name' => 'MKPOS', 'provider' => 'Test bank', 'transaction_reference' => 'ACTIVITY-'.Str::uuid(),
+            'paid_at' => now()->toIso8601String(), 'notes' => '']]);
         $plan = DB::table('subscription_plans')->insertGetId(['name' => 'Activity plan', 'slug' => Str::uuid(), 'price' => 25000, 'duration_days' => 30, 'is_system' => false, 'is_public' => true]);
         $payment = DB::table('payment_methods')->insertGetId(['bank' => 'Test bank', 'account_name' => 'MKPOS', 'account_no' => '1234', 'is_active' => true]);
         $requestId = $this->actingAs($this->owner, 'web')->postJson('/api/subscription/requests', [

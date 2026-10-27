@@ -67,6 +67,9 @@ class AiManagementReader
         };
         $columns = array_values(array_intersect($columns, Schema::getColumnListing($table)));
         $q = $this->table($table);
+        if (in_array($resource, ['products', 'shop_catalog'], true)) {
+            $q->where('is_active', true);
+        }
         if (isset($a['record_id'])) {
             $q->where('id', $a['record_id']);
         }

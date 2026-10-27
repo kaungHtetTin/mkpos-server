@@ -40,6 +40,7 @@ class McpSupportTest extends TestCase
         // Every table below is in memory; never migrate or modify the workspace DB.
         config()->set('database.connections.mcp_support_test', ['driver' => 'sqlite', 'database' => ':memory:', 'prefix' => '']);
         DB::setDefaultConnection('mcp_support_test');
+        (require database_path('migrations/2019_12_14_000001_create_personal_access_tokens_table.php'))->up();
         Http::preventStrayRequests();
         Storage::fake('local');
         $this->mock(RealtimeActivity::class, fn ($mock) => $mock->shouldReceive('record', 'subscription')->andReturnNull());
@@ -176,6 +177,7 @@ class McpSupportTest extends TestCase
             (require database_path('migrations/'.$migration))->up();
         }
         (require database_path('migrations/2026_10_24_000001_create_mcp_support_tables.php'))->up();
+        (require database_path('migrations/2026_10_27_000001_create_mcp_admin_proposals.php'))->up();
         (require database_path('migrations/2026_10_25_000005_create_system_agent_reviews.php'))->up();
         (require database_path('migrations/2026_10_25_000006_create_owner_payment_validations.php'))->up();
         (require database_path('migrations/2026_10_25_000002_create_ai_balance_book_tables.php'))->up();
@@ -222,6 +224,17 @@ class McpSupportTest extends TestCase
     private function intent(array $data): array
     {
         return $data + ['confirmed' => true, 'idempotency_key' => (string) Str::uuid()];
+    }
+
+    private function approveProposal(string $tool, array $data, string $token)
+    {
+        $proposal = $this->rpc('/mcp/admin', $tool, $data, $token)
+            ->assertJsonPath('result.structuredContent.status', 'awaiting_office_approval')->json('result.structuredContent.proposal_id');
+        $response = $this->actingAs($this->admin, 'office')->withHeader('Authorization', '')->postJson('/api/office/assistant-approvals/'.$proposal.'/approve',
+            ['confirmed' => true, 'funds_verified' => true]);
+        \Illuminate\Support\Facades\Auth::forgetGuards();
+
+        return $response;
     }
 
     private function payment(int $business = 1, int $amount = 30000): int
@@ -321,14 +334,20 @@ class McpSupportTest extends TestCase
         $admin = $this->token('admin');
         $intent = $this->intent(['request_id' => $request, 'price_paid' => 30000, 'admin_note' => 'Funds independently checked', 'funds_verified' => true]);
         $this->rpc('/mcp/admin', 'approve_subscription_payment', array_replace($intent, ['funds_verified' => false]), $admin)->assertJsonPath('result.isError', true);
-        $this->rpc('/mcp/admin', 'approve_subscription_payment', $intent, $admin)->assertJsonPath('result.isError', false)->assertJsonPath('result.structuredContent.status', 'approved');
+        $proposal = $this->rpc('/mcp/admin', 'approve_subscription_payment', $intent, $admin)->assertJsonPath('result.isError', false)
+            ->assertJsonPath('result.structuredContent.status', 'awaiting_office_approval')->json('result.structuredContent.proposal_id');
+        $this->assertDatabaseHas('subscription_requests', ['id' => $request, 'status' => 'pending']);
+        $this->assertSame(0, DB::table('subscription_payments')->count());
+        $this->approveProposal('approve_subscription_payment', $intent, $admin)->assertOk()->assertJsonPath('result.status', 'approved');
+        $this->actingAs($this->admin, 'office')->postJson('/api/office/assistant-approvals/'.$proposal.'/approve', ['confirmed' => true, 'funds_verified' => true])->assertOk();
+        \Illuminate\Support\Facades\Auth::forgetGuards();
         $this->rpc('/mcp/admin', 'approve_subscription_payment', $intent, $admin)->assertJsonPath('result.structuredContent.status', 'approved');
         $this->assertSame(1, DB::table('subscription_payments')->count());
         $this->assertSame($this->admin->id, DB::table('subscription_requests')->where('id', $request)->value('reviewed_by_admin_id'));
         $this->assertSame(1, DB::table('office_activity_logs')->where('action', 'McpSupportTools@approve_subscription_payment')->count());
         $this->rpc('/mcp/admin', 'reject_subscription_payment', $this->intent(['request_id' => $request, 'admin_note' => 'Cannot reject approved']), $admin)->assertJsonPath('result.isError', true);
         $pending = DB::table('subscription_requests')->insertGetId(['business_id' => 1, 'subscription_plan_id' => 1]);
-        $this->rpc('/mcp/admin', 'reject_subscription_payment', $this->intent(['request_id' => $pending, 'admin_note' => 'Recipient did not match']), $admin)->assertJsonPath('result.structuredContent.status', 'rejected');
+        $this->approveProposal('reject_subscription_payment', $this->intent(['request_id' => $pending, 'admin_note' => 'Recipient did not match']), $admin)->assertOk()->assertJsonPath('result.status', 'rejected');
     }
 
     public function test_system_agent_mcp_checks_owner_proof_before_a_request_exists(): void
@@ -345,6 +364,56 @@ class McpSupportTest extends TestCase
         $this->assertSame(0, DB::table('subscription_requests')->count());
         $this->assertSame(1, DB::table('owner_payment_validations')->count());
         Http::assertNothingSent();
+    }
+
+    public function test_mcp_proposals_cannot_approve_themselves_or_change_bound_arguments(): void
+    {
+        $request = DB::table('subscription_requests')->insertGetId(['business_id' => 1, 'subscription_plan_id' => 1]);
+        $token = $this->token('admin');
+        $intent = $this->intent(['request_id' => $request, 'price_paid' => 30000, 'admin_note' => 'Verify the actual bank receipt', 'funds_verified' => true]);
+        $proposal = $this->rpc('/mcp/admin', 'approve_subscription_payment', $intent, $token)->json('result.structuredContent.proposal_id');
+        $this->assertNotNull($proposal);
+        $this->postJson('/api/office/assistant-approvals/'.$proposal.'/approve', ['confirmed' => true, 'funds_verified' => true], ['Authorization' => 'Bearer '.$token])->assertUnauthorized();
+        $this->rpc('/mcp/admin', 'approve_subscription_payment', array_replace($intent, ['price_paid' => 1]), $token)->assertJsonPath('result.isError', true);
+        $this->actingAs($this->admin, 'office')->getJson('/api/office/assistant-approvals')->assertOk()->assertJsonPath('items.0.amount', 30000);
+        $this->postJson('/api/office/assistant-approvals/'.$proposal.'/approve', ['confirmed' => true])->assertUnprocessable();
+        $this->postJson('/api/office/assistant-approvals/'.$proposal.'/approve', ['confirmed' => true, 'funds_verified' => true, 'price_paid' => 1])->assertUnprocessable();
+        DB::table('subscription_plans')->where('id', 1)->update(['price' => 31000]);
+        $this->postJson('/api/office/assistant-approvals/'.$proposal.'/approve', ['confirmed' => true, 'funds_verified' => true])->assertConflict();
+        $this->assertDatabaseHas('subscription_requests', ['id' => $request, 'status' => 'pending']);
+        $this->assertSame(0, DB::table('subscription_payments')->count());
+    }
+
+    public function test_expired_revoked_and_rejected_proposals_cannot_execute(): void
+    {
+        foreach (['expired', 'token_expired', 'revoked', 'password_changed', 'rejected'] as $case) {
+            $this->admin->refresh();
+            $request = DB::table('subscription_requests')->insertGetId(['business_id' => 1, 'subscription_plan_id' => 1]);
+            $token = $this->token('admin');
+            $intent = $this->intent(['request_id' => $request, 'admin_note' => 'A rejection requiring human review']);
+            $proposal = $this->rpc('/mcp/admin', 'reject_subscription_payment', $intent, $token)->json('result.structuredContent.proposal_id');
+            if ($case === 'expired') DB::table('mcp_admin_proposals')->where('id', $proposal)->update(['expires_at' => now('UTC')->subMinute()]);
+            if ($case === 'token_expired') DB::table('mcp_support_tokens')->update(['expires_at' => now()->subMinute()]);
+            if ($case === 'revoked') DB::table('mcp_support_tokens')->delete();
+            if ($case === 'password_changed') $this->admin->update(['password' => Hash::make('new-test-password')]);
+            $this->actingAs($this->admin, 'office');
+            if ($case === 'rejected') $this->postJson('/api/office/assistant-approvals/'.$proposal.'/reject')->assertOk()->assertJsonPath('status', 'rejected');
+            $this->postJson('/api/office/assistant-approvals/'.$proposal.'/approve', ['confirmed' => true])->assertConflict();
+            $this->assertDatabaseHas('subscription_requests', ['id' => $request, 'status' => 'pending']);
+            \Illuminate\Support\Facades\Auth::forgetGuards();
+        }
+        $this->assertSame(0, DB::table('subscription_payments')->count());
+    }
+
+    public function test_office_approval_is_attributed_to_the_administrator_who_reviews_it(): void
+    {
+        $request = DB::table('subscription_requests')->insertGetId(['business_id' => 1, 'subscription_plan_id' => 1]);
+        $proposal = $this->rpc('/mcp/admin', 'reject_subscription_payment', $this->intent(['request_id' => $request, 'admin_note' => 'Bank account does not match']), $this->token('admin'))
+            ->json('result.structuredContent.proposal_id');
+        $reviewer = PlatformAdmin::create(['name' => 'Independent reviewer', 'email' => 'reviewer@example.test', 'password' => Hash::make('review-password'), 'is_active' => true]);
+        $this->actingAs($reviewer, 'office')->postJson('/api/office/assistant-approvals/'.$proposal.'/approve', ['confirmed' => true])->assertOk();
+        $this->assertDatabaseHas('subscription_requests', ['id' => $request, 'reviewed_by_admin_id' => $reviewer->id, 'status' => 'rejected']);
+        $this->assertDatabaseHas('mcp_admin_proposals', ['id' => $proposal, 'admin_id' => $this->admin->id, 'reviewed_by_admin_id' => $reviewer->id, 'status' => 'approved']);
     }
 
     public function test_manual_office_approval_saves_the_reviewed_transaction_reference(): void
@@ -371,10 +440,10 @@ class McpSupportTest extends TestCase
         $this->rpc('/mcp/admin', 'get_pending_refund_requests', [], $admin)->assertJsonCount(1, 'result.structuredContent.items');
         $this->rpc('/mcp/account', 'get_my_refund_status', ['refund_id' => $id], $owner)->assertJsonPath('result.structuredContent.refund.amount', 20000);
         $this->rpc('/mcp/admin', 'process_refund_request', $this->intent(['refund_id' => $id, 'action' => 'record_transfer', 'review_note' => 'Too early']), $admin)->assertJsonPath('result.isError', true);
-        $this->rpc('/mcp/admin', 'process_refund_request', $this->intent(['refund_id' => $id, 'action' => 'approve', 'review_note' => 'Approved for processing']), $admin)->assertJsonPath('result.structuredContent.status', 'approved');
+        $this->approveProposal('process_refund_request', $this->intent(['refund_id' => $id, 'action' => 'approve', 'review_note' => 'Approved for processing']), $admin)->assertOk()->assertJsonPath('result.status', 'approved');
         $transfer = $this->intent(['refund_id' => $id, 'action' => 'record_transfer', 'review_note' => 'External transfer checked', 'transfer_reference' => 'BANK-REF-1', 'transferred_at' => now()->toIso8601String()]);
-        $this->rpc('/mcp/admin', 'process_refund_request', $transfer, $admin)->assertJsonPath('result.structuredContent.status', 'transferred')->assertJsonPath('result.structuredContent.bank_transfer_initiated', false);
-        $this->rpc('/mcp/admin', 'process_refund_request', $transfer, $admin)->assertJsonPath('result.structuredContent.status', 'transferred');
+        $this->approveProposal('process_refund_request', $transfer, $admin)->assertOk()->assertJsonPath('result.status', 'transferred')->assertJsonPath('result.bank_transfer_initiated', false);
+        $this->rpc('/mcp/admin', 'process_refund_request', $transfer, $admin)->assertJsonPath('result.structuredContent.result.status', 'transferred');
         $this->assertSame(1, DB::table('subscription_refund_requests')->count());
         $this->assertSame(30000, DB::table('subscription_payments')->where('id', $payment)->value('amount'));
         Http::assertNothingSent();
@@ -428,8 +497,8 @@ class McpSupportTest extends TestCase
     {
         $id = DB::table('subscription_requests')->insertGetId(['business_id' => 1, 'subscription_plan_id' => 1]);
         Schema::drop('subscription_approval_events');
-        $this->rpc('/mcp/admin', 'approve_subscription_payment', $this->intent(['request_id' => $id,
-            'price_paid' => 30000, 'admin_note' => 'Verified but forced storage failure', 'funds_verified' => true]), $this->token('admin'))->assertJsonPath('result.isError', true);
+        $this->approveProposal('approve_subscription_payment', $this->intent(['request_id' => $id,
+            'price_paid' => 30000, 'admin_note' => 'Verified but forced storage failure', 'funds_verified' => true]), $this->token('admin'))->assertStatus(500);
         $this->assertSame('pending', DB::table('subscription_requests')->where('id', $id)->value('status'));
         $this->assertSame(0, DB::table('subscription_payments')->count());
         $this->assertSame(0, DB::table('mcp_support_actions')->count());
@@ -442,7 +511,7 @@ class McpSupportTest extends TestCase
         $owner = $this->token();
         $admin = $this->token('admin');
         $id = $this->rpc('/mcp/account', 'request_refund', $this->intent(['payment_id' => $payment, 'amount' => 30000, 'reason' => 'Full payment disputed']), $owner)->json('result.structuredContent.refund_id');
-        $this->rpc('/mcp/admin', 'process_refund_request', $this->intent(['refund_id' => $id, 'action' => 'reject', 'review_note' => 'Not eligible under agreement']), $admin)->assertJsonPath('result.structuredContent.status', 'rejected');
+        $this->approveProposal('process_refund_request', $this->intent(['refund_id' => $id, 'action' => 'reject', 'review_note' => 'Not eligible under agreement']), $admin)->assertOk()->assertJsonPath('result.status', 'rejected');
         $this->rpc('/mcp/admin', 'process_refund_request', $this->intent(['refund_id' => $id, 'action' => 'record_transfer', 'review_note' => 'Invalid transition']), $admin)->assertJsonPath('result.isError', true);
         $this->rpc('/mcp/account', 'request_refund', $this->intent(['payment_id' => $payment, 'amount' => 30000, 'reason' => 'New supporting evidence']), $owner)->assertJsonPath('result.structuredContent.status', 'pending');
         $this->owner->business_id = 2;

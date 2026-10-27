@@ -26,7 +26,7 @@ class SecurityCheck extends Command
             $check(app()->environment('production'), 'Set APP_ENV=production.');
             $check(str_starts_with((string) config('app.url'), 'https://'), 'Use an HTTPS APP_URL.');
             $check((bool) config('session.secure'), 'Set SESSION_SECURE_COOKIE=true behind HTTPS.');
-            $check(!array_filter($origins, fn ($origin) => !str_starts_with($origin, 'https://')), 'Production browser origins must use HTTPS.');
+            $check(!array_filter($origins, fn ($origin) => $origin !== 'capacitor://localhost' && !str_starts_with($origin, 'https://')), 'Production browser origins must use HTTPS (or the exact native origin capacitor://localhost).');
         }
         if (config('shop_chat.realtime_enabled')) {
             $check(strlen((string) config('shop_chat.secret')) >= 32, 'Use a shared socket signing secret of at least 32 characters.');

@@ -281,6 +281,9 @@ Route::get('/branding/assets/{asset}', [BrandingController::class, 'asset'])->wh
 
 Route::post('/office/auth/login', [OfficeAuthController::class, 'login'])->middleware('throttle:10,1');
 Route::middleware(['office.auth', AuditOfficeAction::class])->prefix('office')->group(function () {
+    Route::get('/assistant-approvals', [\App\Http\Controllers\Office\AssistantApprovalController::class, 'index']);
+    Route::post('/assistant-approvals/{id}/approve', [\App\Http\Controllers\Office\AssistantApprovalController::class, 'approve'])->whereNumber('id')->middleware('throttle:30,1');
+    Route::post('/assistant-approvals/{id}/reject', [\App\Http\Controllers\Office\AssistantApprovalController::class, 'reject'])->whereNumber('id')->middleware('throttle:30,1');
     Route::get('/health/system', \App\Http\Controllers\Office\ServerHealthController::class)->middleware('throttle:30,1');
     Route::get('/health/workers', [\App\Http\Controllers\WorkerHealthController::class, 'details'])->middleware('throttle:30,1');
     Route::get('/error-reports', [App\Http\Controllers\Office\ErrorReportController::class, 'index']);

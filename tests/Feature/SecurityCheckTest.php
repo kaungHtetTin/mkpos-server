@@ -34,4 +34,15 @@ class SecurityCheckTest extends TestCase
             ->expectsOutput('Set exact CORS_ALLOWED_ORIGINS without wildcards.')
             ->expectsOutput('Use HTTPS when publishing to a separate Node server.')->assertFailed();
     }
+
+    public function test_exact_native_origin_passes_but_http_and_other_native_hosts_fail(): void
+    {
+        $this->productionSettings();
+        config(['cors.allowed_origins' => ['https://shop.example.test', 'capacitor://localhost']]);
+        $this->artisan('security:check')->assertSuccessful();
+        foreach (['http://shop.example.test', 'capacitor://untrusted.example', 'capacitor://localhost.evil.example'] as $origin) {
+            config(['cors.allowed_origins' => [$origin]]);
+            $this->artisan('security:check')->assertFailed();
+        }
+    }
 }

@@ -202,7 +202,7 @@ class AiBusinessReader
 
     private function product(array $args): array
     {
-        $row = $this->table('products')->where('id', $args['product_id'])->first([
+        $row = $this->table('products')->where('is_active', true)->where('id', $args['product_id'])->first([
             'id', 'name', 'sku', 'barcode', 'category', 'base_unit', 'purchase_unit', 'purchase_conversion_factor', 'price', 'cost', 'stock', 'low_stock_threshold', 'is_active',
         ]);
         abort_unless($row, 404);
@@ -217,8 +217,9 @@ class AiBusinessReader
         $mode = $args['mode'] ?? 'low_stock';
         if ($mode === 'movements') {
             $q = $this->table('stock_movements');
+            $q->whereIn('product_id', $this->table('products')->where('is_active', true)->select('id'));
             if (isset($args['product_id'])) {
-                abort_unless($this->table('products')->where('id', $args['product_id'])->exists(), 404);
+                abort_unless($this->table('products')->where('is_active', true)->where('id', $args['product_id'])->exists(), 404);
                 $q->where('product_id', $args['product_id']);
             }
             $this->dates($q, $args);
