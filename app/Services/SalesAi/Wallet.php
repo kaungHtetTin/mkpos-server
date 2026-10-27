@@ -70,6 +70,7 @@ class Wallet
         });
     }
 
+    /** Compatibility for runs from older deployments; new replies never reserve credit. */
     public function reserve(object $run, int $amount): bool
     {
         $current = DB::table('sales_ai_runs')->where('id', $run->id)->lockForUpdate()->first();
@@ -84,10 +85,17 @@ class Wallet
     public function settle(object $run, int $amount, array $pricing, bool $billable = true): void
     {
         $current = DB::table('sales_ai_runs')->where('id', $run->id)->lockForUpdate()->first();
-        if (! $current || (int) $current->reserved_micros === 0) return;
+        if (! $current || ($current->status !== 'processing' && (int) $current->reserved_micros === 0)) return;
+        if (DB::table('sales_ai_entries')->where('event_key', 'usage:'.$run->id)->exists()) return;
         $run = $current;
         $wallet = DB::table('sales_ai_wallets')->where('business_id', $run->business_id)->lockForUpdate()->first();
-        abort_unless($amount >= 0 && $amount <= $run->reserved_micros && $amount <= $wallet->balance_micros, 503, 'AI usage exceeded its reserved credit.');
+        abort_unless($amount >= 0 && ($billable || $amount === 0), 503, 'AI usage could not be verified.');
+        $otherReserved = max(0, (int) $wallet->reserved_micros - (int) $run->reserved_micros);
+        $charged = min($amount, max(0, (int) $wallet->balance_micros - $otherReserved));
+        if ($charged < $amount) {
+            $pricing = array_merge($pricing, ['usage_amount_micros' => $amount, 'unbilled_amount_micros' => $amount - $charged]);
+        }
+        $amount = $charged;
         $balance = $wallet->balance_micros - $amount;
         if ($billable && ! DB::table('sales_ai_entries')->where('event_key', 'usage:'.$run->id)->exists()) {
             DB::table('sales_ai_entries')->insert(['business_id' => $run->business_id, 'type' => 'usage', 'event_key' => 'usage:'.$run->id, 'run_id' => $run->id,

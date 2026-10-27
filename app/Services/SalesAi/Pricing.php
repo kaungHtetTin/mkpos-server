@@ -12,8 +12,6 @@ class Pricing
 {
     public const SCALE = 1_000_000;
     public const MODEL = 'deepseek-flash';
-    public const INPUT_BUDGET = 240000;
-    public const OUTPUT_BUDGET = 9600;
 
     public static function micros(string $value): int
     {
@@ -48,10 +46,5 @@ class Pricing
         $basisPoints = BigDecimal::of($pricing['markup_percent'])->multipliedBy(100)->toScale(0, RoundingMode::UNNECESSARY)->toInt();
         return BigInteger::of($usdNanos)->multipliedBy(self::micros($pricing['usd_to_mmk_rate']))->multipliedBy(10000 + $basisPoints)
             ->dividedBy(10_000_000_000_000, RoundingMode::CEILING)->toInt();
-    }
-
-    public function reserve(array $pricing): int
-    {
-        return max(1, $this->mmk($this->usd(self::INPUT_BUDGET, self::OUTPUT_BUDGET, 0, $pricing), $pricing));
     }
 }

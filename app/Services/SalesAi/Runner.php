@@ -63,8 +63,7 @@ class Runner
                 $pricing = app(Pricing::class)->snapshot();
                 app(AiBalanceBook::class)->funded();
                 app(Wallet::class)->ensure((int) $initial->business_id);
-                $reserve = app(Pricing::class)->reserve($pricing);
-                $claimed = DB::transaction(function () use ($id, $pricing, $reserve, $initial) {
+                $claimed = DB::transaction(function () use ($id, $pricing, $initial) {
                     if (! DB::table('businesses')->where('id', $initial->business_id)->lockForUpdate()->first()) {
                         return 'done';
                     }
@@ -81,10 +80,17 @@ class Runner
                         return 'cancelled';
                     }
                     app(AiBalanceBook::class)->funded(lock: true);
-                    if (! app(Wallet::class)->reserve($run, $reserve)) {
-                        $wallet = DB::table('sales_ai_wallets')->where('business_id', $run->business_id)->first();
-
-                        return $wallet->balance_micros < $reserve ? 'credit_required' : 'busy';
+                    // Persisted serialization also protects against an expired cache lock.
+                    if (DB::table('sales_ai_runs')->where('business_id', $run->business_id)->where('id', '!=', $id)->where('status', 'processing')->exists()) {
+                        return 'busy';
+                    }
+                    $wallet = DB::table('sales_ai_wallets')->where('business_id', $run->business_id)->lockForUpdate()->first();
+                    if ((int) $wallet->balance_micros <= 0) {
+                        return 'credit_required';
+                    }
+                    // Older in-flight deployments may still have a hold to release.
+                    if ((int) $wallet->balance_micros <= (int) $wallet->reserved_micros) {
+                        return 'busy';
                     }
                     DB::table('sales_ai_runs')->where('id', $id)->update(['status' => 'processing', 'pricing' => json_encode($pricing), 'started_at' => now('UTC'), 'updated_at' => now('UTC')]);
 
@@ -164,7 +170,7 @@ class Runner
             // Provider costs are real even if a handoff suppresses the late response.
             app(AiBalanceBook::class)->chargeSystem($run->id, null, Pricing::MODEL, $input, $output, $cached, $pricing, 'Sales AI response · Business #'.$run->business_id);
             DB::table('ai_balance_entries')->where('run_id', $run->id)->update(['business_id' => $run->business_id]);
-            $deliver = $this->valid($run, $thread) && app(AiAssistantSettings::class)->get()['enabled'] && trim($answer->text) !== '' && $amount <= $run->reserved_micros;
+            $deliver = $this->valid($run, $thread) && app(AiAssistantSettings::class)->get()['enabled'] && trim($answer->text) !== '';
             app(Wallet::class)->settle($run, $deliver ? $amount : 0, $pricing, billable: $deliver);
             $messageId = 0;
             $publishActions = true;

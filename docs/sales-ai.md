@@ -46,7 +46,7 @@ top-up approvals and a one-time 500 MMK grant for newly created businesses.
   tenant/customer-scoped tools; public catalog/prices/availability/promotions,
   delivery/payment info, own orders and human escalation. No ERP/admin tools.
 - [x] Background processing, durable retries without duplicate provider runs,
-  atomic wallet reservations, cache-aware usage, USD/MMK + markup snapshots
+  charging after delivery, cache-aware usage, USD/MMK + markup snapshots
   (default 5%), platform USD ledger and no concurrent business overspend.
 - [x] Handoff states: ai, waiting_owner, human. Customer requests a person; staff
   takes over or returns to AI; a new human reply takes over. Pending/stale AI
@@ -64,6 +64,15 @@ top-up approvals and a one-time 500 MMK grant for newly created businesses.
 Business credit is in MMK. Successful delivered responses deduct cache-aware
 provider USD cost × snapshotted USD/MMK rate × (1 + platform markup / 100).
 Default markup is 5%. Top-ups credit their approved face value, with no markup.
+Sales AI starts a response whenever the business wallet has a positive balance;
+there is no upfront maximum-token credit reserve. Each delivered response deducts
+actual cache-aware usage, capped at the wallet's remaining balance. If the last
+response costs more than the remaining credit, it is still delivered and the
+wallet reaches exactly zero. The usage ledger records the full calculated charge
+and unbilled difference in pricing metadata; the platform USD ledger always
+records the full provider expense. At zero, new calls stop until credit is added.
+Business runs remain serialized using both the cache lock and a persisted
+processing-run check, so queued requests cannot all spend the final balance.
 Current assistant per-user weekly quotas are independent of Sales AI wallets.
 Only manual Office approval credits a submitted top-up. Corrections use new
 ledger entries, not edits to past usage. Human chat continues when AI is paused.
@@ -278,9 +287,11 @@ from the owner's Wyne Wyne management assistant and cannot use its ERP tools.
 - Private proof files are hash-bound to the reviewed proposal and deleted after
   completion/cancellation/expiry. `sales-ai:prune-actions` runs hourly through
   the Laravel scheduler; business deletion also removes staged proof files.
-- Up to eight model steps with 1,200 output tokens per step are allowed. Wallet
-  holds budget 240,000 aggregate input and 9,600 output tokens; actual delivered
-  usage remains cache-priced. Insufficient credit hands the chat to a person.
+- Up to eight model steps with 1,200 output tokens per step are allowed. Actual
+  delivered usage remains cache-priced, without a maximum-token wallet reserve.
+  Any positive balance permits a reply; charging stops at zero. An empty wallet
+  hands the chat to a person. Old in-flight holds remain releasable for deployment
+  compatibility, but new responses never create holds.
 
 ### Verification and button record
 
