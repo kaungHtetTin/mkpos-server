@@ -86,15 +86,21 @@ class ReceiptNotices
                 $caption = AiLocale::text('error_notice_heading', $language).mb_substr($report['summary'], 0, 650)."\n";
             } else {
                 $caption = AiLocale::text('receipt_notice_heading', $language);
+                $review = app(AiImagePolicy::class)->platformReview($report);
+                $caption .= AiLocale::text('receipt_verdict', $language).': '.AiLocale::text($review['verdict'], $language)."\n";
+                foreach ($review['checks'] as $check) {
+                    $caption .= AiLocale::text($check['field'], $language).': '.AiLocale::text($check['status'], $language)."\n";
+                }
                 foreach (['amount', 'currency', 'provider', 'recipient_name', 'recipient_account', 'transaction_reference', 'paid_at', 'payment_status'] as $field) {
                     $value = $field === 'payment_status' ? AiLocale::text($report[$field] ?: 'unknown', $language) : (string) ($report[$field] ?? '');
                     $caption .= AiLocale::text($field, $language).': '.mb_substr(str_replace(["\r", "\n"], ' ', $value), 0, 65)."\n";
                 }
                 $caption .= AiLocale::text('active_recipient_notice', $language)."\n";
             }
-            $caption .= AiLocale::text('sender_id', $language).': '.($conversation->sender_id ?: $conversation->chat_id)."\n"
+            // Keep attribution and checks ahead of evidence if Telegram's caption limit truncates it.
+            $caption = AiLocale::text('sender_id', $language).': '.($conversation->sender_id ?: $conversation->chat_id)."\n"
                 .AiLocale::text('source_message', $language).': '.$conversation->chat_id.'/'.$message->telegram_message_id."\n"
-                .AiLocale::text('review_id', $language).': '.$message->id;
+                .AiLocale::text('review_id', $language).': '.$message->id."\n".$caption;
             DB::table('customer_service_receipt_notices')->where('message_id', $id)->update(['status' => 'sending', 'updated_at' => now('UTC')]);
 
             return [$notice, $message, $fileId, $caption];
@@ -132,7 +138,10 @@ class ReceiptNotices
             return false;
         }
         try {
-            return app(AiImagePolicy::class)->paymentMethod($report)['status'] === 'matches_active_recipient';
+            $claims = app(\App\Services\PaymentReceiptClaims::class);
+            $found = $claims->duplicates($report['provider'] ?? '', $report['transaction_reference'] ?? '');
+            return app(AiImagePolicy::class)->paymentMethod($report)['status'] === 'matches_active_recipient'
+                && ! $claims->hasDuplicates($found) && empty($found['provider_unresolved']);
         } catch (\Throwable) {
             // An unavailable method lookup must never disclose the screenshot to a group.
             return false;

@@ -265,7 +265,7 @@ class TelegramCustomerServiceTest extends TestCase
         $this->assertSame(0, DB::table('customer_service_receipt_notices')->count());
     }
 
-    public function test_receipt_checks_only_current_active_methods_and_masked_accounts_are_inconclusive(): void
+    public function test_receipt_checks_current_active_methods_and_accepts_matching_name_and_masked_prefix(): void
     {
         $policy = app(AiImagePolicy::class);
         $report = $this->imageFixture();
@@ -273,7 +273,7 @@ class TelegramCustomerServiceTest extends TestCase
         $report['recipient_account'] = '******1234';
         $this->assertSame('no_active_methods', $policy->paymentMethod($report)['status']);
         $id = DB::table('payment_methods')->insertGetId(['bank' => 'Fixture Pay', 'account_name' => 'Fixture merchant', 'account_no' => '091234']);
-        $this->assertSame('inconclusive', $policy->paymentMethod($report)['status']);
+        $this->assertSame('matches_active_recipient', $policy->paymentMethod($report)['status']);
         $report['recipient_account'] = '091234';
         $this->assertSame('matches_active_recipient', $policy->paymentMethod($report)['status']);
         $this->assertFalse($policy->paymentMethod($report)['funds_verified']);
@@ -283,10 +283,10 @@ class TelegramCustomerServiceTest extends TestCase
         $this->assertSame('does_not_match_active_recipient', $policy->paymentMethod($report)['status']);
     }
 
-    public function test_nonmatching_inactive_missing_and_masked_recipients_never_queue_admin_receipts(): void
+    public function test_nonmatching_inactive_missing_and_unreadable_suffix_recipients_never_queue_admin_receipts(): void
     {
         config(['telegram_support.per_chat_minute_limit' => 20]);
-        foreach (['wrong_account', 'wrong_name', 'wrong_provider', 'inactive', 'missing', 'masked'] as $index => $case) {
+        foreach (['wrong_account', 'wrong_name', 'wrong_provider', 'inactive', 'missing', 'masked_suffix'] as $index => $case) {
             $report = $this->imageFixture();
             if ($case === 'wrong_account') {
                 $report['recipient_account'] = '099999';
@@ -304,8 +304,8 @@ class TelegramCustomerServiceTest extends TestCase
                 DB::table('payment_methods')->delete();
                 $report['recipient_account'] = '';
             }
-            if ($case === 'masked') {
-                $report['recipient_account'] = '******1234';
+            if ($case === 'masked_suffix') {
+                $report['recipient_account'] = '******12**';
             }
             TelegramImageReader::fake([$report]);
             $this->receive($this->photoUpdate(500 + $index))->assertOk();
@@ -317,6 +317,35 @@ class TelegramCustomerServiceTest extends TestCase
             Http::assertNotSent(fn ($r) => str_ends_with($r->url(), '/sendPhoto') || str_ends_with($r->url(), '/sendDocument'));
             DB::table('payment_methods')->delete();
         }
+    }
+
+    public function test_masked_prefix_with_matching_name_and_suffix_is_forwarded_with_review_checks(): void
+    {
+        $report = $this->imageFixture();
+        $report['recipient_account'] = '******1234';
+        TelegramImageReader::fake([$report]);
+        $this->receive($this->photoUpdate())->assertOk();
+        app(Runner::class)->process($this->id());
+        $this->assertSame(1, DB::table('customer_service_receipt_notices')->count());
+        app(ReceiptNotices::class)->process($this->id());
+        $this->assertSame('sent', DB::table('customer_service_receipt_notices')->value('status'));
+        Http::assertSent(fn ($r) => str_ends_with($r->url(), '/sendPhoto')
+            && str_contains($r['caption'], 'Receipt check: Needs review')
+            && str_contains($r['caption'], 'recipient account: Match'));
+    }
+
+    public function test_used_provider_and_transaction_pair_is_rejected_and_never_forwarded(): void
+    {
+        $report = $this->imageFixture();
+        Schema::create('subscription_requests', function (Blueprint $t) {
+            $t->id(); $t->string('payment_bank'); $t->string('transaction_id'); $t->string('payment_transaction_key')->nullable();
+        });
+        DB::table('subscription_requests')->insert(['payment_bank' => $report['provider'], 'transaction_id' => $report['transaction_reference']]);
+        $this->receive($this->photoUpdate())->assertOk();
+        app(Runner::class)->process($this->id());
+        $reply = Crypt::decryptString(DB::table('customer_service_messages')->where('id', $this->id())->value('reply'));
+        $this->assertStringContainsString('Rejected:', $reply);
+        $this->assertSame(0, DB::table('customer_service_receipt_notices')->count());
     }
 
     public function test_delivery_rechecks_current_methods_and_ignores_a_forged_cached_match(): void

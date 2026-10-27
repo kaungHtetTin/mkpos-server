@@ -232,7 +232,10 @@ class McpKnowledgeTest extends TestCase
             ->assertJsonPath('result.structuredContent.active_payment_methods.0.account_no', '09123456789')
             ->assertDontSee('Disabled WavePay')->assertDontSee('Hidden Receiver')->assertDontSee('payment-private-secret');
         $this->assertStringContainsString('SAME returned active method', $response->json('result.structuredContent.matching_policy.required'));
-        $this->assertStringContainsString('masked/missing', $response->json('result.structuredContent.matching_policy.blocked'));
+        $this->assertStringContainsString('unreadable final four digits', $response->json('result.structuredContent.matching_policy.blocked'));
+        $this->assertStringContainsString('masked prefix alone is not a rejection reason', $response->json('result.structuredContent.matching_policy.blocked'));
+        $response->assertJsonPath('result.structuredContent.active_payment_methods.0.provider_code', 'kbz');
+        $this->assertStringContainsString('already used anywhere in MKPOS is rejected', $response->json('result.structuredContent.duplicate_policy'));
         DB::table('payment_methods')->where('id', $id)->update(['account_no' => '09222222222']);
         $call()->assertJsonPath('result.structuredContent.active_payment_methods.0.account_no', '09222222222');
         DB::table('payment_methods')->where('id', $id)->update(['is_active' => false]);

@@ -4,6 +4,8 @@ namespace App\Http\Controllers\Ecommerce;
 
 use App\Http\Controllers\Controller;
 use App\Services\EcommerceService;
+use App\Services\ShopPaymentMethods;
+use App\Services\ShopPaymentProofValidation;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
@@ -124,18 +126,25 @@ class ShopController extends Controller
         $order = $this->commerce->track($data['reference'], $data['credential']);
         $path = $data['proof']->store('ecommerce-proofs/'.$order->business_id, 'local');
         try {
-            return DB::transaction(function () use ($order, $path) {
+            $proofId = DB::transaction(function () use ($order, $path) {
                 $order = DB::table('ecommerce_orders')->where('id', $order->id)->where('business_id', $order->business_id)->lockForUpdate()->first();
                 $method = json_decode($order->payment_method, true);
-                abort_unless($method['type'] === 'transfer' && ($method['provider'] ?? 'manual') === 'manual' && ! in_array($order->status, ['completed', 'cancelled', 'expired'])
+                $methods = json_decode(DB::table('storefront_settings')->where('business_id', $order->business_id)->value('payment_methods') ?? '[]', true);
+                $hasTransfer = collect($methods ?: [])->contains(fn ($m) => ($m['type'] ?? '') === 'transfer' && ShopPaymentMethods::available($m));
+                abort_unless(($method['type'] === 'transfer' || ! $hasTransfer) && ($method['provider'] ?? 'manual') === 'manual' && ! in_array($order->status, ['completed', 'cancelled', 'expired'])
                     && $order->payment_status === 'unpaid', 409, 'This order cannot receive a payment proof.');
-                DB::table('ecommerce_payments')->insert(['business_id' => $order->business_id, 'order_id' => $order->id, 'type' => 'proof',
-                    'status' => 'pending', 'proof_path' => $path, 'created_at' => now(), 'updated_at' => now()]);
+                $id = DB::table('ecommerce_payments')->insertGetId(['business_id' => $order->business_id, 'order_id' => $order->id, 'type' => 'proof',
+                    'status' => 'pending', 'proof_path' => $path, 'reason' => 'Checking payment receipt. Owner verification required.', 'created_at' => now(), 'updated_at' => now()]);
                 DB::table('ecommerce_orders')->where('id', $order->id)->where('business_id', $order->business_id)->update(['payment_status' => 'proof_submitted', 'updated_at' => now()]);
                 $this->commerce->event($order->business_id, $order->id, 'proof_submitted');
-                return ['ok' => true];
+                return $id;
             });
         } catch (\Throwable $e) { Storage::disk('local')->delete($path); throw $e; }
+        $review = app(ShopPaymentProofValidation::class)->process($proofId);
+        if ($review['verdict'] === 'rejected_duplicate') {
+            throw \Illuminate\Validation\ValidationException::withMessages(['proof' => 'This bank/provider and transaction ID are already used in MKPOS. Upload a different payment receipt.']);
+        }
+        return ['ok' => true, 'validation' => ['status' => $review['status'], 'verdict' => $review['verdict'], 'funds_verified' => false]];
     }
 
     public function discovery(Request $request): array

@@ -183,6 +183,7 @@ class McpSupportTest extends TestCase
         (require database_path('migrations/2026_10_25_000002_create_ai_balance_book_tables.php'))->up();
         // Manual approval requires the existing shared receipt-claim safeguard.
         (require database_path('migrations/2026_10_25_000016_create_payment_receipt_claims.php'))->up();
+        (require database_path('migrations/2026_10_28_000001_add_global_payment_provider_metadata.php'))->up();
         Schema::table('ai_balance_entries', fn (Blueprint $table) => $table->unsignedBigInteger('cached_input_tokens')->nullable());
         DB::table('ai_balance_accounts')->update(['balance_nanos' => 1000000000]);
         DB::table('businesses')->insert([['id' => 1, 'name' => 'One'], ['id' => 2, 'name' => 'Two']]);
@@ -441,10 +442,11 @@ class McpSupportTest extends TestCase
         $this->rpc('/mcp/account', 'get_my_refund_status', ['refund_id' => $id], $owner)->assertJsonPath('result.structuredContent.refund.amount', 20000);
         $this->rpc('/mcp/admin', 'process_refund_request', $this->intent(['refund_id' => $id, 'action' => 'record_transfer', 'review_note' => 'Too early']), $admin)->assertJsonPath('result.isError', true);
         $this->approveProposal('process_refund_request', $this->intent(['refund_id' => $id, 'action' => 'approve', 'review_note' => 'Approved for processing']), $admin)->assertOk()->assertJsonPath('result.status', 'approved');
-        $transfer = $this->intent(['refund_id' => $id, 'action' => 'record_transfer', 'review_note' => 'External transfer checked', 'transfer_reference' => 'BANK-REF-1', 'transferred_at' => now()->toIso8601String()]);
+        $transfer = $this->intent(['refund_id' => $id, 'action' => 'record_transfer', 'review_note' => 'External transfer checked', 'transfer_reference' => 'BANK-REF-1', 'payment_provider' => 'KBZ Bank', 'transferred_at' => now()->toIso8601String()]);
         $this->approveProposal('process_refund_request', $transfer, $admin)->assertOk()->assertJsonPath('result.status', 'transferred')->assertJsonPath('result.bank_transfer_initiated', false);
         $this->rpc('/mcp/admin', 'process_refund_request', $transfer, $admin)->assertJsonPath('result.structuredContent.result.status', 'transferred');
         $this->assertSame(1, DB::table('subscription_refund_requests')->count());
+        $this->assertDatabaseHas('subscription_refund_requests', ['id' => $id, 'transfer_reference' => 'BANK-REF-1', 'payment_provider' => 'kbz']);
         $this->assertSame(30000, DB::table('subscription_payments')->where('id', $payment)->value('amount'));
         Http::assertNothingSent();
     }

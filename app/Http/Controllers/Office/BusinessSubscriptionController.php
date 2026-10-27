@@ -524,9 +524,17 @@ class BusinessSubscriptionController extends Controller
             abort_if(! $subscriptionRequest, 404, 'Pending request not found');
             $reference = array_key_exists('transaction_id', $data) ? trim($data['transaction_id'] ?? '') : null;
             $effectiveReference = $reference ?? ($subscriptionRequest->transaction_id ?? null);
+            $provider = \App\Services\BankProviders::canonical($subscriptionRequest->payment_provider ?? $subscriptionRequest->payment_bank);
+            if (Schema::hasTable('system_agent_reviews')) {
+                $saved = DB::table('system_agent_reviews')->where('payment_request_id', $requestId)->where('status', 'completed')->latest('created_at')->value('report');
+                $observed = json_decode($saved ?? '{}', true)['observed'] ?? [];
+                if (! empty($observed['provider']) && ! empty($observed['transaction_reference'])) {
+                    app(\App\Services\PaymentReceiptClaims::class)->assertAvailable($observed['provider'], $observed['transaction_reference'], 'subscription', (int) $requestId);
+                }
+            }
             if (filled($effectiveReference)) {
-                app(\App\Services\PaymentReceiptClaims::class)->assertAvailable($subscriptionRequest->payment_bank, $effectiveReference, 'subscription', (int) $subscriptionRequest->id);
-                app(\App\Services\PaymentReceiptClaims::class)->claim(app(SystemPaymentReview::class)->transactionKey($subscriptionRequest->payment_bank, $effectiveReference), 'subscription', (int) $subscriptionRequest->id);
+                app(\App\Services\PaymentReceiptClaims::class)->assertAvailable($provider, $effectiveReference, 'subscription', (int) $subscriptionRequest->id, $provider, $effectiveReference);
+                app(\App\Services\PaymentReceiptClaims::class)->claim(app(SystemPaymentReview::class)->transactionKey($provider, $effectiveReference), 'subscription', (int) $subscriptionRequest->id, $provider, $effectiveReference);
             }
             $this->activate((int) $subscriptionRequest->business_id, (int) $subscriptionRequest->subscription_plan_id, $data, false);
             DB::table('subscription_requests')->where('id', $requestId)->update([
@@ -534,7 +542,8 @@ class BusinessSubscriptionController extends Controller
                     ->where('business_id', $subscriptionRequest->business_id)->where('subscription_plan_id', $subscriptionRequest->subscription_plan_id)
                     ->where('status', 'active')->where('starts_at', '<=', now())->orderByDesc('ends_at')->value('id')] : []),
                 ...($reference !== null ? ['transaction_id' => $reference ?: null, 'payment_transaction_key' => $reference !== ''
-                    ? app(SystemPaymentReview::class)->transactionKey($subscriptionRequest->payment_bank, $reference) : null] : []),
+                    ? app(SystemPaymentReview::class)->transactionKey($provider, $reference) : null] : []),
+                ...\App\Services\BankProviders::columns('subscription_requests', $subscriptionRequest->payment_provider ?? $subscriptionRequest->payment_bank),
                 'status' => 'approved', 'admin_note' => $data['admin_note'] ?? '',
                 'reviewed_by_admin_id' => Auth::guard('office')->id(), 'reviewed_at' => now(), 'updated_at' => now(),
             ]);

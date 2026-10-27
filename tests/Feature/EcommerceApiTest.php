@@ -4,6 +4,11 @@ namespace Tests\Feature;
 
 use App\Models\User;
 use App\Services\EcommerceService;
+use App\Services\ShopPaymentProofValidation;
+use App\Ai\Agents\SystemAgent;
+use App\Services\AiAssistantSettings;
+use App\Services\AiBalanceBook;
+use App\Services\AiProviderCredentials;
 use App\Tenancy\TenantContext;
 use Illuminate\Foundation\Testing\DatabaseTransactions;
 use Illuminate\Http\UploadedFile;
@@ -19,6 +24,160 @@ class EcommerceApiTest extends TestCase
     private array $owner;
     private array $settings;
     private array $product;
+
+    private function receiptFields(array $changes = []): array
+    {
+        return array_replace(['readable' => true, 'amount' => '2000', 'currency' => 'Ks', 'recipient_name' => 'Shop Owner',
+            'recipient_account' => '******6789', 'provider' => 'KBZPay', 'transaction_reference' => '000123',
+            'payment_status' => 'completed', 'paid_at' => '', 'notes' => ''], $changes);
+    }
+
+    public function test_checkout_uses_system_agent_to_read_the_actual_uploaded_screenshot(): void
+    {
+        Storage::fake('local');
+        $this->mock(AiAssistantSettings::class, fn ($mock) => $mock->shouldReceive('get')->andReturn(['enabled' => true, 'configured' => true]));
+        $this->mock(AiProviderCredentials::class, fn ($mock) => $mock->shouldReceive('activate')->once());
+        $this->mock(AiBalanceBook::class, function ($mock) {
+            $mock->shouldReceive('funded')->once();
+            $mock->shouldReceive('pricing')->once()->with('deepseek-flash')->andReturn([]);
+            $mock->shouldReceive('chargeSystem')->once()->andReturn('0');
+        });
+        SystemAgent::fake([$this->receiptFields()]);
+        [$id, $result] = $this->order(['payment_method_id' => 'bank']);
+        $this->post('/api/ecommerce/proofs', ['reference' => $result['reference'], 'credential' => $result['tracking_credential'],
+            'proof' => UploadedFile::fake()->image('receipt.png')])->assertOk()->assertJsonPath('validation.status', 'completed');
+        SystemAgent::assertPrompted(fn ($prompt) => count($prompt->attachments) === 1);
+        $this->assertDatabaseHas('ecommerce_orders', ['id' => $id, 'payment_status' => 'proof_submitted']);
+    }
+
+    public function test_provider_failure_keeps_checkout_order_and_receipt_pending_manual_review(): void
+    {
+        Storage::fake('local');
+        $this->mock(ShopPaymentProofValidation::class, fn ($mock) => $mock->makePartial()->shouldReceive('extract')->once()->andThrow(new \RuntimeException('Provider unavailable')));
+        [$id, $result] = $this->order(['payment_method_id' => 'bank']);
+        $this->post('/api/ecommerce/proofs', ['reference' => $result['reference'], 'credential' => $result['tracking_credential'],
+            'proof' => UploadedFile::fake()->image('receipt.png')])->assertOk()->assertJsonPath('validation.status', 'failed');
+        $proof = DB::table('ecommerce_payments')->where('order_id', $id)->where('type', 'proof')->sole();
+        Storage::disk('local')->assertExists($proof->proof_path);
+        $this->assertStringContainsString('checking unavailable', $proof->reason);
+        $this->assertNull($proof->reference);
+        $this->assertDatabaseHas('ecommerce_orders', ['id' => $id, 'payment_status' => 'proof_submitted']);
+    }
+
+    public function test_checkout_proof_is_checked_and_amount_mismatch_is_saved_for_owner_review(): void
+    {
+        Storage::fake('local');
+        $this->settings['payment_methods'][1] += ['bank' => 'KBZPay', 'account_name' => 'Shop Owner', 'account_no' => '09123456789'];
+        $this->putJson('/api/shop-admin/settings', $this->settings)->assertOk();
+        $this->mock(ShopPaymentProofValidation::class, function ($mock) {
+            $mock->makePartial()->shouldReceive('extract')->once()->andReturn($this->receiptFields(['amount' => '3000']));
+        });
+        [$id, $result] = $this->order(['payment_method_id' => 'bank']);
+        $tracking = ['reference' => $result['reference'], 'credential' => $result['tracking_credential']];
+        $this->post('/api/ecommerce/proofs', $tracking + ['proof' => UploadedFile::fake()->image('receipt.png')])
+            ->assertOk()->assertJsonPath('validation.verdict', 'accepted_with_amount_mismatch')->assertJsonPath('validation.funds_verified', false);
+        $proof = DB::table('ecommerce_payments')->where('order_id', $id)->where('type', 'proof')->sole();
+        $report = json_decode($proof->ai_validation, true);
+        $this->assertSame('000123', $proof->reference);
+        $this->assertSame('kbz', $proof->payment_provider);
+        $this->assertSame('match', array_column($report['checks'], 'status', 'field')['recipient_account']);
+        $this->assertStringContainsString('Amount mismatch', $proof->reason);
+        $this->postJson('/api/ecommerce/tracking', $tracking)->assertOk()->assertJsonPath('payment_status', 'proof_submitted')
+            ->assertJsonPath('payment_reviews.0.reason', $proof->reason);
+        $this->getJson('/api/shop-admin/orders/'.$id)->assertOk()
+            ->assertJsonPath('payments.0.ai_validation.flags.0', 'amount_mismatch');
+    }
+
+    public function test_checkout_proof_flags_reused_transaction_id_and_wrong_recipient(): void
+    {
+        Storage::fake('local');
+        $this->settings['payment_methods'][1] += ['bank' => 'KBZPay', 'account_name' => 'Shop Owner', 'account_no' => '09123456789'];
+        $this->putJson('/api/shop-admin/settings', $this->settings)->assertOk();
+        $this->mock(ShopPaymentProofValidation::class, function ($mock) {
+            $mock->makePartial()->shouldReceive('extract')->twice()->andReturn($this->receiptFields(), $this->receiptFields(['recipient_account' => '******0000']));
+        });
+        foreach ([false, true] as $duplicate) {
+            [$id, $result] = $this->order(['payment_method_id' => 'bank']);
+            $response = $this->post('/api/ecommerce/proofs', ['reference' => $result['reference'], 'credential' => $result['tracking_credential'],
+                'proof' => UploadedFile::fake()->image('receipt.png')], ['Accept' => 'application/json']);
+            if ($duplicate) $response->assertUnprocessable()->assertJsonValidationErrors('proof');
+            else $response->assertOk();
+            $proof = DB::table('ecommerce_payments')->where('order_id', $id)->where('type', 'proof')->sole();
+            $report = json_decode($proof->ai_validation, true);
+            $checks = array_column($report['checks'], 'status', 'field');
+            $this->assertSame($duplicate ? 'mismatch' : 'match', $checks['duplicate_payment']);
+            $this->assertSame($duplicate ? 'mismatch' : 'match', $checks['recipient_account']);
+            if ($duplicate) $this->assertStringContainsString('Transaction ID already used', $proof->reason);
+            $this->assertSame($duplicate ? 'rejected' : 'pending', $proof->status);
+            $this->assertDatabaseHas('ecommerce_orders', ['id' => $id, 'payment_status' => $duplicate ? 'unpaid' : 'proof_submitted']);
+        }
+    }
+
+    public function test_shop_without_receiving_methods_skips_account_check_but_checks_amount_and_reference(): void
+    {
+        Storage::fake('local');
+        $this->settings['payment_methods'] = [$this->settings['payment_methods'][0]];
+        $this->putJson('/api/shop-admin/settings', $this->settings)->assertOk();
+        $this->mock(ShopPaymentProofValidation::class, function ($mock) {
+            $mock->makePartial()->shouldReceive('extract')->once()->andReturn($this->receiptFields(['recipient_name' => '', 'recipient_account' => '']));
+        });
+        [$id, $result] = $this->order(['payment_method_id' => 'cash']);
+        $this->post('/api/ecommerce/proofs', ['reference' => $result['reference'], 'credential' => $result['tracking_credential'],
+            'proof' => UploadedFile::fake()->image('receipt.png')])->assertOk()->assertJsonPath('validation.verdict', 'looks_consistent');
+        $proof = DB::table('ecommerce_payments')->where('order_id', $id)->where('type', 'proof')->sole();
+        $checks = array_column(json_decode($proof->ai_validation, true)['checks'], 'status', 'field');
+        $this->assertSame('not_required', $checks['recipient_name']);
+        $this->assertSame('not_required', $checks['recipient_account']);
+        $this->assertSame('match', $checks['amount']);
+        $this->assertSame('match', $checks['duplicate_payment']);
+    }
+
+    public function test_same_transaction_id_from_different_banks_is_accepted_and_bank_is_saved_from_receipt(): void
+    {
+        Storage::fake('local');
+        $this->settings['payment_methods'][1] += ['bank' => 'KBZPay', 'account_name' => 'Shop Owner', 'account_no' => '09123456789'];
+        $this->settings['payment_methods'][] = ['id' => 'wave', 'name' => 'Wave', 'type' => 'transfer', 'bank' => 'WavePay',
+            'account_name' => 'Shop Owner', 'account_no' => '09123456789'];
+        $this->putJson('/api/shop-admin/settings', $this->settings)->assertOk();
+        $this->mock(ShopPaymentProofValidation::class, function ($mock) {
+            $mock->makePartial()->shouldReceive('extract')->twice()->andReturn($this->receiptFields(['provider' => 'KBZ Pay']), $this->receiptFields(['provider' => 'Wave Money']));
+        });
+        $keys = [];
+        foreach (['bank' => 'kbz', 'wave' => 'wave'] as $method => $provider) {
+            [$id, $result] = $this->order(['payment_method_id' => $method]);
+            $this->post('/api/ecommerce/proofs', ['reference' => $result['reference'], 'credential' => $result['tracking_credential'],
+                'proof' => UploadedFile::fake()->image('receipt.png')], ['Accept' => 'application/json'])
+                ->assertOk()->assertJsonPath('validation.verdict', 'looks_consistent');
+            $payment = DB::table('ecommerce_payments')->where('order_id', $id)->where('type', 'proof')->sole();
+            $this->assertSame('000123', $payment->reference);
+            $this->assertSame($provider, $payment->payment_provider);
+            $keys[] = $payment->transaction_key;
+        }
+        $this->assertNotSame($keys[0], $keys[1]);
+    }
+
+    public function test_checkout_rejects_kbz_bank_receipt_when_its_id_was_used_with_kbzpay(): void
+    {
+        Storage::fake('local');
+        $this->settings['payment_methods'][1] += ['bank' => 'KBZPay', 'account_name' => 'Shop Owner', 'account_no' => '09123456789'];
+        $this->putJson('/api/shop-admin/settings', $this->settings)->assertOk();
+        $this->mock(ShopPaymentProofValidation::class, function ($mock) {
+            $mock->makePartial()->shouldReceive('extract')->twice()->andReturn($this->receiptFields(), $this->receiptFields(['provider' => 'KBZ Bank']));
+        });
+        foreach ([false, true] as $reused) {
+            [$id, $result] = $this->order(['payment_method_id' => 'bank']);
+            $response = $this->post('/api/ecommerce/proofs', ['reference' => $result['reference'], 'credential' => $result['tracking_credential'],
+                'proof' => UploadedFile::fake()->image('receipt.png')], ['Accept' => 'application/json']);
+            if ($reused) $response->assertUnprocessable()->assertJsonValidationErrors('proof');
+            else $response->assertOk();
+            $proof = DB::table('ecommerce_payments')->where('order_id', $id)->where('type', 'proof')->sole();
+            $checks = array_column(json_decode($proof->ai_validation, true)['checks'], 'status', 'field');
+            $this->assertSame('match', $checks['provider']);
+            $this->assertSame($reused ? 'mismatch' : 'match', $checks['duplicate_payment']);
+            $this->assertSame('kbz', $proof->payment_provider);
+            $this->assertSame($reused ? 'rejected' : 'pending', $proof->status);
+        }
+    }
 
     public function test_order_notification_feed_is_incremental_and_tenant_scoped(): void
     {

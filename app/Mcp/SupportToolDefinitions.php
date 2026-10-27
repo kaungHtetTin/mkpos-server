@@ -53,7 +53,7 @@ class SupportToolDefinitions
                 'refund_id' => $id,
                 'action' => ['type' => 'string', 'enum' => ['approve', 'reject', 'record_transfer'], 'required' => true],
                 'review_note' => [...$string(2000, true), 'min' => 5],
-                'transfer_reference' => $string(255),
+                'transfer_reference' => $string(255), 'payment_provider' => $string(255),
                 'transferred_at' => ['type' => 'string', 'date' => true],
             ]],
         ];

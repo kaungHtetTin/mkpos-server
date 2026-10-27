@@ -50,7 +50,8 @@ class Topups
                 throw ValidationException::withMessages(['payment_screenshot' => 'This payment proof is already submitted. Check your top-up history.']);
             }
             $id = DB::table('sales_ai_topups')->insertGetId(['business_id' => $owner->business_id, 'owner_id' => $owner->id, 'request_key' => $data['request_key'],
-                'amount_micros' => $amount, 'payment_method_id' => $account->id, 'payment_account' => json_encode(['bank' => $account->bank, 'account_no' => $account->account_no, 'account_name' => $account->account_name]),
+                ...\App\Services\BankProviders::columns('sales_ai_topups', $report['observed']['provider'] ?? $account->bank),
+                'transaction_key' => app(SystemPaymentReview::class)->transactionKey($account->bank, $reference), 'amount_micros' => $amount, 'payment_method_id' => $account->id, 'payment_account' => json_encode(['bank' => $account->bank, 'account_no' => $account->account_no, 'account_name' => $account->account_name]),
                 'screenshot_path' => $path, 'screenshot_hash' => $hash, 'validation_report' => json_encode($report, JSON_THROW_ON_ERROR), 'transaction_reference' => $reference ?: null, 'message' => $message, 'status' => 'pending', 'version' => 1, 'created_at' => now('UTC'), 'updated_at' => now('UTC')]);
 
             $row = DB::table('sales_ai_topups')->where('id', $id)->first();
@@ -87,12 +88,17 @@ class Topups
             abort_unless($row->status === 'pending' && (int) $row->version === (int) $data['version'], 409, 'This top-up has already changed. Refresh before reviewing.');
             if ($decision === 'approved') {
                 $account = json_decode($row->payment_account, true);
+                $account['bank'] = $row->payment_provider ?? $account['bank'];
+                $observed = json_decode($row->validation_report ?? '{}', true)['observed'] ?? [];
+                if (! empty($observed['provider']) && ! empty($observed['transaction_reference'])) {
+                    app(PaymentReceiptClaims::class)->assertAvailable($observed['provider'], $observed['transaction_reference'], 'sales_ai', $id);
+                }
                 $key = app(SystemPaymentReview::class)->transactionKey($account['bank'], $reference);
                 app(PaymentReceiptClaims::class)->assertAvailable($account['bank'], $reference, 'sales_ai', $id);
-                app(PaymentReceiptClaims::class)->claim($key, 'sales_ai', $id);
+                app(PaymentReceiptClaims::class)->claim($key, 'sales_ai', $id, $account['bank'], $reference);
                 app(Wallet::class)->ensure((int) $row->business_id);
                 app(Wallet::class)->credit((int) $row->business_id, (int) $row->amount_micros, 'topup:'.$id, 'top_up', 'Approved Sales AI top-up #'.$id, $id, (int) $admin->id);
-                DB::table('sales_ai_topups')->where('id', $id)->update(['transaction_reference' => $reference, 'transaction_key' => $key]);
+                DB::table('sales_ai_topups')->where('id', $id)->update(['transaction_reference' => $reference, 'transaction_key' => $key, ...\App\Services\BankProviders::columns('sales_ai_topups', $account['bank'])]);
             }
             DB::table('sales_ai_topups')->where('id', $id)->update(['status' => $decision, 'admin_note' => $note, 'reviewed_by_admin_id' => $admin->id, 'reviewed_at' => now('UTC'), 'updated_at' => now('UTC'), 'version' => $row->version + 1]);
 

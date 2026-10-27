@@ -89,7 +89,7 @@ class AiBalanceBookController extends Controller
     {
         $admin = $this->admin($request);
         $data = $request->validate(['request_key' => 'required|uuid', 'amount' => ['required', 'string', 'regex:/^\d{1,7}(\.\d{1,6})?$/', 'numeric', 'min:0.000001', 'max:1000000'],
-            'description' => 'required|string|max:255', 'reference' => 'nullable|string|max:120']);
+            'payment_provider' => 'nullable|string|max:255', 'description' => 'required|string|max:255', 'reference' => 'nullable|string|max:120']);
         $data['description'] = trim($data['description']);
         abort_if($data['description'] === '', 422, 'Enter a description for this top-up.');
         $row = $book->topUp($admin, $data);

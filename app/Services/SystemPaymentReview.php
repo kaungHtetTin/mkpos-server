@@ -95,14 +95,13 @@ class SystemPaymentReview
                     $result = $this->compare($expected, $observed);
                     $reference = trim((string) ($observed['transaction_reference'] ?? ''));
                     $referenceValid = preg_match('/^[\p{L}\p{N}][\p{L}\p{N}\s\-\/_.]{0,119}$/u', $reference) === 1;
-                    $key = $referenceValid ? $this->transactionKey($expected['provider'], $reference) : null;
-                    $matches = $key ? app(PaymentReceiptClaims::class)->duplicates($expected['provider'], $reference, 'subscription', (int) $request->id) : ['subscription' => [], 'sales_ai' => [], 'claimed' => false];
+                    $actualProvider = BankProviders::canonical($observed['provider'] ?? '');
+                    $key = $referenceValid && $actualProvider !== '' ? $this->transactionKey($actualProvider, $reference) : null;
+                    $matches = $key ? app(PaymentReceiptClaims::class)->duplicates($actualProvider, $reference, 'subscription', (int) $request->id) : ['subscription' => [], 'sales_ai' => [], 'claimed' => false, 'provider_unresolved' => true];
                     $duplicates = $matches['subscription'];
                     $sameImages = DB::table('system_agent_reviews')->where('id', '!=', $id)->where('evidence_hash', $hash)->where('status', 'completed')->pluck('payment_request_id')->all();
-                    if ($duplicates || $sameImages || $matches['sales_ai'] || $matches['claimed']) {
-                        $result['verdict'] = 'needs_review';
-                        $result['checks'][] = ['field' => 'duplicate_payment', 'status' => 'mismatch'];
-                    }
+                    $result = app(PaymentReceiptReview::class)->withDuplicates($result,
+                        ($sameImages || app(PaymentReceiptClaims::class)->hasDuplicates($matches)) ? true : app(PaymentReceiptClaims::class)->duplicateStatus($matches));
                     if (! $referenceValid) {
                         $result['verdict'] = 'needs_review';
                         $result['checks'][] = ['field' => 'transaction_reference', 'status' => 'unknown'];
@@ -114,7 +113,7 @@ class SystemPaymentReview
                     $save = $unchanged && $current->status === 'pending' && $result['verdict'] === 'looks_consistent' && empty($current->transaction_id);
                     // Keep every extracted ID searchable; only populate the form ID after consistent checks.
                     if ($unchanged && $current->status === 'pending' && $key) {
-                        DB::table('subscription_requests')->where('id', $request->id)->update(['payment_transaction_key' => $key,
+                        DB::table('subscription_requests')->where('id', $request->id)->update(['payment_transaction_key' => $key, ...BankProviders::columns('subscription_requests', $actualProvider),
                             ...($save ? ['transaction_id' => $reference] : [])]);
                     }
                     $cost = $book->chargeSystem($id, null, 'deepseek-flash', $answer->usage->inputTokens, $answer->usage->outputTokens, $answer->usage->cacheReadInputTokens, $pricing);
@@ -123,7 +122,7 @@ class SystemPaymentReview
                         'duplicate_sales_ai_topup_ids' => $matches['sales_ai'],
                         'notice' => 'Pre-validation only. Verify receipt of funds and manually approve or reject this payment.',
                         'checked_at' => now('UTC')->toIso8601String(), 'estimated_cost_usd' => $cost, 'evidence_changed' => ! $unchanged];
-                    DB::table('system_agent_reviews')->where('id', $id)->update(['status' => 'completed', 'report' => json_encode($result, JSON_THROW_ON_ERROR),
+                    DB::table('system_agent_reviews')->where('id', $id)->update(['status' => 'completed', ...BankProviders::columns('system_agent_reviews', $actualProvider), 'report' => json_encode($result, JSON_THROW_ON_ERROR),
                         'input_tokens' => $answer->usage->inputTokens, 'output_tokens' => $answer->usage->outputTokens,
                         'cached_input_tokens' => $answer->usage->cacheReadInputTokens, 'updated_at' => now('UTC')]);
                 });
@@ -185,9 +184,9 @@ class SystemPaymentReview
     public function transactionKeys(?string $provider, string $reference): array
     {
         $keys = [$this->transactionKey($provider, $reference)];
-        if (app(PaymentReceiptRules::class)->provider((string) $provider) === 'wavepay') {
-            // Older records stored the short Wave alias without canonicalizing it.
-            $keys[] = hash('sha256', 'wave:'.$this->normalize($reference));
+        foreach (BankProviders::legacyCodes((string) $provider) as $legacy) {
+            // Preserve detection of stored keys from before bank/wallet grouping.
+            $keys[] = hash('sha256', $legacy.':'.$this->normalize($reference));
         }
 
         return array_unique($keys);
@@ -195,47 +194,6 @@ class SystemPaymentReview
 
     public function compare(array $expected, array $observed): array
     {
-        $rules = app(PaymentReceiptRules::class);
-        $checks = [];
-        foreach (['recipient_name', 'recipient_account', 'amount', 'currency', 'provider'] as $field) {
-            $want = $expected[$field] ?? '';
-            $got = $observed[$field] ?? '';
-            $status = 'unknown';
-            if ($field === 'recipient_account') {
-                // An account suffix alone is insufficient: verify the owner name first.
-                $nameMatches = ($checks[0]['status'] ?? '') === 'match';
-                $expectedSuffix = $rules->accountLastFour((string) $want, false);
-                $visibleSuffix = $rules->accountLastFour((string) $got);
-                if ($nameMatches && $expectedSuffix !== null && $visibleSuffix !== null) {
-                    $status = $expectedSuffix === $visibleSuffix ? 'match' : 'mismatch';
-                }
-            } elseif ($want !== '' && $want !== null && $got !== '' && $got !== null && ! preg_match('/[*•×]/u', (string) $got)) {
-                if ($field === 'amount') {
-                    $amount = $rules->amount($got);
-                    $status = $amount !== null ? (round((float) $want * 100) === round($amount * 100) ? 'match' : 'mismatch') : 'unknown';
-                } elseif ($field === 'currency') {
-                    $status = $rules->currency($want) === $rules->currency($got) ? 'match' : 'mismatch';
-                } elseif ($field === 'provider') {
-                    $status = $rules->provider($want) === $rules->provider($got) ? 'match' : 'mismatch';
-                } else {
-                    $status = $rules->name($want) === $rules->name($got) ? 'match' : 'mismatch';
-                }
-            }
-            $checks[] = ['field' => $field, 'status' => $status];
-        }
-        $checks[] = ['field' => 'payment_status', 'status' => match ($observed['payment_status']) {
-            'completed' => 'match', 'failed' => 'mismatch', default => 'unknown'
-        }];
-        try {
-            $date = ! empty($observed['paid_at']) ? CarbonImmutable::parse($observed['paid_at'], config('app.timezone')) : null;
-            $dateStatus = $date && $date->year >= 2000 && $date->lessThanOrEqualTo(now()->addDay()) ? 'match' : (empty($observed['paid_at']) && ! empty($observed['transaction_reference']) ? 'not_visible' : 'unknown');
-        } catch (\Throwable) {
-            $dateStatus = 'unknown';
-        }
-        $checks[] = ['field' => 'payment_date', 'status' => $dateStatus];
-        $states = array_column($checks, 'status');
-        $verdict = ! $observed['readable'] ? 'needs_review' : (in_array('mismatch', $states) ? 'mismatch' : (in_array('unknown', $states) || $expected['legacy_price'] || empty($observed['transaction_reference']) || ! empty($observed['notes']) ? 'needs_review' : 'looks_consistent'));
-
-        return ['verdict' => $verdict, 'checks' => $checks];
+        return app(PaymentReceiptReview::class)->compare($expected, $observed);
     }
 }

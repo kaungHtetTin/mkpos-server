@@ -9,6 +9,7 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Storage;
 
 class McpSupportTools
@@ -268,8 +269,13 @@ class McpSupportTools
             abort_unless(trim($data['transfer_reference'] ?? '') !== '' && isset($data['transferred_at']), 422, 'An actual external transfer reference and completion time are required.');
             $time = Carbon::parse($data['transferred_at']);
             abort_if($time->isFuture() || $time->lt(Carbon::parse($row->created_at)), 422, 'Transfer completion must be between the request creation time and now.');
-            abort_if(DB::table('subscription_refund_requests')->where('transfer_reference', trim($data['transfer_reference']))->exists(), 409, 'This transfer reference is already recorded.');
-            $update += ['transfer_reference' => trim($data['transfer_reference']), 'transferred_at' => $time];
+            $provider = BankProviders::canonical($data['payment_provider'] ?? '');
+            app(PaymentReceiptClaims::class)->assertAvailable($provider, trim($data['transfer_reference']), 'refund', (int) $row->id);
+            $key = app(SystemPaymentReview::class)->transactionKey($provider, trim($data['transfer_reference']));
+            app(PaymentReceiptClaims::class)->claim($key, 'refund', (int) $row->id, $provider, trim($data['transfer_reference']));
+            $update += ['transfer_reference' => trim($data['transfer_reference']), 'transferred_at' => $time,
+                ...BankProviders::columns('subscription_refund_requests', $provider),
+                ...(Schema::hasColumn('subscription_refund_requests', 'transaction_key') ? ['transaction_key' => $key] : [])];
         } else {
             abort_if(isset($data['transfer_reference']) || isset($data['transferred_at']), 422, 'Transfer fields are only accepted for record_transfer.');
         }

@@ -11,21 +11,14 @@ class PaymentReceiptRules
 
     public function provider(string $value): string
     {
-        $value = mb_strtolower(preg_replace('/\s+/u', '', trim($value)));
-
-        return match ($value) {
-            'kpay', 'kbzpay' => 'kbzpay',
-            'wave', 'wavepay', 'wavemoney' => 'wavepay',
-            'ayapay' => 'ayapay',
-            default => $value,
-        };
+        return BankProviders::canonical($value);
     }
 
     public function account(string $value, string $provider): string
     {
         $value = preg_replace('/[\s\-]+/u', '', $this->digits($value));
         // Only wallet phone numbers use domestic/international Myanmar equivalence.
-        if (in_array($this->provider($provider), ['kbzpay', 'wavepay', 'ayapay'], true)
+        if (in_array(mb_strtolower(preg_replace('/\s+/u', '', $provider)), ['kpay', 'kbzpay', 'wave', 'wavepay', 'wavemoney', 'ayapay'], true)
             && preg_match('/^(?:\+95|0095)(9\d{7,9})$/', $value, $match)) {
             return '0'.$match[1];
         }

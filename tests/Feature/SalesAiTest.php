@@ -95,6 +95,26 @@ class SalesAiTest extends TestCase
         SalesImageRepresentative::assertPrompted(fn ($prompt) => $prompt->agent->preferredLanguage === 'my' && str_contains($prompt->agent->instructions(), 'Customer interface language: my'));
     }
 
+    public function test_sales_ai_rejects_a_globally_used_receipt_before_order_selection_and_publishes_no_actions(): void
+    {
+        $this->enable();
+        DB::table('sales_ai_wallets')->where('business_id', $this->business)->update(['balance_micros' => 10_000_000_000]);
+        app(\App\Services\PaymentReceiptClaims::class)->claim(app(\App\Services\SystemPaymentReview::class)->transactionKey('KBZPay', 'ALREADY-USED'),
+            'subscription', 999, 'KBZPay', 'ALREADY-USED');
+        SalesImageRepresentative::fake([['kind' => 'shop_payment', 'summary' => 'Please submit this receipt.', 'order_reference' => '',
+            'provider' => 'KPay', 'transaction_reference' => 'ALREADY-USED', 'amount' => '30000', 'currency' => 'MMK',
+            'recipient_name' => 'Owner', 'recipient_account' => '******1234', 'paid_at' => '', 'payment_status' => 'completed']]);
+        $id = $this->send('Check this receipt');
+        $run = DB::table('sales_ai_runs')->where('id', $id)->first();
+        $path = UploadedFile::fake()->image('receipt.png')->store('shop-chat-images', 'local');
+        DB::table('shop_chat_messages')->where('id', $run->trigger_message_id)->update(['image_path' => $path, 'image_mime' => 'image/png', 'image_expires_at' => now('UTC')->addDay()]);
+        $this->partialMock(\App\Services\SalesAi\CustomerActions::class, fn ($mock) => $mock->shouldReceive('publish')->once()->with($id, null)->passthru());
+        app(Runner::class)->process($id);
+        $body = DB::table('shop_chat_messages')->where('sales_ai_run_id', $id)->value('body');
+        $this->assertStringContainsString('Rejected:', $body);
+        $this->assertStringNotContainsString('Please submit this receipt.', $body);
+    }
+
     public function test_sales_image_turns_keep_product_and_shop_payment_skills_without_office_escalation(): void
     {
         $this->enable();
@@ -109,7 +129,13 @@ class SalesAiTest extends TestCase
             DB::table('shop_chat_messages')->where('id', $run->trigger_message_id)->update(['image_path' => $path, 'image_mime' => 'image/png', 'image_expires_at' => now('UTC')->addDay()]);
             app(Runner::class)->process($id);
             $this->assertSame('completed', DB::table('sales_ai_runs')->where('id', $id)->value('status'));
-            $this->assertSame($fields['summary'], DB::table('shop_chat_messages')->where('sales_ai_run_id', $id)->value('body'));
+            $body = DB::table('shop_chat_messages')->where('sales_ai_run_id', $id)->value('body');
+            if ($kind === 'product') $this->assertSame($fields['summary'], $body);
+            else {
+                $this->assertStringContainsString($fields['summary'], $body);
+                $this->assertStringContainsString('Needs review', $body);
+                $this->assertStringContainsString('shop owner/team must confirm', $body);
+            }
         }
         $this->assertSame(0, DB::table('error_reports')->where('business_id', $this->business)->count());
         SalesImageRepresentative::assertPrompted(function ($prompt) {

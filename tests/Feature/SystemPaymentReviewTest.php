@@ -142,7 +142,7 @@ class SystemPaymentReviewTest extends TestCase
         SystemAgent::fake([$this->observed()]);
         $request = $this->payment();
         $report = json_decode($this->process($request)->report, true);
-        $this->assertSame('needs_review', $report['verdict']);
+        $this->assertSame('rejected_duplicate', $report['verdict']);
         $this->assertSame([$topup], $report['duplicate_sales_ai_topup_ids']);
         $this->assertContains(['field' => 'duplicate_payment', 'status' => 'mismatch'], $report['checks']);
         $this->assertDatabaseHas('subscription_requests', ['id' => $request, 'transaction_id' => null, 'status' => 'pending']);
@@ -235,7 +235,7 @@ class SystemPaymentReviewTest extends TestCase
         $second = $this->payment();
         $job = $this->process($second);
         $report = json_decode($job->report, true);
-        $this->assertSame('needs_review', $report['verdict']);
+        $this->assertSame('rejected_duplicate', $report['verdict']);
         $this->assertContains($first, $report['duplicate_request_ids']);
         $this->assertDatabaseHas('subscription_requests', ['id' => $second, 'transaction_id' => null, 'status' => 'pending']);
     }
@@ -529,7 +529,7 @@ class SystemPaymentReviewTest extends TestCase
             $report = $service->compare(array_merge($expected, ['provider' => $selected]), $this->observed(['provider' => $visible]));
             $this->assertSame('looks_consistent', $report['verdict']);
         }
-        foreach ([['provider' => 'KBZ Bank'], ['recipient_account' => '09999999999'], ['recipient_account' => '09***789'],
+        foreach ([['provider' => 'WavePay'], ['recipient_account' => '09999999999'], ['recipient_account' => '09***789'],
             ['recipient_name' => 'Other recipient'], ['payment_status' => 'unknown'], ['transaction_reference' => '']] as $fields) {
             $this->assertNotSame('looks_consistent', $service->compare($expected, $this->observed($fields))['verdict']);
         }

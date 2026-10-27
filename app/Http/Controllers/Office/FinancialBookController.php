@@ -170,7 +170,7 @@ class FinancialBookController extends Controller
             'entry_date' => ['required', 'date_format:Y-m-d', 'before_or_equal:today'],
             'currency' => ['required', 'string', 'max:20'], 'amount' => ['required', 'numeric', $opening ? 'min:-999999999999.99' : 'min:0.01', 'max:999999999999.99', $opening ? 'regex:/^-?\d+(\.\d{1,2})?$/' : 'regex:/^\d+(\.\d{1,2})?$/'],
             'description' => ['required', 'string', 'max:500'], 'category' => ['nullable', 'string', 'max:100'],
-            'reference' => ['nullable', 'string', 'max:200'], 'counterparty' => ['nullable', 'string', 'max:200'], 'payment_method' => ['nullable', 'string', 'max:100'],
+            'payment_provider' => ['nullable', 'string', 'max:255'], 'reference' => ['nullable', 'string', 'max:200'], 'counterparty' => ['nullable', 'string', 'max:200'], 'payment_method' => ['nullable', 'string', 'max:100'],
             'founder_id' => ['required_if:type,payout,contribution', 'nullable', 'integer', Rule::exists('office_founders', 'id')],
             'account_id' => ['required', 'integer', Rule::exists('office_bank_books', 'id')->where('is_active', true)],
             'to_account_id' => ['required_if:type,transfer', 'nullable', 'integer', 'different:account_id', Rule::exists('office_bank_books', 'id')->where('is_active', true)],
@@ -215,7 +215,12 @@ class FinancialBookController extends Controller
                 if ($amount > $balance) throw ValidationException::withMessages(['amount' => "Amount exceeds this founder's unpaid allocated profit."]);
                 if ($amount > $totals['cash']) throw ValidationException::withMessages(['amount' => 'Amount exceeds the recorded cash balance.']);
             }
-            return DB::table('office_book_entries')->insertGetId([
+            $provider = \App\Services\BankProviders::canonical($data['payment_provider'] ?? $data['payment_method'] ?? '');
+            $identity = app(\App\Services\ShopPaymentReceiptReview::class)->transactionIdentity($provider, (string) ($data['reference'] ?? ''));
+            if ($identity['transaction_key']) app(\App\Services\PaymentReceiptClaims::class)->assertAvailable($provider, $data['reference']);
+            $entryId = DB::table('office_book_entries')->insertGetId([
+                ...\App\Services\BankProviders::columns('office_book_entries', $provider),
+                ...(\Illuminate\Support\Facades\Schema::hasColumn('office_book_entries', 'transaction_key') ? ['transaction_key' => $identity['transaction_key']] : []),
                 'request_key' => $data['request_key'], 'request_hash' => $hash, 'type' => $data['type'], 'entry_date' => $data['entry_date'],
                 'currency' => $data['currency'], 'amount' => $this->amount($amount), 'description' => trim($data['description']),
                 'founder_id' => in_array($data['type'], ['payout', 'contribution']) ? $data['founder_id'] : null,
@@ -224,6 +229,8 @@ class FinancialBookController extends Controller
                 'category' => $data['category'] ?? null, 'reference' => $data['reference'] ?? null, 'counterparty' => $data['counterparty'] ?? null, 'payment_method' => $data['payment_method'] ?? null,
                 'allocation' => $allocation ? json_encode($allocation) : null, 'created_by_admin_id' => Auth::guard('office')->id(), 'created_at' => now(), 'updated_at' => now(),
             ]);
+            if ($identity['transaction_key']) app(\App\Services\PaymentReceiptClaims::class)->claim($identity['transaction_key'], 'office_book', $entryId, $provider, $data['reference']);
+            return $entryId;
         });
         return ['id' => $id];
     }

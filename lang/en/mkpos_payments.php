@@ -6,7 +6,7 @@ return [
         'kpay' => [
             'name' => 'KBZPay / KPay',
             'name_cues' => ['KBZPay', 'KBZ Pay', 'KPay'],
-            'guidance' => 'Look for visible KBZPay identity together with a completed transfer/payment receipt and transaction detail block. Do not identify KBZPay solely from KBZ bank text, a logo or blue colors: a bank transfer screen is not automatically a KBZPay receipt.',
+            'guidance' => 'Look for KBZ Bank, KBZPay or KPay identity together with a completed transfer/payment receipt and transaction detail block. Return the shared provider code kbz for all of them. A logo or blue colors alone do not establish a completed payment.',
         ],
         'wavepay' => [
             'name' => 'WavePay / Wave Money',
@@ -16,7 +16,7 @@ return [
         'ayapay' => [
             'name' => 'AYA Pay',
             'name_cues' => ['AYA Pay', 'AYAPay', 'AYA PAY'],
-            'guidance' => 'Look for explicit AYA Pay identity and completed transfer/payment details. AYA Bank or mobile banking branding alone does not establish that it is an AYA Pay wallet receipt. Read the provider shown rather than converting every AYA transaction into AYA Pay.',
+            'guidance' => 'Look for AYA Bank or AYA Pay identity and completed transfer/payment details. Return the shared provider code aya for both. Branding alone does not establish a completed payment.',
         ],
     ],
     'recognition_note' => 'These are visual inspection instructions, not certified receipt templates. App versions, languages, transfer types and MMQR flows can change the layout. Do not require exact colors, fixed field positions, logo placement, reference length or a specific success phrase. Use multiple visible cues and the actual transaction details; a matching design never proves authenticity.',
@@ -40,7 +40,7 @@ return [
     'steps' => [
         'Use the image-capable model already connected to OpenClaw to inspect the actual customer attachment. Do not classify from the filename, customer caption or an earlier model summary alone.',
         'Check the payment app or bank context, visible successful/completed transfer status, amount and recipient, plus a transaction reference or transaction date/time. Read only what is visible. A QR code, balance screen, payment request, pending/failed transfer or unrelated image does not qualify as a successful payment screenshot.',
-        'Before sending, match the visible provider and full recipient account to the SAME currently active method returned by this tool. A visible account name must also agree. Only a clear completed-payment receipt that passes matching_policy may be forwarded with its details to MKPOS payments using the existing Telegram tool. Unavailable/empty methods, unsupported provider, masked/missing account or mismatched recipient means DO NOT forward. Include the matched method ID, admin caption and source identifiers.',
+        'Before sending, match the canonical provider, recipient owner name and final four account digits to the SAME active method. A masked prefix is allowed after the name matches. The authenticated server check must also confirm the provider and transaction ID have not been used anywhere in MKPOS. Reject duplicate pairs. If the check is unavailable or critical details are unreadable, do not forward or claim acceptance. Include the matched method ID, admin caption and source identifiers.',
         'Send the image and caption together where supported. Keep normal notifications enabled when the Telegram tool supports this. Address the caption to admins; do not invent administrator usernames or assume @admins mentions all admins.',
         'Wait for the Telegram tool to confirm success and record its returned message ID. Only then tell the customer that the screenshot was sent for admin review. Admins must confirm receipt of funds separately; do not approve a subscription or state that payment is verified.',
     ],

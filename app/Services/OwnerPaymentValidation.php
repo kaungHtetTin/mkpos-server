@@ -38,7 +38,7 @@ class OwnerPaymentValidation
                 ->where('business_id', $businessId)->where('status', 'completed')->where('expires_at', '>', now('UTC'))->latest('created_at')->first();
             if ($cached) {
                 $report = json_decode($cached->report, true);
-                $report = $this->checkDuplicates($report, $method->bank, (string) ($report['observed']['transaction_reference'] ?? ''), $cached->subscription_request_id ? (int) $cached->subscription_request_id : null);
+                $report = $this->checkDuplicates($report, $report['observed']['provider'] ?? '', (string) ($report['observed']['transaction_reference'] ?? ''), $cached->subscription_request_id ? (int) $cached->subscription_request_id : null);
                 $cached->report = json_encode($report, JSON_THROW_ON_ERROR);
 
                 return $requirePass ? $this->requirePass($cached) : $cached;
@@ -65,7 +65,7 @@ class OwnerPaymentValidation
                     ...array_fill_keys(['amount', 'currency', 'recipient_account', 'recipient_name', 'provider', 'transaction_reference', 'paid_at', 'notes'], 'present|nullable|string|max:2000')])->validate();
                 $expected = $this->expected($plan, $method);
                 $result = app(SystemPaymentReview::class)->compare($expected, $observed);
-                $result = $this->checkDuplicates($result, $method->bank, (string) ($observed['transaction_reference'] ?? ''));
+                $result = $this->checkDuplicates($result, $observed['provider'] ?? '', (string) ($observed['transaction_reference'] ?? ''));
                 if (! preg_match('/^[\p{L}\p{N}][\p{L}\p{N}\s\-\/_.]{0,119}$/u', trim((string) $observed['transaction_reference']))) {
                     $result['verdict'] = 'needs_review';
                     $result['checks'][] = ['field' => 'transaction_reference', 'status' => 'unknown'];
@@ -73,7 +73,7 @@ class OwnerPaymentValidation
                 DB::transaction(function () use ($book, $id, $answer, $pricing, $result, $expected, $observed) {
                     $cost = $book->chargeSystem($id, null, 'deepseek-flash', $answer->usage->inputTokens, $answer->usage->outputTokens, $answer->usage->cacheReadInputTokens, $pricing);
                     $report = $result + ['expected' => $expected, 'observed' => $observed, 'funds_verified' => false, 'estimated_cost_usd' => $cost, 'checked_at' => now('UTC')->toIso8601String()];
-                    DB::table('owner_payment_validations')->where('id', $id)->update(['status' => 'completed', 'report' => json_encode($report, JSON_THROW_ON_ERROR),
+                    DB::table('owner_payment_validations')->where('id', $id)->update(['status' => 'completed', ...BankProviders::columns('owner_payment_validations', $observed['provider'] ?? ''), 'report' => json_encode($report, JSON_THROW_ON_ERROR),
                         'input_tokens' => $answer->usage->inputTokens, 'output_tokens' => $answer->usage->outputTokens,
                         'cached_input_tokens' => $answer->usage->cacheReadInputTokens, 'updated_at' => now('UTC')]);
                 });
@@ -113,10 +113,10 @@ class OwnerPaymentValidation
     private function checkDuplicates(array $report, ?string $provider, string $reference, ?int $ownRequestId = null): array
     {
         $found = app(PaymentReceiptClaims::class)->duplicates($provider, $reference, 'subscription', $ownRequestId);
-        if ($found['subscription'] || $found['sales_ai'] || $found['claimed']) {
-            $report['verdict'] = 'needs_review';
-            $report['checks'][] = ['field' => 'duplicate_payment', 'status' => 'mismatch'];
-            $report['duplicate_flow'] = $found['sales_ai'] ? 'sales_ai' : 'subscription';
+        $report = app(PaymentReceiptReview::class)->withDuplicates($report,
+            app(PaymentReceiptClaims::class)->duplicateStatus($found));
+        if (app(PaymentReceiptClaims::class)->hasDuplicates($found)) {
+            $report['duplicate_flow'] = $found['sales_ai'] ? 'sales_ai' : ($found['subscription'] ? 'subscription' : 'global');
         }
 
         return $report;
@@ -143,6 +143,7 @@ class OwnerPaymentValidation
         }
         $checks = array_column($report['checks'] ?? [], 'status', 'field');
         if (($checks['duplicate_payment'] ?? '') === 'mismatch') {
+            if (($report['duplicate_flow'] ?? '') === 'global') return 'This bank/provider and transaction ID are already used in MKPOS. Use a different payment receipt.';
             return ($report['duplicate_flow'] ?? '') === 'sales_ai'
                 ? 'Transaction already submitted or used for a Sales AI top-up. Use a different payment receipt.'
                 : 'Transaction already submitted. Check your billing requests.';
@@ -199,7 +200,8 @@ class OwnerPaymentValidation
         DB::table('ai_balance_accounts')->where('id', 1)->lockForUpdate()->first();
         $report = json_decode($current->report, true);
         $matches = app(PaymentReceiptClaims::class)->duplicates($method->bank, $report['observed']['transaction_reference']);
-        $duplicate = $matches['subscription'] || $matches['sales_ai'] || $matches['claimed']
+        app(PaymentReceiptClaims::class)->assertAvailable($method->bank, $report['observed']['transaction_reference']);
+        $duplicate = app(PaymentReceiptClaims::class)->hasDuplicates($matches)
             || DB::table('system_agent_reviews')->whereNotNull('payment_request_id')->where('evidence_hash', $current->image_hash)->where('status', 'completed')->exists();
         if ($duplicate) {
             throw ValidationException::withMessages(['payment_screenshot' => 'Transaction already submitted. Check your billing requests.']);
@@ -212,11 +214,11 @@ class OwnerPaymentValidation
     {
         $report = json_decode($validation->report, true);
         $reference = trim($report['observed']['transaction_reference']);
-        DB::table('subscription_requests')->where('id', $requestId)->update(['transaction_id' => $reference,
+        DB::table('subscription_requests')->where('id', $requestId)->update(['transaction_id' => $reference, ...BankProviders::columns('subscription_requests', $report['observed']['provider'] ?? $method->bank),
             'payment_transaction_key' => app(SystemPaymentReview::class)->transactionKey($method->bank, $reference)]);
         DB::table('owner_payment_validations')->where('id', $validation->id)->update(['subscription_request_id' => $requestId]);
         DB::table('system_agent_reviews')->insert(['id' => $validation->id, 'payment_request_id' => $requestId, 'evidence_hash' => $validation->image_hash,
-            'status' => 'completed', 'attempts' => 0, 'report' => json_encode($report + ['transaction_id_saved' => true]), 'created_at' => now('UTC'), 'updated_at' => now('UTC')]);
+            'status' => 'completed', ...BankProviders::columns('system_agent_reviews', $report['observed']['provider'] ?? $method->bank), 'attempts' => 0, 'report' => json_encode($report + ['transaction_id_saved' => true]), 'created_at' => now('UTC'), 'updated_at' => now('UTC')]);
     }
 
     /** Submit already checked evidence. This creates a pending request, never approval. */

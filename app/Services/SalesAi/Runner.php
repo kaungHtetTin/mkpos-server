@@ -180,12 +180,12 @@ class Runner
                 $policy = app(AiImagePolicy::class);
                 try {
                     $report = $policy->report($answer->toArray(), sales: true);
-                    $answer->text = $policy->reply($report, $language);
+                    $answer->text = $policy->reply($report, $language, $thread);
                 } catch (\Throwable) {
                     $report = ['kind' => 'unreadable'];
                     $answer->text = AiLocale::text('image_unavailable', $language);
                 }
-                if (! in_array($report['kind'], ['product', 'shop_payment'], true)) {
+                if (! in_array($report['kind'], ['product', 'shop_payment'], true) || ($report['payment_review']['verdict'] ?? '') === 'rejected_duplicate') {
                     $publishActions = false;
                     $agent->publicContent = [];
                     $agent->handoffReason = null;

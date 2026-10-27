@@ -60,6 +60,19 @@ class OfficeFinancialBookTest extends TestCase
         $this->patchJson('/api/office/financial-book/entries/1/bank-book', [])->assertUnauthorized();
     }
 
+    public function test_manual_bank_records_store_canonical_provider_and_reject_global_reuse(): void
+    {
+        $this->login();
+        $reference = 'BANK-'.Str::random(16);
+        $id = $this->entry('income', '100.00', ['reference' => $reference, 'payment_provider' => 'KBZ Pay'])->assertOk()->json('id');
+        $this->assertDatabaseHas('office_book_entries', ['id' => $id, 'reference' => $reference, 'payment_provider' => 'kbz']);
+        $this->entry('income', '100.00', ['reference' => $reference, 'payment_provider' => 'KPay'])->assertUnprocessable();
+        $other = $this->entry('income', '100.00', ['reference' => $reference, 'payment_provider' => 'Wave Money'])->assertOk()->json('id');
+        $this->assertDatabaseHas('office_book_entries', ['id' => $other, 'reference' => $reference, 'payment_provider' => 'wave']);
+        $found = app(\App\Services\PaymentReceiptClaims::class)->duplicates('KBZPay', $reference);
+        $this->assertTrue(app(\App\Services\PaymentReceiptClaims::class)->hasDuplicates($found));
+    }
+
     public function test_receipts_expenses_and_capital_are_distinct_and_currencies_never_mix(): void
     {
         $this->login(); $this->receipt(100); $this->receipt(999, 'OTHER'.Str::random(7));

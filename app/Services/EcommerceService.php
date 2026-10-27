@@ -247,6 +247,11 @@ class EcommerceService
         $result['promotions'] = json_decode($order->promotions ?? '[]', true) ?: [];
         $result['payment_method'] = json_decode($order->payment_method, true);
         $settings = DB::table('storefront_settings')->where('business_id', $order->business_id)->first();
+        $receivingMethods = collect(json_decode($settings->payment_methods ?? '[]', true) ?: [])
+            ->contains(fn ($method) => ($method['type'] ?? '') === 'transfer' && ShopPaymentMethods::available($method));
+        $result['can_submit_payment_proof'] = ($result['payment_method']['type'] === 'transfer' || ! $receivingMethods)
+            && ($result['payment_method']['provider'] ?? 'manual') === 'manual' && $order->payment_status === 'unpaid'
+            && ! in_array($order->status, ['completed', 'cancelled', 'expired']);
         $profile = app(BusinessProfile::class)->read($order->business_id);
         $result['store_slug'] = $settings->slug ?? '';
         $result['store_name'] = $profile['shop_name'];
@@ -263,7 +268,8 @@ class EcommerceService
             $result['customer_key'] = ShopCustomerAccess::key($order->phone, $order->platform_customer_id === null ? null : (int) $order->platform_customer_id);
             $result += array_intersect_key((array) $order, array_flip(['id', 'origin', 'customer_name', 'phone', 'email', 'address', 'notes', 'sale_id']));
             $result['payments'] = DB::table('ecommerce_payments')->where('business_id', $order->business_id)->where('order_id', $order->id)
-                ->get(['id', 'type', 'amount', 'reference', 'status', 'actor_id', 'reason', 'created_at'])->all();
+                ->get(['id', 'type', 'amount', 'reference', 'payment_provider', 'status', 'actor_id', 'reason', 'created_at', 'ai_validation'])
+                ->map(function ($payment) { $payment->ai_validation = $payment->ai_validation ? json_decode($payment->ai_validation, true) : null; return $payment; })->all();
             $result['events'] = DB::table('ecommerce_order_events')->where('business_id', $order->business_id)->where('order_id', $order->id)->orderBy('id')->get()->all();
         }
         return \App\Support\AppTime::shopPayload($result);
@@ -335,6 +341,7 @@ class EcommerceService
     public function payment(int $businessId, int $id, string $action, array $data, int $actor): array
     {
         return DB::transaction(function () use ($businessId, $id, $action, $data, $actor) {
+            DB::table('ai_balance_accounts')->where('id', 1)->lockForUpdate()->first();
             $order = DB::table('ecommerce_orders')->where('business_id', $businessId)->where('id', $id)->lockForUpdate()->first();
             abort_unless($order, 404, 'Order unavailable.');
             $method = json_decode($order->payment_method, true);
@@ -365,9 +372,30 @@ class EcommerceService
                     abort_unless($order->payment_status === 'refund_pending', 409, 'There is no refund obligation.');
                     $state = 'refunded';
                 }
+                $reviewer = app(ShopPaymentReceiptReview::class);
+                $reference = (string) ($data['reference'] ?? '');
+                $provider = ($method['type'] ?? '') === 'transfer' ? (string) ($method['bank'] ?? '') : '';
+                if ($action === 'confirm' && $reference !== '') {
+                    $providers = [];
+                    foreach (DB::table('ecommerce_payments')->where('business_id', $businessId)->where('order_id', $id)
+                        ->where('type', 'proof')->whereIn('status', ['pending', 'approved'])->whereNotNull('reference')->get() as $proof) {
+                        if (app(SystemPaymentReview::class)->transactionKey('', $proof->reference) === app(SystemPaymentReview::class)->transactionKey('', $reference)) {
+                            $providers[] = app(PaymentReceiptRules::class)->provider($reviewer->storedProvider($proof, $method));
+                        }
+                    }
+                    $providers = array_unique($providers);
+                    if ($providers) $provider = count($providers) === 1 ? reset($providers) : '';
+                }
+                $identity = $reviewer->transactionIdentity($provider, $reference);
+                if ($reference !== '' && $identity['payment_provider']) {
+                    abort_unless($identity['transaction_key'], 422, 'Enter a valid bank transaction ID of at most 120 characters.');
+                    $claims = app(PaymentReceiptClaims::class);
+                    $claims->assertAvailable($identity['payment_provider'], $reference, $action === 'confirm' ? 'shop' : null, $action === 'confirm' ? $id : null);
+                    $claims->claim($identity['transaction_key'], $action === 'confirm' ? 'shop' : 'shop_refund', $id, $identity['payment_provider'], $reference);
+                }
                 DB::table('ecommerce_payments')->insert(['business_id' => $businessId, 'order_id' => $id, 'type' => $action,
                     'amount' => $data['amount'], 'reference' => $data['reference'] ?? null, 'status' => 'confirmed', 'actor_id' => $actor,
-                    'reason' => $data['review_note'] ?? null, 'created_at' => now(), 'updated_at' => now()]);
+                    ...$identity, 'reason' => $data['review_note'] ?? null, 'created_at' => now(), 'updated_at' => now()]);
             }
             $update = ['payment_status' => $state, 'updated_at' => now()];
             $update['expires_at'] = null;

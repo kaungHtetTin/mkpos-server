@@ -54,15 +54,21 @@ class AiBalanceBook
             $amount = self::nanos($data['amount']);
             $existing = DB::table('ai_balance_entries')->where('request_key', $data['request_key'])->first();
             if ($existing) {
-                abort_unless((int) $existing->admin_id === (int) $admin->id && (int) $existing->amount_nanos === $amount && $existing->description === $data['description'] && ($existing->reference ?? '') === ($data['reference'] ?? ''), 409, 'This top-up key belongs to different content. Start a new top-up.');
+                abort_unless((int) $existing->admin_id === (int) $admin->id && (int) $existing->amount_nanos === $amount && $existing->description === $data['description'] && ($existing->reference ?? '') === ($data['reference'] ?? '')
+                    && BankProviders::canonical($existing->payment_provider ?? '') === BankProviders::canonical($data['payment_provider'] ?? ''), 409, 'This top-up key belongs to different content. Start a new top-up.');
 
                 return $existing;
             }
             $balance = (int) $account->balance_nanos + $amount;
             abort_if($balance > 9_000_000_000_000_000, 422, 'The internal AI balance limit would be exceeded.');
-            $id = DB::table('ai_balance_entries')->insertGetId(['type' => 'top_up', 'amount_nanos' => $amount, 'balance_after_nanos' => $balance,
+            $provider = BankProviders::canonical($data['payment_provider'] ?? '');
+            $identity = app(ShopPaymentReceiptReview::class)->transactionIdentity($provider, (string) ($data['reference'] ?? ''));
+            if ($identity['transaction_key']) app(PaymentReceiptClaims::class)->assertAvailable($provider, $data['reference']);
+            $id = DB::table('ai_balance_entries')->insertGetId(['type' => 'top_up', ...BankProviders::columns('ai_balance_entries', $provider),
+                ...(Schema::hasColumn('ai_balance_entries', 'transaction_key') ? ['transaction_key' => $identity['transaction_key']] : []), 'amount_nanos' => $amount, 'balance_after_nanos' => $balance,
                 'request_key' => $data['request_key'], 'admin_id' => $admin->id, 'recorded_by' => $admin->name,
                 'description' => $data['description'], 'reference' => $data['reference'] ?? null, 'created_at' => now('UTC')]);
+            if ($identity['transaction_key']) app(PaymentReceiptClaims::class)->claim($identity['transaction_key'], 'ai_book', $id, $provider, $data['reference']);
             DB::table('ai_balance_accounts')->where('id', 1)->update(['balance_nanos' => $balance, 'updated_at' => now('UTC')]);
 
             return DB::table('ai_balance_entries')->where('id', $id)->first();
