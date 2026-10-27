@@ -38,6 +38,14 @@ class PaymentReceiptRules
         return mb_strtolower(preg_replace('/\s+/u', ' ', trim($value)));
     }
 
+    public function currency(string $value): string
+    {
+        $label = mb_strtolower(preg_replace('/[\s\p{Z}\p{Cf}]+/u', '', trim($value)));
+
+        return in_array($label, ['ks', 'mmk', 'kyat', 'ကျပ်', 'မြန်မာကျပ်'], true)
+            ? 'MMK' : mb_strtoupper(trim($value));
+    }
+
     public function accountLastFour(string $value, bool $allowMask = true): ?string
     {
         $value = preg_replace('/[\s\-]+/u', '', $this->digits($value));

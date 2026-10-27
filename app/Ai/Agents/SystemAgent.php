@@ -3,6 +3,7 @@
 namespace App\Ai\Agents;
 
 use App\Ai\Skills\AgentAwareness;
+use App\Ai\Skills\PaymentScreenshotReview;
 use Illuminate\Contracts\JsonSchema\JsonSchema;
 use Illuminate\Support\Facades\Lang;
 use Laravel\Ai\Contracts\Agent;
@@ -43,6 +44,7 @@ class SystemAgent implements Agent, HasProviderOptions, HasStructuredOutput
             .'Use the actual transaction ID/reference from the receipt, never QR contents, PIN, OTP or cash-out codes. A recipient owner name is required for matching; leave it empty if unreadable or absent so Laravel requests correction. A missing date alone is not suspicious; leave it empty. '
             .'When a date is visible, return an ISO date/time using its actual year, month and day. Do not substitute the upload date. '
             .'Routine e-receipt disclaimers about merchant confirmation or authenticity are normal, not a rejection reason; do not put them in notes. A visible Ks currency label and an outgoing minus sign are also normal. '
+            .PaymentScreenshotReview::INSTRUCTIONS.' '
             .$guidance['recognition_note'].' '.$profiles.' '
             .'Set readable=false for an unreadable image or a non-payment screenshot. Explain uncertainty and suspicious visible inconsistencies in notes; otherwise leave notes empty. '
             .'Return only the requested structured extraction. Do not return a verdict about real bank funds.';

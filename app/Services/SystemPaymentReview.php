@@ -214,8 +214,7 @@ class SystemPaymentReview
                     $amount = $rules->amount($got);
                     $status = $amount !== null ? (round((float) $want * 100) === round($amount * 100) ? 'match' : 'mismatch') : 'unknown';
                 } elseif ($field === 'currency') {
-                    $currency = fn ($value) => in_array(strtoupper(trim($value)), ['KS', 'MMK', 'KYAT']) ? 'MMK' : strtoupper(trim($value));
-                    $status = $currency($want) === $currency($got) ? 'match' : 'mismatch';
+                    $status = $rules->currency($want) === $rules->currency($got) ? 'match' : 'mismatch';
                 } elseif ($field === 'provider') {
                     $status = $rules->provider($want) === $rules->provider($got) ? 'match' : 'mismatch';
                 } else {

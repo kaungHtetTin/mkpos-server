@@ -4,6 +4,7 @@ namespace Tests\Feature;
 
 use App\Ai\Agents\MkposAssistant;
 use App\Ai\Agents\SystemAgent;
+use App\Ai\Skills\PaymentScreenshotReview;
 use App\Ai\Tools\PrepareBillingRequest;
 use App\Http\Controllers\Api\SubscriptionController;
 use App\Models\User;
@@ -311,6 +312,53 @@ class SystemPaymentReviewTest extends TestCase
             && collect($http['messages'])->contains(fn ($message) => is_array($message['content'] ?? null)
                 && collect($message['content'])->contains(fn ($part) => ($part['type'] ?? '') === 'image_url' && str_starts_with($part['image_url']['url'], 'data:image/png;base64,'))));
         $this->assertSame(1, Http::recorded()->count());
+        Http::assertSent(fn ($http) => str_contains(json_encode($http['messages'], JSON_UNESCAPED_UNICODE), 'မအောင်မြင်')
+            && str_contains(json_encode($http['messages'], JSON_UNESCAPED_UNICODE), '၀၁၂၃၄၅၆၇၈၉'));
+    }
+
+    public function test_myanmar_payment_skill_is_used_only_for_payment_extraction(): void
+    {
+        $this->assertStringContainsString(PaymentScreenshotReview::INSTRUCTIONS, (new SystemAgent)->instructions());
+        $this->assertStringNotContainsString(PaymentScreenshotReview::INSTRUCTIONS, (new SystemAgent('theme'))->instructions());
+    }
+
+    public function test_myanmar_receipt_fields_can_be_submitted_but_still_need_office_approval(): void
+    {
+        DB::table('payment_methods')->where('id', 1)->update(['account_name' => 'မင်းထက်ကျော်', 'account_no' => '09123453805']);
+        SystemAgent::fake([$this->observed(['amount' => '-၃၀,၀၀၀.၀၀', 'currency' => 'မြန်မာ ကျပ်',
+            'recipient_name' => 'မင်းထက်ကျော်', 'recipient_account' => '******၃၈၀၅',
+            'transaction_reference' => '၀၀၁၂၃၄၅၆', 'paid_at' => ''])]);
+        $id = $this->submitOwnerProof()->getData(true)['request_id'];
+        $this->assertDatabaseHas('subscription_requests', ['id' => $id, 'status' => 'pending', 'transaction_id' => '၀၀၁၂၃၄၅၆']);
+        $service = app(SystemPaymentReview::class);
+        $this->assertSame($service->transactionKey('KBZPay', '00123456'), $service->transactionKey('KBZPay', '၀၀၁၂၃၄၅၆'));
+        $this->assertNotSame($service->transactionKey('KBZPay', '123456'), $service->transactionKey('KBZPay', '၀၀၁၂၃၄၅၆'));
+    }
+
+    public function test_myanmar_currency_labels_match_only_explicit_kyat_units(): void
+    {
+        $rules = app(PaymentReceiptRules::class);
+        foreach (['Ks', 'MMK', 'kyat', 'ကျပ်', 'မြန်မာကျပ်', 'မြန်မာ ကျပ်', "မြန်မာ\u{200B}ကျပ်"] as $label) {
+            $this->assertSame('MMK', $rules->currency($label), $label);
+        }
+        foreach (['USD', 'SGD', 'ကျပ် USD', 'MMK/USD', ''] as $label) {
+            $this->assertNotSame('MMK', $rules->currency($label), $label);
+        }
+    }
+
+    public function test_myanmar_receipts_do_not_relax_name_status_or_uncertainty_checks(): void
+    {
+        $service = app(SystemPaymentReview::class);
+        $expected = ['amount' => '30000', 'currency' => 'MMK', 'provider' => 'KBZPay',
+            'recipient_account' => '09123453805', 'recipient_name' => 'မင်းထက်ကျော်', 'legacy_price' => false];
+        $observed = $this->observed(['amount' => '၃၀၀၀၀', 'currency' => 'ကျပ်',
+            'recipient_name' => 'မင်းထက်ကျော်', 'recipient_account' => '******၃၈၀၅']);
+        $this->assertSame('looks_consistent', $service->compare($expected, $observed)['verdict']);
+        foreach ([['recipient_name' => 'Min Htet Kyaw'], ['recipient_name' => ''], ['recipient_account' => '******၃၈၀၆'],
+            ['payment_status' => 'failed'], ['payment_status' => 'pending'], ['payment_status' => 'unknown'],
+            ['notes' => 'Myanmar date order is unclear.'], ['currency' => 'USD'], ['readable' => false]] as $change) {
+            $this->assertNotSame('looks_consistent', $service->compare($expected, array_replace($observed, $change))['verdict']);
+        }
     }
 
     public function test_command_limits_work_and_does_not_retry_interrupted_provider_calls(): void

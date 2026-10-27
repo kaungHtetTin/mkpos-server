@@ -5,6 +5,7 @@ namespace Tests\Feature;
 use App\Ai\Agents\SalesImageRepresentative;
 use App\Ai\Agents\SalesRepresentative;
 use App\Ai\Agents\SystemAgent;
+use App\Ai\Skills\PaymentScreenshotReview;
 use App\Models\PlatformAdmin;
 use App\Services\AiUsageReport;
 use App\Services\OfficeBusinessDeletion;
@@ -113,6 +114,9 @@ class SalesAiTest extends TestCase
         $this->assertSame(0, DB::table('error_reports')->where('business_id', $this->business)->count());
         SalesImageRepresentative::assertPrompted(function ($prompt) {
             $names = collect($prompt->agent->tools())->map(fn ($tool) => $tool->name())->all();
+            $this->assertStringContainsString(PaymentScreenshotReview::READING_INSTRUCTIONS, $prompt->agent->instructions());
+            $this->assertStringContainsString(PaymentScreenshotReview::SALES_INSTRUCTIONS, $prompt->agent->instructions());
+            $this->assertStringNotContainsString('System payment review context:', $prompt->agent->instructions());
             $this->assertContains('find_product_from_image', $names);
             $this->assertContains('submit_order_payment_proof', $names);
             $this->assertContains('request_human', $names);
@@ -127,6 +131,8 @@ class SalesAiTest extends TestCase
         $this->assertStringContainsString('budget', $agent->instructions());
         $this->assertStringContainsString('Never compare a shop order receipt against MKPOS', $agent->instructions());
         $this->assertStringContainsString('customer confirmation', $agent->instructions());
+        $this->assertStringContainsString('Only the shop owner/team confirms actual receipt of funds', $agent->instructions());
+        $this->assertStringContainsString('Telegram shop payment proof still goes through', $agent->instructions());
     }
 
     public function test_image_scope_and_unknown_error_escalation_are_bound_to_this_shop(): void
