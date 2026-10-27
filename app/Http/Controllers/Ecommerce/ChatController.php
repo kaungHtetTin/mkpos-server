@@ -8,6 +8,7 @@ use App\Services\PlatformCustomerAvatar;
 use App\Services\SalesAi\Chat;
 use App\Services\SalesAi\CustomerActions;
 use App\Services\SalesAi\Settings;
+use App\Services\SalesTelegram\Delivery;
 use App\Services\ShopChatImages;
 use App\Services\ShopChatRealtime;
 use App\Services\ShopCustomerAccess;
@@ -16,6 +17,7 @@ use App\Tenancy\TenantContext;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 
@@ -162,6 +164,7 @@ class ChatController extends Controller
 
     private function view(object $thread): array
     {
+        $telegram = ($thread->sales_ai_channel ?? 'web') === 'telegram';
         $ownerSeen = DB::table('shop_chat_presence')->where('business_id', $thread->business_id)->value('owner_last_seen_at');
         $active = fn ($value) => $value && Carbon::parse($value)->greaterThan(now()->subSeconds(60));
 
@@ -170,8 +173,10 @@ class ChatController extends Controller
             'customer_key' => $thread->platform_customer_id ? 'account:'.$thread->platform_customer_id : null,
             'account_type' => $thread->platform_customer_id ? 'account' : 'guest', 'updated_at' => $thread->updated_at,
             'owner_read_id' => (int) $thread->owner_read_id, 'customer_read_id' => (int) $thread->customer_read_id,
-            'customer_last_seen_at' => $thread->customer_last_seen_at,
-            'customer_active' => (bool) $active($thread->customer_last_seen_at), 'owner_active' => (bool) $active($ownerSeen),
+            'sales_ai_channel' => $telegram ? 'telegram' : 'web',
+            'telegram_last_message_at' => $telegram ? AppTime::iso(DB::table('shop_chat_messages')->where('thread_id', $thread->id)->where('sender', 'customer')->max('created_at')) : null,
+            'customer_last_seen_at' => $telegram ? null : $thread->customer_last_seen_at,
+            'customer_active' => $telegram ? null : (bool) $active($thread->customer_last_seen_at), 'owner_active' => (bool) $active($ownerSeen),
             'owner_last_seen_at' => $ownerSeen] + app(Chat::class)->view($thread));
     }
 
@@ -184,6 +189,7 @@ class ChatController extends Controller
         $data['sales_content'] = ! empty($message->sales_ai_content) ? json_decode($message->sales_ai_content, true) : null;
         $data['action_event'] = ! empty($message->sales_ai_action_event) ? array_intersect_key(json_decode($message->sales_ai_action_event, true), array_flip(['action_id', 'kind', 'operation', 'outcome'])) : null;
         $data['product'] = $message->product_snapshot ? json_decode($message->product_snapshot, true) : null;
+        $data['telegram_delivery'] = $message->telegram_delivery ?? null;
         $data['image'] = $message->image_expires_at ? ['status' => ! $message->image_path || $message->image_deleted_at || now()->greaterThanOrEqualTo($message->image_expires_at) ? 'expired' : 'available',
             'expires_at' => $message->image_expires_at, 'mime' => $message->image_mime] : null;
 
@@ -261,10 +267,12 @@ class ChatController extends Controller
         }
         $latestIds = DB::table('shop_chat_messages')->whereIn('thread_id', $rows->pluck('id'))->groupBy('thread_id')->selectRaw('MAX(id) as id')->pluck('id');
         $latest = DB::table('shop_chat_messages')->whereIn('id', $latestIds)->get()->keyBy('thread_id');
+        $telegramThreads = $rows->filter(fn ($thread) => ($thread->sales_ai_channel ?? 'web') === 'telegram')->pluck('id');
+        $this->withTelegramDelivery($latest->filter(fn ($message) => $telegramThreads->contains($message->thread_id)));
         $last = $rows->last();
 
         return ['unread_threads' => $unreadThreads,
-            'active_customers' => DB::table('shop_chat_threads')->where('business_id', $businessId)->where('customer_last_seen_at', '>', now()->subSeconds(60))->pluck('uuid'),
+            'active_customers' => DB::table('shop_chat_threads')->where('business_id', $businessId)->when(Schema::hasColumn('shop_chat_threads', 'sales_ai_channel'), fn ($query) => $query->where('sales_ai_channel', '!=', 'telegram'))->where('customer_last_seen_at', '>', now()->subSeconds(60))->pluck('uuid'),
             'items' => $rows->map(fn ($thread) => $this->view($thread) + ['id' => $thread->uuid,
                 'last_message' => isset($latest[$thread->id]) ? $this->messageView($latest[$thread->id]) : null,
                 'unread' => DB::table('shop_chat_messages')->where('thread_id', $thread->id)->where('sender', 'customer')->where('id', '>', $thread->owner_read_id)->count()]), 'total' => $total,
@@ -285,7 +293,8 @@ class ChatController extends Controller
     private function messages(Request $request, string $uuid, bool $staff): array
     {
         $thread = $this->thread($request, $uuid, $staff);
-        $data = $request->validate(['after_id' => ['nullable', 'integer', 'min:0'], 'before_id' => ['nullable', 'integer', 'min:1']]);
+        $data = $request->validate(['after_id' => ['nullable', 'integer', 'min:0'], 'before_id' => ['nullable', 'integer', 'min:1'],
+            'delivery_ids' => ['nullable', 'string', 'max:1000', 'regex:/^[0-9]+(?:,[0-9]+)*$/D']]);
         $query = DB::table('shop_chat_messages')->where('thread_id', $thread->id);
         if (! empty($data['after_id'])) {
             $query->where('id', '>', $data['after_id']);
@@ -301,8 +310,37 @@ class ChatController extends Controller
         foreach ($items as $message) {
             $message->sales_actions = $actions[$message->id] ?? [];
         }
+        $updates = collect();
+        if (($thread->sales_ai_channel ?? 'web') === 'telegram') {
+            $this->withTelegramDelivery($items);
+            if ($staff && ! empty($data['delivery_ids'])) {
+                $ids = array_slice(array_unique(explode(',', $data['delivery_ids'])), 0, 50);
+                $updates = DB::table('shop_chat_messages')->where('thread_id', $thread->id)->where('sender', 'owner')->whereIn('id', $ids)->get();
+                $this->withTelegramDelivery($updates);
+            }
+        }
 
-        return ['thread' => $this->view($thread), 'items' => ($ascending ? $items : $items->reverse())->map(fn ($message) => $this->messageView($message))->values(), 'has_more' => $hasMore];
+        return ['thread' => $this->view($thread), 'items' => ($ascending ? $items : $items->reverse())->map(fn ($message) => $this->messageView($message))->values(), 'has_more' => $hasMore,
+            'delivery_updates' => $updates->map(fn ($message) => ['id' => $message->id, 'telegram_delivery' => $message->telegram_delivery])->values()];
+    }
+
+    private function withTelegramDelivery($messages): void
+    {
+        $outgoing = $messages->filter(fn ($message) => $message->sender === 'owner');
+        $summaries = app(Delivery::class)->summaries($outgoing->pluck('id')->all());
+        foreach ($outgoing as $message) {
+            $message->telegram_delivery = $summaries[$message->id] ?? null;
+        }
+    }
+
+    public function ownerRetryTelegram(Request $request, string $uuid, int $id): array
+    {
+        $thread = $this->thread($request, $uuid, true);
+        app(Delivery::class)->retry($thread, $id);
+        $message = DB::table('shop_chat_messages')->where('thread_id', $thread->id)->where('id', $id)->firstOrFail();
+        $this->withTelegramDelivery(collect([$message]));
+
+        return ['message' => $this->messageView($message)];
     }
 
     public function customerSend(Request $request, string $uuid): array
@@ -356,7 +394,9 @@ class ChatController extends Controller
         $product = $commerce->catalogQuery($store)->where('p.id', $productId)->first();
         abort_unless($product, 422, 'This product is not available in this shop. Choose another published product.');
 
-        return array_intersect_key($commerce->productView($store, $product), array_flip(['id', 'name', 'price', 'currency', 'unit_name', 'photo_url', 'store_slug']));
+        $snapshot = array_intersect_key($commerce->productView($store, $product), array_flip(['id', 'name', 'price', 'currency', 'unit_name', 'photo_url', 'store_slug']));
+
+        return $snapshot + ['public_url' => app(Delivery::class)->productUrl($snapshot)];
     }
 
     private function send(Request $request, string $uuid, bool $staff): array
@@ -409,8 +449,11 @@ class ChatController extends Controller
                 Storage::disk('local')->delete($storedPath);
             } throw $error;
         }
+        app(Delivery::class)->stage($thread, (int) $message->id);
+        if (($thread->sales_ai_channel ?? 'web') === 'telegram') {
+            $this->withTelegramDelivery(collect([$message]));
+        }
         $this->realtime->changed($thread, (int) $message->id);
-        app(\App\Services\SalesTelegram\Delivery::class)->stage($thread, (int)$message->id);
 
         return ['message' => $this->messageView($message), 'thread' => $this->view(DB::table('shop_chat_threads')->where('id', $thread->id)->first())];
     }

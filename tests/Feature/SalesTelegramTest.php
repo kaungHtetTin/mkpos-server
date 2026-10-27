@@ -11,12 +11,14 @@ use App\Services\SalesTelegram\Delivery;
 use App\Services\SalesTelegram\Identity;
 use App\Services\SalesTelegram\Inbox;
 use Illuminate\Foundation\Testing\DatabaseTransactions;
+use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Queue;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\URL;
 use Illuminate\Support\Str;
 use Tests\TestCase;
@@ -36,6 +38,8 @@ class SalesTelegramTest extends TestCase
     private string $secret;
 
     private string $slug;
+
+    private ?array $deliveryResponse = null;
 
     protected function setUp(): void
     {
@@ -60,7 +64,7 @@ class SalesTelegramTest extends TestCase
         DB::table('sales_ai_wallets')->where('business_id', $this->owner['business']['id'])->update(['balance_micros' => 10_000_000_000]);
         $this->token = '990001:'.str_repeat('a', 32);
         Http::preventStrayRequests();
-        Http::fake(fn ($request) => Http::response(match (true) {
+        Http::fake(fn ($request) => Http::response($this->deliveryResponse ?? match (true) {
             str_ends_with($request->url(), '/getMe') => ['ok' => true, 'result' => ['id' => 990001, 'is_bot' => true, 'username' => 'fixture_shop_bot', 'can_join_groups' => true]],
             str_ends_with($request->url(), '/getWebhookInfo') => ['ok' => true, 'result' => ['url' => '', 'pending_update_count' => 0]],
             default => ['ok' => true, 'result' => ['message_id' => 44]],
@@ -310,5 +314,106 @@ class SalesTelegramTest extends TestCase
         $row = $this->getJson('/api/shop-admin/sales-ai/telegram')->assertOk()->json('settings');
         $this->putJson('/api/shop-admin/sales-ai/telegram', ['version' => $row['version'], 'bot_token' => $this->token, 'enabled' => true, 'groups_enabled' => true, 'daily_limit' => 100, 'per_user_limit' => 10])->assertUnprocessable();
         $this->getJson('/api/shop-admin/sales-ai/telegram/groups/999999')->assertNotFound();
+    }
+
+    public function test_owner_product_only_message_sends_a_public_url_and_reports_real_delivery(): void
+    {
+        config(['clients.shop_url' => 'https://shop.fixture.test']);
+        $product = $this->postJson('/api/products', ['name' => 'Shared rice', 'price' => 1500, 'cost' => 600, 'stock' => 10, 'base_unit' => 'Bag', 'prices' => [['name' => 'Retail', 'price' => 1500]]])->assertOk()->json();
+        $this->putJson('/api/shop-admin/publications/'.$product['id'], ['published' => true, 'unit' => 'base'])->assertOk();
+        $this->receive($this->update('Show products'));
+        $thread = $this->thread();
+        $url = '/api/shop-admin/chat/'.$thread->uuid.'/messages';
+        $data = ['client_id' => (string) Str::uuid(), 'product_id' => $product['id']];
+        $reply = $this->postJson($url, $data)->assertOk()->assertJsonPath('message.telegram_delivery.status', 'pending');
+        $id = $reply->json('message.id');
+        $public = 'https://shop.fixture.test/#/store/'.$this->slug.'/products/'.$product['id'];
+        $reply->assertJsonPath('message.product.public_url', $public);
+        $this->postJson($url, $data)->assertOk();
+        $this->assertSame(1, DB::table('sales_telegram_outbox')->where('message_id', $id)->count());
+        // Reproduce a product-only message saved by the old bridge but never staged.
+        DB::table('sales_telegram_outbox')->where('message_id', $id)->delete();
+        $legacyProduct = $reply->json('message.product');
+        unset($legacyProduct['public_url']);
+        DB::table('shop_chat_messages')->where('id', $id)->update(['product_snapshot' => json_encode($legacyProduct)]);
+        $this->getJson($url)->assertOk()->assertJsonPath('items.1.telegram_delivery.status', 'not_sent');
+        $this->postJson($url.'/'.$id.'/retry-telegram')->assertOk()->assertJsonPath('message.id', $id)->assertJsonPath('message.telegram_delivery.status', 'pending');
+        $outbox = DB::table('sales_telegram_outbox')->where('message_id', $id)->firstOrFail();
+        app(Delivery::class)->process($outbox->id);
+        Http::assertSent(fn ($request) => str_ends_with($request->url(), '/sendMessage') && str_contains($request['text'] ?? '', $public) && $request['chat_id'] === 123);
+        $this->getJson($url.'?after_id='.$id.'&delivery_ids='.$id)->assertOk()->assertJsonCount(0, 'items')
+            ->assertJsonPath('delivery_updates.0.telegram_delivery.status', 'sent')
+            ->assertJsonPath('delivery_updates.0.telegram_delivery.read_status_available', false)
+            ->assertJsonPath('thread.sales_ai_channel', 'telegram')->assertJsonPath('thread.customer_active', null)->assertJsonPath('thread.customer_last_seen_at', null);
+        $this->assertNotNull($this->getJson($url)->json('thread.telegram_last_message_at'));
+    }
+
+    public function test_failed_delivery_can_be_retried_once_without_duplicating_the_saved_message(): void
+    {
+        $this->receive($this->update('Hi'));
+        $thread = $this->thread();
+        $url = '/api/shop-admin/chat/'.$thread->uuid.'/messages';
+        $id = $this->postJson($url, ['client_id' => (string) Str::uuid(), 'body' => 'Hello'])->assertOk()->json('message.id');
+        $outbox = DB::table('sales_telegram_outbox')->where('message_id', $id)->value('id');
+        $this->deliveryResponse = ['ok' => false, 'error_code' => 403];
+        app(Delivery::class)->process($outbox);
+        $this->getJson($url)->assertOk()->assertJsonPath('items.1.telegram_delivery.status', 'failed')->assertJsonPath('items.1.telegram_delivery.can_retry', true);
+        $this->postJson($url.'/'.$id.'/retry-telegram')->assertOk()->assertJsonPath('message.telegram_delivery.status', 'pending');
+        $this->postJson($url.'/'.$id.'/retry-telegram')->assertConflict();
+        $this->deliveryResponse = ['ok' => true, 'result' => ['message_id' => 999]];
+        app(Delivery::class)->process($outbox);
+        $this->assertSame('sent', app(Delivery::class)->summaries([$id])[$id]['status']);
+        $this->assertSame(1, DB::table('shop_chat_messages')->where('thread_id', $thread->id)->where('sender', 'owner')->count());
+    }
+
+    public function test_unknown_delivery_is_never_retried_and_status_requests_are_thread_scoped(): void
+    {
+        $this->receive($this->update('First customer'));
+        $first = $this->thread();
+        $url = '/api/shop-admin/chat/'.$first->uuid.'/messages';
+        $id = $this->postJson($url, ['client_id' => (string) Str::uuid(), 'body' => 'Hello'])->assertOk()->json('message.id');
+        $this->deliveryResponse = ['ok' => false, 'error_code' => 502];
+        app(Delivery::class)->process(DB::table('sales_telegram_outbox')->where('message_id', $id)->value('id'));
+        $this->postJson($url.'/'.$id.'/retry-telegram')->assertConflict();
+        $this->assertFalse(app(Delivery::class)->summaries([$id])[$id]['can_retry']);
+        $this->assertSame('delivery_unknown', app(Delivery::class)->summaries([$id])[$id]['status']);
+        $this->receive($this->update('Second customer', 456, 456));
+        $other = '/api/shop-admin/chat/'.$this->thread(456, 456)->uuid.'/messages';
+        $this->getJson($other.'?delivery_ids='.$id)->assertOk()->assertJsonCount(0, 'delivery_updates');
+        $this->postJson($other.'/'.$id.'/retry-telegram')->assertNotFound();
+    }
+
+    public function test_private_image_only_message_is_uploaded_without_a_public_storage_url(): void
+    {
+        Storage::fake('local');
+        $this->receive($this->update('Send a photo'));
+        $thread = $this->thread();
+        $url = '/api/shop-admin/chat/'.$thread->uuid.'/messages';
+        $response = $this->post($url, ['client_id' => (string) Str::uuid(), 'image' => UploadedFile::fake()->image('test.jpg', 20, 20)])->assertOk();
+        $id = $response->json('message.id');
+        $response->assertJsonPath('message.telegram_delivery.status', 'pending');
+        $outbox = DB::table('sales_telegram_outbox')->where('message_id', $id)->value('id');
+        app(Delivery::class)->process($outbox);
+        $this->assertSame('sent', app(Delivery::class)->summaries([$id])[$id]['status']);
+        Http::assertSent(fn ($request) => str_ends_with($request->url(), '/sendPhoto') && $request->hasFile('photo'));
+        $this->assertStringNotContainsString('shop-chat-images/', $response->getContent());
+    }
+
+    public function test_multipart_delivery_retry_preserves_already_sent_parts(): void
+    {
+        $this->receive($this->update('Hello'));
+        $thread = $this->thread();
+        $url = '/api/shop-admin/chat/'.$thread->uuid.'/messages';
+        $id = $this->postJson($url, ['client_id' => (string) Str::uuid(), 'body' => str_repeat('x', 2000)])->assertOk()->json('message.id');
+        $parts = DB::table('sales_telegram_outbox')->where('message_id', $id)->orderBy('part')->pluck('id');
+        app(Delivery::class)->process($parts[0]);
+        $this->deliveryResponse = ['ok' => false, 'error_code' => 400];
+        app(Delivery::class)->process($parts[1]);
+        $summary = app(Delivery::class)->summaries([$id])[$id];
+        $this->assertTrue($summary['partial']);
+        $this->assertSame('failed', $summary['status']);
+        $this->postJson($url.'/'.$id.'/retry-telegram')->assertOk();
+        $this->assertSame('sent', DB::table('sales_telegram_outbox')->where('id', $parts[0])->value('status'));
+        $this->assertSame('pending', DB::table('sales_telegram_outbox')->where('id', $parts[1])->value('status'));
     }
 }

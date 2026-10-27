@@ -28,7 +28,7 @@ class TelegramClient
     }
 
     /** Only fixed Telegram methods; never accept URLs, destinations or tokens from the model. */
-    public function call(string $method, array $data = [], ?int $expectedBotId = null): array
+    public function call(string $method, array $data = [], ?int $expectedBotId = null, ?string $photo = null): array
     {
         if (! in_array($method, ['getMe', 'getWebhookInfo', 'setWebhook', 'sendMessage', 'sendChatAction', 'answerCallbackQuery', 'getFile', 'sendPhoto', 'sendDocument'], true)) {
             throw new \InvalidArgumentException('Unsupported Telegram operation.');
@@ -40,8 +40,15 @@ class TelegramClient
             return ['ok' => false, 'error' => 'bot_changed'];
         }
         try {
-            $response = Http::connectTimeout($method === 'sendChatAction' ? 1 : 3)->timeout($method === 'sendChatAction' ? 1 : 15)->withoutRedirecting()
-                ->post('https://api.telegram.org/bot'.$settings['bot_token'].'/'.$method, $data);
+            $request = Http::connectTimeout($method === 'sendChatAction' ? 1 : 3)->timeout($method === 'sendChatAction' ? 1 : 15)->withoutRedirecting();
+            if ($photo !== null) {
+                if ($method !== 'sendPhoto') {
+                    throw new \InvalidArgumentException('Photo uploads require sendPhoto.');
+                }
+                $request->attach('photo', $photo, 'chat.jpg', ['Content-Type' => 'image/jpeg']);
+                $data = array_map(fn ($value) => is_array($value) || is_bool($value) ? json_encode($value, JSON_THROW_ON_ERROR) : $value, $data);
+            }
+            $response = $request->post('https://api.telegram.org/bot'.$settings['bot_token'].'/'.$method, $data);
             $result = $response->json();
             if ($response->successful() && is_array($result) && ($result['ok'] ?? false) === true) {
                 return ['ok' => true, 'result' => $result['result'] ?? null];
