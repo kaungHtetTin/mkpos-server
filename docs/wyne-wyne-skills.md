@@ -1,5 +1,22 @@
 # Wyne Wyne workflow skills
 
+## Business Sales AI Telegram management
+
+The existing owner-only `sales_ai` workflow now includes four Telegram tools:
+
+| Tool | Supported behavior |
+| --- | --- |
+| `get_sales_ai_telegram_settings` | Read saved reply/group switches, limits, bot username, registration and token-configured flags. Does not initialize a connection, expose credentials or claim live health. |
+| `get_sales_ai_telegram_groups` | Read/search/paginate only the current business bot's groups, approval, actual saved membership, triggers and limits; resolve exact record IDs. |
+| `manage_sales_ai_telegram_settings` | Prepare a partial change to replies, group replies and daily/per-user limits, preserving all unspecified settings. |
+| `manage_sales_ai_telegram_groups` | Prepare a single group's creation or partial update, approval/disable, mention/reply triggers or limits. New groups need the owner's exact negative Telegram chat ID and name. Existing chat IDs and membership are immutable through AI. |
+
+Management uses the existing before/after review cards in Business web and mobile. Nothing changes until the authenticated owner reviews and confirms. Confirmation rechecks ownership, current connection/bot version and group version/membership. Stale proposals fail; retries do not repeat a saved change. Native Telegram configuration validation is reused, and changes enter the existing management audit. Confirmed changes reconcile open settings/list views while preserving unsaved edits and private token drafts.
+
+Token entry/replacement, connection tests and webhook registration use the owner-only `sales_ai_telegram` navigation button to **My Shop → Sales AI → Telegram bot**. Wyne Wyne must never ask for a bot token in chat or send Telegram messages, alter membership/webhook destinations, link customer accounts, approve every discovered group, expose customer histories or manage Kaung Kaung's platform bot through these tools. Group approval is distinct from bot membership, the global group-reply switch, registered webhook, worker health and AI credit. Saved flags alone do not prove service availability.
+
+Examples: "Show my Sales AI Telegram groups", "Prepare approval for this group", "Disable Telegram group replies", or "Set Telegram daily requests to 300". These extend the existing Sales AI skill; no new migration, cron or worker is introduced. Restart persistent workers after deploying the PHP changes; bounded cron invocations load updated code on their next run.
+
 Wyne Wyne now includes a 17-topic workflow registry and a read-only get_wyne_wyne_skills tool. This organizes existing supported MKPOS capabilities; it does not add unsupported application features or grant new permissions.
 
 | Topic | Workflow |

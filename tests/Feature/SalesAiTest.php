@@ -13,6 +13,7 @@ use App\Services\SalesAi\PublicTools;
 use App\Services\SalesAi\Runner;
 use App\Services\SalesAi\Settings;
 use App\Services\SalesAi\Wallet;
+use App\Support\AiLocale;
 use Carbon\CarbonImmutable;
 use Illuminate\Foundation\Testing\DatabaseTransactions;
 use Illuminate\Http\UploadedFile;
@@ -75,6 +76,22 @@ class SalesAiTest extends TestCase
         $message = $this->postJson('/api/ecommerce/chat/'.$this->thread.'/messages', ['body' => $body, 'client_id' => $key ?? (string) Str::uuid()])->assertOk()->json('message.id');
 
         return (string) DB::table('sales_ai_runs')->where('business_id', $this->business)->where('trigger_message_id', $message)->value('id');
+    }
+
+    public function test_image_only_sales_reply_uses_the_customer_interface_language_from_the_queued_run(): void
+    {
+        $this->enable();
+        DB::table('sales_ai_wallets')->where('business_id', $this->business)->update(['balance_micros' => 10_000_000_000]);
+        $fields = ['kind' => 'unrelated', 'summary' => 'Unrelated picture.', 'payment_status' => 'unknown',
+            ...array_fill_keys(['amount', 'currency', 'provider', 'recipient_name', 'recipient_account', 'transaction_reference', 'paid_at'], '')];
+        SalesImageRepresentative::fake([$fields]);
+        $this->post('/api/ecommerce/chat/'.$this->thread.'/messages', ['client_id' => (string) Str::uuid(), 'language' => 'my',
+            'image' => UploadedFile::fake()->image('photo.png')], ['Accept' => 'application/json'])->assertOk();
+        $run = DB::table('sales_ai_runs')->where('business_id', $this->business)->first();
+        $this->assertSame('my', $run->language);
+        app(Runner::class)->process($run->id);
+        $this->assertSame(AiLocale::text('unrelated', 'my'), DB::table('shop_chat_messages')->where('sales_ai_run_id', $run->id)->value('body'));
+        SalesImageRepresentative::assertPrompted(fn ($prompt) => $prompt->agent->preferredLanguage === 'my' && str_contains($prompt->agent->instructions(), 'Customer interface language: my'));
     }
 
     public function test_sales_image_turns_keep_product_and_shop_payment_skills_without_office_escalation(): void

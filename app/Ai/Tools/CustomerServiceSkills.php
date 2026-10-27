@@ -41,6 +41,6 @@ class CustomerServiceSkills implements Tool
         }
 
         return json_encode(['name' => KaungKaungService::NAME, 'role' => 'MKPOS customer-service and help AI', 'skills' => $guides,
-            'notice' => 'Public guidance only. Images and admin notices require the configured server image flow. Payment approval remains manual.'], JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR);
+            'notice' => 'Public guidance only. Development/UI/UX text reports use report_application_error; images use the configured image flow. Admin notices are queued by the server to the saved group/topic. Payment approval remains manual.'], JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR);
     }
 }

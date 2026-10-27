@@ -31,6 +31,10 @@ class BusinessManagementTool implements Tool
     public function description(): string
     {
         $text = match ($this->tool) {
+            'get_sales_ai_telegram_settings' => 'Read saved own business Telegram bot reply settings, limits, public bot username, registration flag and token-configured flag. No tokens/secrets or customer histories. Not a live connectivity check.',
+            'get_sales_ai_telegram_groups' => 'Read bounded own current-bot groups, exact record IDs, approval, membership, mention/reply triggers and limits. Use pagination or record_id for exact group; do not invent IDs.',
+            'manage_sales_ai_telegram_settings' => 'Prepare owner-reviewed partial Telegram enabled/groups_enabled/daily_limit/per_user_limit changes. Read Telegram settings first. No token, webhook URL, registration, account-link or conversation changes. Token entry/test/register use the sales_ai_telegram page.',
+            'manage_sales_ai_telegram_groups' => 'Prepare one owner-reviewed group create or partial update. Read exact record_id first for update; create needs an owner-provided negative Telegram chat_id and title. Supports approval/status, mention/reply triggers and daily/per-user limits. Never invent IDs or approve every group. Does not add the bot to Telegram or alter membership. No delete or immutable chat-ID changes.',
             'get_sales_ai_settings' => 'Read this owner business Sales AI enabled state, name, instructions, soul, tool permissions, published policies, version, MMK wallet and platform readiness flags. No credentials or writes.',
             'get_sales_ai_activity' => 'Read bounded own Sales AI wallet entries, top-ups, conversations with exact UUID/mode/version, or response runs. resource=usage returns the actual 30-day/12-month MMK spending series in business timezone (omit other arguments). Paginate other records honestly. No private evidence paths, provider credentials or another business records.',
             'manage_sales_ai_settings' => 'Prepare an owner-reviewed partial Sales AI enabled/name/instructions/soul update. Read current settings first. Preserves tool permissions and policies. Never claim saved until the owner confirms the review card.',
@@ -98,6 +102,10 @@ class BusinessManagementTool implements Tool
     {
         $names = fn () => $s->array()->max(20)->items($s->string()->enum(array_keys(\App\Services\SalesAi\Settings::TOOLS)));
         return match ($this->tool) {
+            'get_sales_ai_telegram_settings' => [],
+            'get_sales_ai_telegram_groups' => ['record_id' => $s->integer()->min(1), 'query' => $s->string()->max(120), 'limit' => $s->integer()->min(1)->max(20), 'offset' => $s->integer()->min(0)->max(1000000)],
+            'manage_sales_ai_telegram_settings' => ['data' => $s->object(['enabled' => $s->boolean(), 'groups_enabled' => $s->boolean(), 'daily_limit' => $s->integer()->min(1)->max(10000), 'per_user_limit' => $s->integer()->min(1)->max(500)])->required()],
+            'manage_sales_ai_telegram_groups' => ['action' => $s->string()->enum(['create', 'update'])->required(), 'record_id' => $s->integer()->min(1), 'data' => $s->object(['chat_id' => $s->integer()->min(-4503599627370495)->max(-1), 'title' => $s->string()->max(255), 'status' => $s->string()->enum(['pending', 'approved', 'disabled']), 'reply_mentions' => $s->boolean(), 'reply_to_bot' => $s->boolean(), 'daily_limit' => $s->integer()->min(1)->max(10000), 'per_user_limit' => $s->integer()->min(1)->max(500)])->required()],
             'get_sales_ai_settings' => [],
             'get_sales_ai_activity' => ['resource' => $s->string()->enum(['wallet_entries', 'topups', 'conversations', 'runs', 'usage'])->required(), 'thread_uuid' => $s->string()->format('uuid'), 'record_id' => $s->integer()->min(1), 'limit' => $s->integer()->min(1)->max(20), 'offset' => $s->integer()->min(0)->max(1000000)],
             'manage_sales_ai_settings' => ['data' => $s->object(['enabled' => $s->boolean(), 'name' => $s->string()->max(80), 'instructions' => $s->string()->max(4000), 'soul' => $s->string()->max(2000)])->required()],

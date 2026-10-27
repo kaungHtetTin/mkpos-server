@@ -65,9 +65,9 @@ class Groups
             ->where('status', 'approved')->where('is_member', true)->exists();
     }
 
-    public function addressed(array $message, object $group, int $botId): bool
+    public function addressed(array $message, object $group, int $botId, ?string $username = null): bool
     {
-        $username = app(Settings::class)->get()['bot_username'] ?? '';
+        $username ??= app(Settings::class)->get()['bot_username'] ?? '';
         if ($group->reply_mentions && $username !== '') {
             // Telegram entity offsets and lengths use UTF-16 code units.
             $utf16 = mb_convert_encoding($message['text'] ?? $message['caption'] ?? '', 'UTF-16LE', 'UTF-8');

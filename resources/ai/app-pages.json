@@ -158,6 +158,13 @@
     "tab": "sales-ai",
     "owner_only": true
   },
+  "sales_ai_telegram": {
+    "module": "shop",
+    "label": "Open Sales AI Telegram settings",
+    "mobile_path": "/shop/sales-ai/telegram",
+    "tab": "sales-ai-telegram",
+    "owner_only": true
+  },
   "sales_ai_topups": {
     "module": "shop",
     "label": "Open Sales AI Top-ups",

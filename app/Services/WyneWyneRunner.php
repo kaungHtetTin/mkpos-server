@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Ai\Agents\MkposAssistant;
 use App\Ai\Agents\TelegramImageReader;
 use App\Models\User;
+use App\Support\AiLocale;
 use App\Tenancy\TenantContext;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
@@ -143,16 +144,16 @@ class WyneWyneRunner
                 $policy = app(AiImagePolicy::class);
                 try {
                     $report = $policy->report($result->toArray());
-                    $result->text = $policy->reply($report);
+                    $result->text = $policy->reply($report, $run->language);
                 } catch (\Throwable) {
                     $report = ['kind' => 'unreadable'];
-                    $result->text = 'I could not safely classify this image or check current payment methods. Please send a clearer MKPOS screenshot or contact support.';
+                    $result->text = AiLocale::text('image_unavailable', $run->language);
                 }
                 if ($report['kind'] === 'error_unknown') {
                     try {
-                        $result->text = $policy->office($run, $report, 'wyne_wyne');
+                        $result->text = $policy->office($run, $report, 'wyne_wyne', $run->language);
                     } catch (\Throwable) {
-                        $result->text = 'I cannot reliably explain this MKPOS error. The report could not be submitted. Please contact MKPOS support.';
+                        $result->text = AiLocale::text('office_unavailable', $run->language);
                     }
                 }
             }

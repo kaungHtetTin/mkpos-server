@@ -1,0 +1,27 @@
+<?php
+
+return [
+    'receipt_notice_heading' => "ငွေပေးချေမှု ပြေစာ — ADMIN ကိုယ်တိုင် စစ်ဆေးရန်\nပုံတွင်မြင်ရသော အချက်အလက်များသာ ဖြစ်သည်။ ငွေအမှန်ရရှိမှုနှင့် ပြေစာအစစ်အမှန်ဖြစ်မှု မအတည်ပြုထားပါ။\n",
+    'error_notice_heading' => "MKPOS ပြဿနာ — ADMIN စစ်ဆေးရန်\n",
+    'active_recipient_notice' => 'လက်ခံသူသည် လက်ရှိ MKPOS ငွေလက်ခံနည်းလမ်းနှင့် ကိုက်ညီသည်။ ငွေအမှန်ရရှိမှုကို မအတည်ပြုထားပါ။',
+    'sender_id' => 'ပို့သူ ID', 'source_message' => 'မူရင်းစကားဝိုင်း/စာ', 'review_id' => 'စစ်ဆေးရန် ID',
+    'unrelated' => 'ဤပုံသည် MKPOS စနစ်နှင့် မသက်ဆိုင်ပါ။',
+    'image_unavailable' => 'ဤပုံအမျိုးအစား သို့မဟုတ် လက်ရှိငွေပေးချေမှုနည်းလမ်းကို စိတ်ချစွာ မစစ်ဆေးနိုင်ပါ။ ပိုရှင်းလင်းသော MKPOS screenshot ပို့ပါ၊ သို့မဟုတ် support ကို ဆက်သွယ်ပါ။',
+    'receipt_heading' => 'ပြေစာတွင် မြင်ရသော subscription ငွေပေးချေမှုအချက်အလက်များ — admin ကိုယ်တိုင် စစ်ဆေးရန် လိုအပ်သည်။',
+    'unknown' => 'မသိရပါ',
+    'amount' => 'ငွေပမာဏ', 'currency' => 'ငွေကြေး', 'provider' => 'ငွေလွှဲဝန်ဆောင်မှု',
+    'recipient_name' => 'လက်ခံသူအမည်', 'recipient_account' => 'လက်ခံသူအကောင့်',
+    'transaction_reference' => 'ငွေလွှဲအမှတ်', 'paid_at' => 'ငွေပေးချေသည့်အချိန်', 'payment_status' => 'ငွေပေးချေမှုအခြေအနေ',
+    'completed' => 'ပြီးစီးထားသည်', 'pending' => 'စောင့်ဆိုင်းဆဲ', 'failed' => 'မအောင်မြင်ပါ',
+    'matches_active_recipient' => 'မြင်ရသော လက်ခံသူအချက်အလက်များသည် လက်ရှိအသုံးပြုနေသော MKPOS subscription ငွေလက်ခံနည်းလမ်းနှင့် ကိုက်ညီပါသည်။',
+    'does_not_match_active_recipient' => 'မြင်ရသော လက်ခံသူအချက်အလက်များသည် လက်ရှိ MKPOS subscription ငွေလက်ခံနည်းလမ်းများနှင့် မကိုက်ညီပါ။ ထပ်မံငွေမပေးမီ MKPOS support ကို ဆက်သွယ်ပါ။',
+    'no_active_methods' => 'လက်ရှိအသုံးပြုနိုင်သော MKPOS subscription ငွေလက်ခံနည်းလမ်း မသတ်မှတ်ထားပါ။ MKPOS support ကို ဆက်သွယ်ပါ။',
+    'inconclusive' => 'လက်ခံသူအချက်အလက် မပြည့်စုံခြင်း သို့မဟုတ် ဖုံးကွယ်ထားခြင်းကြောင့် ငွေပေးချေမှုနည်းလမ်းကို အတည်မပြုနိုင်ပါ။ Admin က မူရင်းပြေစာကို စစ်ဆေးရန် လိုအပ်သည်။',
+    'manual_review' => 'ငွေအမှန်ရရှိမှုနှင့် ပြေစာအစစ်အမှန်ဖြစ်မှုကို အတည်မပြုထားပါ။ ငွေပေးချေမှုနှင့် subscription ဖွင့်ပေးမှုကို admin ကိုယ်တိုင် စစ်ဆေးရပါမည်။',
+    'not_forwarded' => 'ဤ screenshot ကို admin group သို့ မပို့ထားပါ။',
+    'error_queued' => 'ဤ MKPOS application ပြဿနာကို admin များ စစ်ဆေးရန် သတ်မှတ်ထားသော admin Telegram group သို့ ပို့ရန် စောင့်ဆိုင်းစာရင်းတွင် ထည့်ထားပါသည်။',
+    'error_not_queued' => 'ဤ MKPOS application ပြဿနာကို admin group သို့ ပို့ရန် စာရင်းမသွင်းနိုင်ပါ။ MKPOS support ကို ဆက်သွယ်ပါ။',
+    'office_submitted' => 'ဤ MKPOS application ပြဿနာကို စစ်ဆေးရန် report :reference ကို admin Office သို့ တင်ပြပြီးပါပြီ။',
+    'office_report_title' => 'မဖြေရှင်းနိုင်သည့် MKPOS screenshot — :agent',
+    'office_unavailable' => 'ဤ MKPOS error ကို စိတ်ချစွာ မရှင်းပြနိုင်ပါ။ Report ကို မတင်နိုင်ပါ။ MKPOS support ကို ဆက်သွယ်ပါ။',
+];

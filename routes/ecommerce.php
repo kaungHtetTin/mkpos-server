@@ -23,6 +23,7 @@ Route::prefix('ecommerce')->middleware(['throttle:shop-public', \App\Http\Middle
         Route::post('/chat/presence', [\App\Http\Controllers\Ecommerce\ChatController::class, 'customerAppPresence'])->middleware('throttle:60,1');
         Route::post('/stores/{slug}/chat', [\App\Http\Controllers\Ecommerce\ChatController::class, 'start'])->middleware('throttle:10,1');
         Route::get('/chat/{uuid}/messages', [\App\Http\Controllers\Ecommerce\ChatController::class, 'customerMessages']);
+        Route::post('/chat/{uuid}/telegram-link', [\App\Http\Controllers\Ecommerce\SalesTelegramController::class, 'link'])->middleware('throttle:5,1');
         Route::get('/chat/{uuid}/products', [\App\Http\Controllers\Ecommerce\ChatController::class, 'customerProducts']);
         Route::get('/chat/{uuid}/messages/{id}/image', [\App\Http\Controllers\Ecommerce\ChatController::class, 'customerImage'])->whereNumber('id');
         Route::post('/chat/{uuid}/read', [\App\Http\Controllers\Ecommerce\ChatController::class, 'customerRead']);
@@ -92,6 +93,14 @@ Route::prefix('ecommerce')->middleware(['throttle:shop-public', \App\Http\Middle
 });
 
 Route::prefix('shop-admin')->middleware(['auth:sanctum', 'business'])->group(function () {
+    Route::get('/sales-ai/telegram', [\App\Http\Controllers\Ecommerce\SalesTelegramController::class, 'show']);
+    Route::put('/sales-ai/telegram', [\App\Http\Controllers\Ecommerce\SalesTelegramController::class, 'update']);
+    Route::post('/sales-ai/telegram/test', [\App\Http\Controllers\Ecommerce\SalesTelegramController::class, 'test'])->middleware('throttle:5,1');
+    Route::post('/sales-ai/telegram/register', [\App\Http\Controllers\Ecommerce\SalesTelegramController::class, 'register'])->middleware('throttle:5,1');
+    Route::get('/sales-ai/telegram/groups', [\App\Http\Controllers\Ecommerce\SalesTelegramController::class, 'groups']);
+    Route::post('/sales-ai/telegram/groups', [\App\Http\Controllers\Ecommerce\SalesTelegramController::class, 'saveGroup']);
+    Route::get('/sales-ai/telegram/groups/{group}', [\App\Http\Controllers\Ecommerce\SalesTelegramController::class, 'group'])->whereNumber('group');
+    Route::put('/sales-ai/telegram/groups/{group}', [\App\Http\Controllers\Ecommerce\SalesTelegramController::class, 'saveGroup'])->whereNumber('group');
     Route::get('/sales-ai', [\App\Http\Controllers\Ecommerce\SalesAiController::class, 'show']);
     Route::put('/sales-ai', [\App\Http\Controllers\Ecommerce\SalesAiController::class, 'update']);
     Route::get('/sales-ai/wallet', [\App\Http\Controllers\Ecommerce\SalesAiController::class, 'wallet']);

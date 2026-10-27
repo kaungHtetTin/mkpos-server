@@ -13,6 +13,7 @@
                     <div class="hero-actions">
                         <a class="button button-primary" href="{{ \App\Support\ClientApps::webUrl('signup') }}">Start free trial <svg><use href="#icon-arrow"/></svg></a>
                         <a class="button button-secondary" href="#how-it-works">See how it works</a>
+                        <a class="hero-ai-link" href="#ai-features">Meet your AI assistants <svg aria-hidden="true"><use href="#icon-arrow"/></svg></a>
                     </div>
                     <div class="hero-assurances">
                         <span><svg><use href="#icon-check"/></svg>One-month free trial</span>
@@ -96,6 +97,7 @@
                         <span>FAST CHECKOUT</span>
                         <h3>Make sales in seconds.</h3>
                         <p>Scan products, take payment, record credit and print receipts.</p>
+                        <ul class="feature-list"><li><svg><use href="#icon-check"/></svg>Barcode and product search</li><li><svg><use href="#icon-check"/></svg>Cash and credit checkout</li></ul>
                         <div class="mini-checkout" aria-hidden="true"><div class="mini-product"><span>01</span><div><strong>Premium Water</strong><small>6 Bottles · Retail</small></div><b>6,000 Ks</b></div><div class="mini-total"><span>Total</span><strong>6,000 Ks</strong></div><button>Complete sale</button></div>
                     </article>
                     <article class="feature-card inventory-card">
@@ -103,6 +105,7 @@
                         <span>INVENTORY</span>
                         <h3>Always know what is in stock.</h3>
                         <p>Track products in packs or pieces and spot low stock early.</p>
+                        <ul class="feature-list"><li><svg><use href="#icon-check"/></svg>Pack and piece quantities</li><li><svg><use href="#icon-check"/></svg>Low-stock visibility</li></ul>
                         <div class="stock-bars" aria-hidden="true"><i style="--stock:88%"></i><i style="--stock:64%"></i><i class="warning" style="--stock:24%"></i><i style="--stock:72%"></i><i class="danger" style="--stock:10%"></i></div>
                     </article>
                     <article class="feature-card">
@@ -127,10 +130,47 @@
                         <ul class="feature-list"><li><svg><use href="#icon-check"/></svg>Device-specific printer setup</li><li><svg><use href="#icon-check"/></svg>Pending-sale synchronization</li></ul>
                     </article>
                     <article class="feature-card feature-card-wide report-card">
-                        <div class="report-copy"><div class="feature-icon"><svg><use href="#icon-chart"/></svg></div><span>BUSINESS REPORTS</span><h3>See how your business is doing.</h3><p>Review sales, expenses, credit and stock value together.</p></div>
+                        <div class="report-copy"><div class="feature-icon"><svg><use href="#icon-chart"/></svg></div><span>BUSINESS REPORTS</span><h3>See how your business is doing.</h3><p>Review sales, expenses, credit and stock value together.</p><ul class="feature-list"><li><svg><use href="#icon-check"/></svg>Date-based business reports</li><li><svg><use href="#icon-check"/></svg>Sales and expense summaries</li></ul></div>
                         <div class="report-visual" aria-hidden="true"><div><small>Net sales</small><strong>2.48M Ks</strong><span>+18.2%</span></div><svg viewBox="0 0 520 160" preserveAspectRatio="none"><path d="M0 142 C54 136 70 112 112 119 S177 80 221 92 S287 53 326 64 S407 18 520 24"/><circle cx="520" cy="24" r="7"/></svg><div class="report-columns"><i style="--h:34%"></i><i style="--h:48%"></i><i style="--h:44%"></i><i style="--h:66%"></i><i style="--h:60%"></i><i style="--h:81%"></i><i style="--h:92%"></i></div></div>
                     </article>
                 </div>
+            </div>
+        </section>
+
+        <section class="section ai-section" id="ai-features" aria-labelledby="ai-heading">
+            <div class="container">
+                <div class="section-heading">
+                    <div><span class="section-kicker">AI, built into your workflow</span><h2 id="ai-heading">A helping hand for your business.</h2></div>
+                    <p>Understand your records, help shoppers choose and get practical MKPOS support. Three assistants, each with a clear role.</p>
+                </div>
+                <div class="office-feature-grid ai-feature-grid">
+                    <article>
+                        <div class="feature-icon" aria-hidden="true"><svg><use href="#icon-chart"/></svg></div>
+                        <span class="ai-role">Your business assistant</span>
+                        <h3>Wyne Wyne</h3>
+                        <p>Understand your records and get practical next steps for your business.</p>
+                        <ul><li>Sales, expenses, stock and account insights.</li><li>Pricing checks and restocking suggestions.</li><li>Setup help and owner-reviewed changes.</li></ul>
+                        <a class="ai-card-link" href="{{ \App\Support\ClientApps::webUrl('login') }}">Open the Business app <svg aria-hidden="true"><use href="#icon-arrow"/></svg></a>
+                    </article>
+                    <article>
+                        <div class="feature-icon" aria-hidden="true"><svg><use href="#icon-box"/></svg></div>
+                        <span class="ai-role">Your shop sales representative</span>
+                        <h3>Sales AI</h3>
+                        <p>Help shoppers choose with your published products, prices and policies.</p>
+                        <ul><li>Product search, photos and comparisons.</li><li>Quotes, carts and guided checkout.</li><li>Order help, payment proof and human handover.</li></ul>
+                        <a class="ai-card-link" href="{{ \App\Support\ClientApps::webUrl('login') }}">Set up Sales AI in My Shop <svg aria-hidden="true"><use href="#icon-arrow"/></svg></a>
+                    </article>
+                    <article>
+                        <div class="feature-icon" aria-hidden="true"><svg><use href="#icon-users"/></svg></div>
+                        <span class="ai-role">MKPOS customer service on Telegram</span>
+                        <h3>Kaung Kaung</h3>
+                        <p>Get clear MKPOS guidance on Telegram, in English or Burmese.</p>
+                        <ul><li>Plans, setup, downloads and device guidance.</li><li>Screenshot reading and troubleshooting.</li><li>Receipt guidance and unresolved error reports.</li></ul>
+                        <a class="ai-card-link" href="https://t.me/mkpos_help_bot" target="_blank" rel="noopener noreferrer">Chat with Kaung Kaung <span class="sr-only">on Telegram (opens in a new tab)</span><svg aria-hidden="true"><use href="#icon-arrow"/></svg></a>
+                    </article>
+                </div>
+                <div class="ai-assurance"><svg aria-hidden="true"><use href="#icon-shield"/></svg><div><strong>You stay in control.</strong><p>Private business data is owner-only. Business changes and customer orders need confirmation; payments need manual review. Kaung Kaung provides public MKPOS help without access to your business records.</p></div></div>
+                <p class="ai-availability">AI features depend on configuration, applicable plan limits and available credit. Sales AI uses its own credit balance.</p>
             </div>
         </section>
 

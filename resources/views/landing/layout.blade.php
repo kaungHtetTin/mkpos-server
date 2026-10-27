@@ -22,6 +22,9 @@
     <link rel="stylesheet" href="{{ asset('landing/landing.css') }}">
     <link rel="stylesheet" href="{{ asset('landing/guide.css') }}">
     <link rel="stylesheet" href="{{ asset('landing/tutorials.css') }}">
+    @if(request()->routeIs('landing'))
+        <link rel="stylesheet" href="{{ asset('landing/home.css') }}?v={{ filemtime(public_path('landing/home.css')) }}">
+    @endif
     <style>
         :root {
             color-scheme: {{ $branding['theme_mode'] }};
@@ -71,6 +74,7 @@
             <nav class="desktop-nav" aria-label="Primary navigation">
                 <a href="{{ route('landing') }}#how-it-works">How it works</a>
                 <a href="{{ route('landing') }}#features">Features</a>
+                <a href="{{ route('landing') }}#ai-features">AI assistants</a>
                 <a href="{{ route('landing') }}#office">Office</a>
                 <a href="{{ route('landing') }}#platforms">Downloads</a>
                 <a href="{{ route('plans.index') }}">Pricing</a>
@@ -85,6 +89,7 @@
                 <div>
                     <a href="{{ route('landing') }}#how-it-works">How it works</a>
                     <a href="{{ route('landing') }}#features">Features</a>
+                    <a href="{{ route('landing') }}#ai-features">AI assistants</a>
                 <a href="{{ route('landing') }}#office">Office</a>
                     <a href="{{ route('landing') }}#platforms">Downloads</a>
                     <a href="{{ route('plans.index') }}">Pricing</a>
@@ -127,7 +132,7 @@
         </div>
         <div class="container footer-bottom"><span>© {{ date('Y') }} MKPOS. All rights reserved.</span><span>Made for businesses that keep moving.</span></div>
     </footer>
-    <a class="ai-assistant-fab" href="https://t.me/KaungKaungKK_Bot" target="_blank" rel="noopener noreferrer" aria-label="AI assistant on Telegram (opens in a new tab)">
+    <a class="ai-assistant-fab" href="https://t.me/mkpos_help_bot" target="_blank" rel="noopener noreferrer" aria-label="AI assistant on Telegram (opens in a new tab)">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v3M10 3h4"/><rect x="4" y="6" width="16" height="14" rx="4"/><path d="M4 11H2v4h2M20 11h2v4h-2M9 16h6"/><circle cx="9" cy="11" r=".8"/><circle cx="15" cy="11" r=".8"/></svg>
         <span><strong>AI assistant</strong><small>Chat on Telegram <span aria-hidden="true">↗</span></small></span>
     </a>

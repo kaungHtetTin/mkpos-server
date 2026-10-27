@@ -16,8 +16,8 @@ use Illuminate\Validation\Rule;
 /** Owner-only Sales AI configuration, scoped reads and reviewable native actions. */
 class AiSalesAiManagement
 {
-    public const READS = ['get_sales_ai_settings', 'get_sales_ai_activity'];
-    public const OPERATIONS = ['manage_sales_ai_settings', 'manage_sales_ai_tools', 'manage_sales_ai_policies', 'manage_sales_ai_handover', 'manage_sales_ai_topups'];
+    public const READS = ['get_sales_ai_settings', 'get_sales_ai_activity', ...AiSalesTelegramManagement::READS];
+    public const OPERATIONS = ['manage_sales_ai_settings', 'manage_sales_ai_tools', 'manage_sales_ai_policies', 'manage_sales_ai_handover', 'manage_sales_ai_topups', ...AiSalesTelegramManagement::OPERATIONS];
 
     public function ready(): bool { return Schema::hasTable('sales_ai_settings') && Schema::hasTable('sales_ai_topups') && Schema::hasColumn('sales_ai_settings', 'sales_policies'); }
     private function business(): int
@@ -32,6 +32,7 @@ class AiSalesAiManagement
     public function read(string $tool, array $a): array
     {
         $business = $this->business();
+        if (in_array($tool, AiSalesTelegramManagement::READS, true)) return app(AiSalesTelegramManagement::class)->read($tool, $a);
         if ($tool === 'get_sales_ai_settings') {
             $this->keys($a, []);
             $wallet = $this->table('sales_ai_wallets')->first();
@@ -93,7 +94,9 @@ class AiSalesAiManagement
 
     public function build(string $operation, array $a, int $userId): array
     {
-        $business = $this->business(); $settings = app(Settings::class)->get($business);
+        $business = $this->business();
+        if (in_array($operation, AiSalesTelegramManagement::OPERATIONS, true)) return app(AiSalesTelegramManagement::class)->build($operation, $a);
+        $settings = app(Settings::class)->get($business);
         if ($operation === 'manage_sales_ai_handover') {
             $targets = $this->targets($a);
             abort_if($a['mode'] === 'ai' && !$settings['enabled'], 422, 'Enable Sales AI before handing conversations to AI.');
@@ -144,6 +147,7 @@ class AiSalesAiManagement
     public function unchanged(string $operation, array $p, array $before): bool
     {
         $business = $this->business();
+        if (in_array($operation, AiSalesTelegramManagement::OPERATIONS, true)) return app(AiSalesTelegramManagement::class)->unchanged($p, $before);
         if ($operation === 'manage_sales_ai_topups') return $this->topup($p['input']['record_id']) == $before;
         $settings = app(Settings::class)->get($business);
         return $operation === 'manage_sales_ai_handover' ? $before == ['settings_version' => $settings['version'], 'targets' => $this->targets($p['input'])] : $before['settings'] == $settings;
@@ -152,6 +156,7 @@ class AiSalesAiManagement
     public function execute(string $operation, array $p, int $userId): array
     {
         $business = $this->business();
+        if (in_array($operation, AiSalesTelegramManagement::OPERATIONS, true)) return app(AiSalesTelegramManagement::class)->execute($operation, $p, $userId);
         if ($operation === 'manage_sales_ai_handover') {
             $count = 0;
             foreach ($p['targets'] as $row) if ($row['sales_ai_mode'] !== $p['input']['mode']) { app(Chat::class)->handoff((object) $row, $p['input']['mode'], (int) $row['sales_ai_version']); $count++; }

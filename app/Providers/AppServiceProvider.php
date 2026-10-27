@@ -25,6 +25,7 @@ class AppServiceProvider extends ServiceProvider
     {
         $this->app->singleton(AiProviderCredentials::class);
         $this->app->singleton(TypingIndicator::class);
+        $this->app->singleton(\App\Services\SalesTelegram\Typing::class);
         $this->app->singleton(TenantContext::class);
         Connection::resolverFor('mysql', fn ($connection, $database, $prefix, $config) => new TenantMySqlConnection(
             $connection,

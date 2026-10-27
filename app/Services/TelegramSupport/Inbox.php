@@ -111,7 +111,7 @@ class Inbox
                     }
                 }
                 if (in_array($command, ['start', 'help'], true) && ! str_contains($notice, KaungKaungService::NAME)) {
-                    $notice = KaungKaungService::NAME." - MKPOS customer-service and help AI.\n".$notice;
+                    $notice = KaungKaungService::NAME.($language === 'my' ? " — MKPOS ဖောက်သည်ဝန်ဆောင်မှုနှင့် အကူအညီပေး AI။\n" : " - MKPOS customer-service and help AI.\n").$notice;
                 }
                 if (in_array($command, ['start', 'help', 'privacy'], true) && $settings['images_enabled'] && $settings['admin_group_chat_id']) {
                     $notice .= $language === 'my'

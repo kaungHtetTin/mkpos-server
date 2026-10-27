@@ -1,5 +1,11 @@
 # MKPOS in-app AI assistant
 
+## Shared agent awareness
+
+`App\Ai\Skills\AgentAwareness` supplies one public role directory to Wyne Wyne, each business's Sales AI, Kaung Kaung and the internal image/payment/theme helpers. SalesImageRepresentative inherits it from SalesRepresentative. Agents can explain who handles business operations, shop purchases and private orders, public MKPOS help, or manual Office review. Each keeps its own identity, including the shop owner's configured Sales AI name, and replies in the user's language.
+
+This skill adds no tools, shared memory, account linking, messaging, delegation or permissions. Referrals are guidance unless an existing authorized tool confirms an actual handoff/report. Agents must use current verified links/settings, preserve owner/staff and customer/tenant boundaries, and never claim another agent received private history or files. Internal helpers retain their bounded task and structured output. Existing payment matching, manual approval and customer/owner confirmation rules still apply. No migration or frontend build is required; deploy the PHP changes and restart long-running PHP queue workers to load the new prompts. Cron-only commands load them on their next invocation.
+
 ## Dedicated Wyne Wyne worker
 
 Wyne Wyne uses the dedicated `wyne-wyne` database queue, separate from Sales AI

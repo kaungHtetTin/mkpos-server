@@ -70,6 +70,9 @@ class Settings
     {
         $this->locked($data['version'], function ($current) use ($data) {
             $token = filled($data['bot_token'] ?? null) ? trim($data['bot_token']) : $current['bot_token'];
+              if (Schema::hasTable('sales_telegram_connections') && ($botId=TelegramClient::idFor((string)$token)) && DB::table('sales_telegram_connections')->where('bot_id',$botId)->exists()) {
+                  throw ValidationException::withMessages(['bot_token'=>'This bot is already connected to a business Sales AI. Use a separate platform support bot.']);
+              }
             $url = $data['webhook_url'] ?? '';
             if ($data['enabled'] && ! TelegramClient::idFor((string) $token)) {
                 throw ValidationException::withMessages(['bot_token' => 'Add a valid bot token before enabling Telegram customer service.']);

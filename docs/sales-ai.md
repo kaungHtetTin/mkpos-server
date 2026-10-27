@@ -506,4 +506,25 @@ coverage is retained; these tools introduce no new navigation destination.
 
 Both individual and bulk handover now change handling mode for future messages only. They do not enqueue or replay the latest historical customer message. Existing queued work from earlier handling versions remains subject to the runner version guard. A newly submitted customer message in AI mode follows the normal enqueue path; retrying an existing message key does not create AI work.
 
+## Business Telegram Sales AI
+
+Owners configure a dedicated shop bot in **My Shop → Sales AI → Telegram bot** on desktop or mobile. Save its BotFather token, enable replies, test the connection, then register the displayed server-generated HTTPS webhook. `APP_URL` must point to the public Laravel entry point (including `/public` if the hosting layout requires it). Each business gets `/integrations/telegram/sales-ai/{connection-uuid}`. This bot must be separate from Kaung Kaung and other businesses. Tokens and webhook secrets are encrypted and never returned to the browser.
+
+Enable group replies, add the bot to each Telegram group, and approve each group in the same screen. Mentions/replies and independent daily/per-user limits are configurable per group. Group joining must be enabled in BotFather. Telegram privacy settings may require bot administrator status or privacy disabled followed by re-adding the bot for ordinary mentions. Groups expose published shop information only, with separate histories for each group participant and topic; checkout and account orders require private chat.
+
+Private customers can select exact products and quantities, tap **Continue checkout**, enter their own contact/fulfillment/payment details, review the native server quote, then press **Confirm order**. This supports the existing guest-order path without registration. Chat text or model tool calls cannot submit an order. Native stock, active payment methods, coupon, delivery, reservation, blocking and idempotency rules apply. Changed prices require a new review and confirmation. Tracking credentials remain encrypted on the server; guest order access is scoped to the originating Telegram customer. Payment is still subject to the shop's verification.
+
+Signed-in Shop customers can optionally choose **Link my Telegram account** in their web conversation, then open the one-use ten-minute Telegram link. This grants private read access to their own account orders for that business. `/unlink` removes account access and clears previous model context; `/reset` clears conversation context; `/cancel` abandons checkout. Neither command cancels already submitted orders. Account-owned orders stop being accessible after unlinking, including those created through Telegram.
+
+Telegram replies use the existing Sales AI wallet, tool permissions and `sales-ai` queue. The existing Sales AI worker sends replies and typing indicators; `sales-ai:process --limit=10` also drains pending Telegram deliveries when using the existing cron-only scheduler. No additional queue or Node worker is required. Cron-only deployments retain their existing scheduling delay. Ambiguous outbound deliveries are not automatically repeated; explicit Telegram rate-limit responses are retried. Owner text replies from Shop Chat are delivered to the matching Telegram conversation. This initial business Telegram transport supports text messages; photo/payment-proof uploads and order changes continue through the secure Shop app or a person.
+
+Deploy this migration specifically (do not run unrelated pending balance migrations as part of this feature):
+
+```sh
+php artisan migrate --path=database/migrations/2026_10_27_000004_create_sales_ai_telegram.php --force
+php artisan queue:restart
+```
+
+The established scheduler remains `php artisan schedule:run` every minute. For persistent hosting, the established Sales AI worker remains `php artisan queue:work sales-ai --queue=sales-ai --sleep=1 --tries=1 --timeout=600`. Follow the existing deployment's connection and worker supervision settings.
+
 The agent prompt explicitly identifies the current owner-configured assistant name, explains instructions and personality, and supplies owner-published sales policies. Public assistant identity takes precedence over names in old history. Human owner replies in history are marked as human context rather than unlabelled AI replies. Tool permissions and publication/privacy boundaries remain enforced.

@@ -19,6 +19,8 @@ class Connection
 
     public function inspect(#[\SensitiveParameter] array $settings): array
     {
+        abort_if(Schema::hasTable('sales_telegram_connections') && \Illuminate\Support\Facades\DB::table('sales_telegram_connections')
+            ->where('bot_id',TelegramClient::idFor((string)($settings['bot_token'] ?? '')))->exists(),422,'Use a dedicated MKPOS customer-service bot, separate from business Sales AI.');
         $client = new TelegramClient($settings);
         $id = $client->botId();
         $me = $client->call('getMe');

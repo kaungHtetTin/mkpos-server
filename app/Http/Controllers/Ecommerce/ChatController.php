@@ -4,9 +4,16 @@ namespace App\Http\Controllers\Ecommerce;
 
 use App\Http\Controllers\Controller;
 use App\Services\EcommerceService;
+use App\Services\PlatformCustomerAvatar;
+use App\Services\SalesAi\Chat;
+use App\Services\SalesAi\CustomerActions;
+use App\Services\SalesAi\Settings;
+use App\Services\ShopChatImages;
 use App\Services\ShopChatRealtime;
 use App\Services\ShopCustomerAccess;
+use App\Support\AppTime;
 use App\Tenancy\TenantContext;
+use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
@@ -16,8 +23,16 @@ class ChatController extends Controller
 {
     public function __construct(private ShopChatRealtime $realtime) {}
 
-    public function config(): array { return $this->realtime->settings(); }
-    public function ownerConfig(): array { return $this->config() + ['channel' => 'private-shop.chat.business.'.app(TenantContext::class)->requireId(), 'sales_ai_enabled' => app(\App\Services\SalesAi\Settings::class)->ready() && app(\App\Services\SalesAi\Settings::class)->get(app(TenantContext::class)->requireId())['enabled']]; }
+    public function config(): array
+    {
+        return $this->realtime->settings();
+    }
+
+    public function ownerConfig(): array
+    {
+        return $this->config() + ['channel' => 'private-shop.chat.business.'.app(TenantContext::class)->requireId(), 'sales_ai_enabled' => app(Settings::class)->ready() && app(Settings::class)->get(app(TenantContext::class)->requireId())['enabled']];
+    }
+
     public function customerInboxConfig(Request $request): array
     {
         return $this->config() + ['channel' => 'private-shop.chat.customer.'.$request->attributes->get('platform_customer')->id];
@@ -27,11 +42,20 @@ class ChatController extends Controller
     {
         $account = $request->attributes->get('platform_customer');
         DB::table('shop_chat_threads')->where('platform_customer_id', $account->id)->update(['customer_last_seen_at' => now()]);
+
         return ['ok' => true];
     }
 
-    public function ownerNotifications(Request $request): array { return $this->notifications($request, true); }
-    public function customerNotifications(Request $request): array { return $this->notifications($request, false); }
+    public function ownerNotifications(Request $request): array
+    {
+        return $this->notifications($request, true);
+    }
+
+    public function customerNotifications(Request $request): array
+    {
+        return $this->notifications($request, false);
+    }
+
     public function customerIndex(Request $request): array
     {
         abort_unless(config('shop_chat.enabled'), 403, 'Chat is currently unavailable.');
@@ -49,32 +73,41 @@ class ChatController extends Controller
         $items = $rows->take($limit)->map(function ($thread) {
             $messages = DB::table('shop_chat_messages')->where('thread_id', $thread->id);
             $latest = (clone $messages)->orderByDesc('id')->first();
+
             return ['uuid' => $thread->uuid, 'shop_name' => $thread->shop_name, 'slug' => $thread->slug,
                 'owner_active' => $this->view($thread)['owner_active'],
-                'updated_at' => \App\Support\AppTime::utc($latest?->created_at ?? $thread->updated_at),
+                'updated_at' => AppTime::utc($latest?->created_at ?? $thread->updated_at),
                 'product' => $latest?->product_snapshot ? json_decode($latest->product_snapshot, true) : null,
                 'preview' => $latest ? mb_substr($latest->body !== '' ? $latest->body : ($latest->product_snapshot ? 'Shared product' : 'Sent an image'), 0, 160) : '',
                 'unread_count' => (clone $messages)->where('sender', 'owner')->where('id', '>', $thread->customer_read_id)->count()];
         })->values();
+
         return ['items' => $items, 'has_more' => $rows->count() > $limit];
     }
 
     public function customerShow(Request $request, string $uuid): array
     {
         $thread = $this->thread($request, $uuid, false);
+
         return ['thread' => $this->view($thread) + [
             'shop_name' => DB::table('businesses')->where('id', $thread->business_id)->value('name'),
             'slug' => DB::table('storefront_settings')->where('business_id', $thread->business_id)->value('slug'),
         ]];
     }
+
     private function notifications(Request $request, bool $staff): array
     {
-        if (! config('shop_chat.enabled')) return ['enabled' => false, 'items' => [], 'cursor' => 0, 'unread_count' => 0];
+        if (! config('shop_chat.enabled')) {
+            return ['enabled' => false, 'items' => [], 'cursor' => 0, 'unread_count' => 0];
+        }
         $data = $request->validate(['after_id' => ['nullable', 'integer', 'min:0']]);
         $query = DB::table('shop_chat_messages as message')->join('shop_chat_threads as thread', 'thread.id', '=', 'message.thread_id')
             ->where('message.sender', $staff ? 'customer' : 'owner');
-        if ($staff) $query->where('thread.business_id', app(TenantContext::class)->requireId());
-        else $query->where('thread.platform_customer_id', $request->attributes->get('platform_customer')->id);
+        if ($staff) {
+            $query->where('thread.business_id', app(TenantContext::class)->requireId());
+        } else {
+            $query->where('thread.platform_customer_id', $request->attributes->get('platform_customer')->id);
+        }
         $latest = (int) (clone $query)->max('message.id');
         $readColumn = $staff ? 'thread.owner_read_id' : 'thread.customer_read_id';
         $unread = (clone $query)->whereColumn('message.id', '>', $readColumn)->count();
@@ -91,6 +124,7 @@ class ChatController extends Controller
                 'slug' => $row->slug, 'preview' => mb_substr($row->body !== '' ? $row->body : ($row->product_snapshot ? 'Shared product: '.(json_decode($row->product_snapshot, true)['name'] ?? 'Product') : 'Sent an image'), 0, 160),
             ])->values();
         }
+
         return ['enabled' => true, 'items' => $items, 'cursor' => $cursor, 'unread_count' => $unread, 'has_more' => $cursor < $latest];
     }
 
@@ -99,6 +133,7 @@ class ChatController extends Controller
         $count = DB::table('shop_chat_messages as message')->join('shop_chat_threads as thread', 'thread.id', '=', 'message.thread_id')
             ->where('thread.business_id', app(TenantContext::class)->requireId())->where('message.sender', 'customer')
             ->whereColumn('message.id', '>', 'thread.owner_read_id')->count();
+
         return ['unread_count' => $count];
     }
 
@@ -108,15 +143,19 @@ class ChatController extends Controller
         $store = app(EcommerceService::class)->store($slug);
         $account = $request->attributes->get('platform_customer');
         abort_unless($account, 401, 'Please sign in to your customer account.');
+
         return DB::transaction(function () use ($store, $account) {
             DB::table('storefront_settings')->where('id', $store->id)->lockForUpdate()->first();
             $thread = DB::table('shop_chat_threads')->where('business_id', $store->business_id)->where('platform_customer_id', $account->id)->first();
-            if ($thread) return ['thread' => $this->view($thread)];
+            if ($thread) {
+                return ['thread' => $this->view($thread)];
+            }
             $phone = $account->phone ?? '';
             abort_if(ShopCustomerAccess::blocked((int) $store->business_id, $phone, 'account:'.$account->id), 403, 'This shop is not accepting new chats from this customer.');
             $id = DB::table('shop_chat_threads')->insertGetId(['uuid' => (string) Str::uuid(), 'business_id' => $store->business_id,
                 'platform_customer_id' => $account->id, 'customer_name' => $account->name, 'phone' => $phone,
                 'created_at' => now(), 'updated_at' => now()]);
+
             return ['thread' => $this->view(DB::table('shop_chat_threads')->where('id', $id)->first())];
         });
     }
@@ -124,15 +163,16 @@ class ChatController extends Controller
     private function view(object $thread): array
     {
         $ownerSeen = DB::table('shop_chat_presence')->where('business_id', $thread->business_id)->value('owner_last_seen_at');
-        $active = fn ($value) => $value && \Carbon\Carbon::parse($value)->greaterThan(now()->subSeconds(60));
-        return \App\Support\AppTime::shopPayload(['timezone' => DB::table('businesses')->where('id', $thread->business_id)->value('timezone') ?: config('app.timezone'), 'uuid' => $thread->uuid, 'customer_name' => $thread->customer_name, 'phone' => $thread->phone,
-            'avatar_url' => \App\Services\PlatformCustomerAvatar::url(property_exists($thread, 'avatar_path') ? $thread->avatar_path : ($thread->platform_customer_id ? DB::table('platform_customers')->where('id', $thread->platform_customer_id)->value('avatar_path') : null)),
+        $active = fn ($value) => $value && Carbon::parse($value)->greaterThan(now()->subSeconds(60));
+
+        return AppTime::shopPayload(['timezone' => DB::table('businesses')->where('id', $thread->business_id)->value('timezone') ?: config('app.timezone'), 'uuid' => $thread->uuid, 'customer_name' => $thread->customer_name, 'phone' => $thread->phone,
+            'avatar_url' => PlatformCustomerAvatar::url(property_exists($thread, 'avatar_path') ? $thread->avatar_path : ($thread->platform_customer_id ? DB::table('platform_customers')->where('id', $thread->platform_customer_id)->value('avatar_path') : null)),
             'customer_key' => $thread->platform_customer_id ? 'account:'.$thread->platform_customer_id : null,
             'account_type' => $thread->platform_customer_id ? 'account' : 'guest', 'updated_at' => $thread->updated_at,
             'owner_read_id' => (int) $thread->owner_read_id, 'customer_read_id' => (int) $thread->customer_read_id,
             'customer_last_seen_at' => $thread->customer_last_seen_at,
             'customer_active' => (bool) $active($thread->customer_last_seen_at), 'owner_active' => (bool) $active($ownerSeen),
-            'owner_last_seen_at' => $ownerSeen] + app(\App\Services\SalesAi\Chat::class)->view($thread));
+            'owner_last_seen_at' => $ownerSeen] + app(Chat::class)->view($thread));
     }
 
     private function messageView(object $message): array
@@ -141,16 +181,25 @@ class ChatController extends Controller
         $data['is_ai'] = (bool) ($message->is_ai ?? false);
         $data['ai_name'] = $data['is_ai'] ? $message->ai_name : null;
         $data['sales_actions'] = $message->sales_actions ?? [];
-        $data['sales_content'] = !empty($message->sales_ai_content) ? json_decode($message->sales_ai_content, true) : null;
-        $data['action_event'] = !empty($message->sales_ai_action_event) ? array_intersect_key(json_decode($message->sales_ai_action_event, true), array_flip(['action_id', 'kind', 'operation', 'outcome'])) : null;
+        $data['sales_content'] = ! empty($message->sales_ai_content) ? json_decode($message->sales_ai_content, true) : null;
+        $data['action_event'] = ! empty($message->sales_ai_action_event) ? array_intersect_key(json_decode($message->sales_ai_action_event, true), array_flip(['action_id', 'kind', 'operation', 'outcome'])) : null;
         $data['product'] = $message->product_snapshot ? json_decode($message->product_snapshot, true) : null;
         $data['image'] = $message->image_expires_at ? ['status' => ! $message->image_path || $message->image_deleted_at || now()->greaterThanOrEqualTo($message->image_expires_at) ? 'expired' : 'available',
             'expires_at' => $message->image_expires_at, 'mime' => $message->image_mime] : null;
-        return \App\Support\AppTime::shopPayload($data);
+
+        return AppTime::shopPayload($data);
     }
 
-    public function customerImage(Request $request, string $uuid, int $id) { return $this->image($request, $uuid, $id, false); }
-    public function ownerImage(Request $request, string $uuid, int $id) { return $this->image($request, $uuid, $id, true); }
+    public function customerImage(Request $request, string $uuid, int $id)
+    {
+        return $this->image($request, $uuid, $id, false);
+    }
+
+    public function ownerImage(Request $request, string $uuid, int $id)
+    {
+        return $this->image($request, $uuid, $id, true);
+    }
+
     private function image(Request $request, string $uuid, int $id, bool $staff)
     {
         $thread = $this->thread($request, $uuid, $staff);
@@ -158,13 +207,16 @@ class ChatController extends Controller
         abort_unless($message && $message->image_expires_at, 404);
         abort_if(! $message->image_path || $message->image_deleted_at || now()->greaterThanOrEqualTo($message->image_expires_at), 410, 'Image expired.');
         abort_unless(Storage::disk('local')->exists($message->image_path), 404, 'Image unavailable.');
+
         return response()->file(Storage::disk('local')->path($message->image_path), ['Content-Type' => $message->image_mime, 'Cache-Control' => 'private, no-store', 'X-Content-Type-Options' => 'nosniff']);
     }
 
     private function thread(Request $request, string $uuid, bool $staff): object
     {
         $query = DB::table('shop_chat_threads')->where('uuid', $uuid);
-        if ($staff) $query->where('business_id', app(TenantContext::class)->requireId());
+        if ($staff) {
+            $query->where('business_id', app(TenantContext::class)->requireId());
+        }
         $thread = $query->first();
         abort_unless($thread, 404, 'Conversation unavailable.');
         if (! $staff) {
@@ -172,6 +224,7 @@ class ChatController extends Controller
             abort_unless($account, 401, 'Please sign in to your customer account.');
             abort_unless($thread->platform_customer_id && (int) $account->id === (int) $thread->platform_customer_id, 403, 'Conversation unavailable.');
         }
+
         return $thread;
     }
 
@@ -181,10 +234,14 @@ class ChatController extends Controller
         $businessId = app(TenantContext::class)->requireId();
         $query = DB::table('shop_chat_threads')->where('business_id', $businessId);
         $unreadOnly = ($data['filter'] ?? 'all') === 'unread';
-        if ($unreadOnly) $query->whereExists(fn ($messages) => $messages->selectRaw('1')->from('shop_chat_messages as unread_message')
-            ->whereColumn('unread_message.thread_id', 'shop_chat_threads.id')->where('unread_message.sender', 'customer')
-            ->whereColumn('unread_message.id', '>', 'shop_chat_threads.owner_read_id'));
-        if ($q = trim((string) $request->query('q'))) $query->where(fn ($where) => $where->where('customer_name', 'like', '%'.$q.'%')->orWhere('phone', 'like', '%'.$q.'%'));
+        if ($unreadOnly) {
+            $query->whereExists(fn ($messages) => $messages->selectRaw('1')->from('shop_chat_messages as unread_message')
+                ->whereColumn('unread_message.thread_id', 'shop_chat_threads.id')->where('unread_message.sender', 'customer')
+                ->whereColumn('unread_message.id', '>', 'shop_chat_threads.owner_read_id'));
+        }
+        if ($q = trim((string) $request->query('q'))) {
+            $query->where(fn ($where) => $where->where('customer_name', 'like', '%'.$q.'%')->orWhere('phone', 'like', '%'.$q.'%'));
+        }
         $total = (clone $query)->count();
         $unreadThreads = $unreadOnly ? (clone $query)->pluck('uuid') : null;
         $limit = max(1, min(100, (int) $request->query('limit', 25)));
@@ -199,48 +256,83 @@ class ChatController extends Controller
         $batch = $query->orderByDesc('updated_at')->orderByDesc('id')->offset($cursor ? 0 : max(0, (int) $request->query('offset', 0)))->limit($limit + 1)->get();
         $rows = $batch->take($limit);
         $avatars = DB::table('platform_customers')->whereIn('id', $rows->pluck('platform_customer_id')->filter())->pluck('avatar_path', 'id');
-        foreach ($rows as $thread) $thread->avatar_path = $avatars[$thread->platform_customer_id] ?? null;
+        foreach ($rows as $thread) {
+            $thread->avatar_path = $avatars[$thread->platform_customer_id] ?? null;
+        }
         $latestIds = DB::table('shop_chat_messages')->whereIn('thread_id', $rows->pluck('id'))->groupBy('thread_id')->selectRaw('MAX(id) as id')->pluck('id');
         $latest = DB::table('shop_chat_messages')->whereIn('id', $latestIds)->get()->keyBy('thread_id');
         $last = $rows->last();
+
         return ['unread_threads' => $unreadThreads,
             'active_customers' => DB::table('shop_chat_threads')->where('business_id', $businessId)->where('customer_last_seen_at', '>', now()->subSeconds(60))->pluck('uuid'),
             'items' => $rows->map(fn ($thread) => $this->view($thread) + ['id' => $thread->uuid,
-            'last_message' => isset($latest[$thread->id]) ? $this->messageView($latest[$thread->id]) : null,
-            'unread' => DB::table('shop_chat_messages')->where('thread_id', $thread->id)->where('sender', 'customer')->where('id', '>', $thread->owner_read_id)->count()]), 'total' => $total,
+                'last_message' => isset($latest[$thread->id]) ? $this->messageView($latest[$thread->id]) : null,
+                'unread' => DB::table('shop_chat_messages')->where('thread_id', $thread->id)->where('sender', 'customer')->where('id', '>', $thread->owner_read_id)->count()]), 'total' => $total,
             'next_cursor' => $batch->count() > $limit && $last ? base64_encode(json_encode(['updated_at' => $last->updated_at, 'id' => $last->id])) : null,
             'channel' => 'private-shop.chat.business.'.$businessId];
     }
 
-    public function customerMessages(Request $request, string $uuid): array { return $this->messages($request, $uuid, false); }
-    public function ownerMessages(Request $request, string $uuid): array { return $this->messages($request, $uuid, true); }
+    public function customerMessages(Request $request, string $uuid): array
+    {
+        return $this->messages($request, $uuid, false);
+    }
+
+    public function ownerMessages(Request $request, string $uuid): array
+    {
+        return $this->messages($request, $uuid, true);
+    }
+
     private function messages(Request $request, string $uuid, bool $staff): array
     {
         $thread = $this->thread($request, $uuid, $staff);
         $data = $request->validate(['after_id' => ['nullable', 'integer', 'min:0'], 'before_id' => ['nullable', 'integer', 'min:1']]);
         $query = DB::table('shop_chat_messages')->where('thread_id', $thread->id);
-        if (!empty($data['after_id'])) $query->where('id', '>', $data['after_id']);
-        if (!empty($data['before_id'])) $query->where('id', '<', $data['before_id']);
-        $ascending = !empty($data['after_id']);
+        if (! empty($data['after_id'])) {
+            $query->where('id', '>', $data['after_id']);
+        }
+        if (! empty($data['before_id'])) {
+            $query->where('id', '<', $data['before_id']);
+        }
+        $ascending = ! empty($data['after_id']);
         $items = $query->orderBy('id', $ascending ? 'asc' : 'desc')->limit(51)->get();
         $hasMore = $items->count() > 50;
         $items = $items->take(50);
-        $actions = app(\App\Services\SalesAi\CustomerActions::class)->summariesFor($items->where('is_ai', true)->pluck('id')->all());
-        foreach ($items as $message) $message->sales_actions = $actions[$message->id] ?? [];
+        $actions = app(CustomerActions::class)->summariesFor($items->where('is_ai', true)->pluck('id')->all());
+        foreach ($items as $message) {
+            $message->sales_actions = $actions[$message->id] ?? [];
+        }
+
         return ['thread' => $this->view($thread), 'items' => ($ascending ? $items : $items->reverse())->map(fn ($message) => $this->messageView($message))->values(), 'has_more' => $hasMore];
     }
 
-    public function customerSend(Request $request, string $uuid): array { return $this->send($request, $uuid, false); }
-    public function ownerSend(Request $request, string $uuid): array { return $this->send($request, $uuid, true); }
+    public function customerSend(Request $request, string $uuid): array
+    {
+        return $this->send($request, $uuid, false);
+    }
+
+    public function ownerSend(Request $request, string $uuid): array
+    {
+        return $this->send($request, $uuid, true);
+    }
+
     private function productStore(object $thread): object
     {
         $slug = DB::table('storefront_settings')->where('business_id', $thread->business_id)->value('slug');
         abort_unless($slug, 404, 'Shop unavailable.');
+
         return app(EcommerceService::class)->store($slug);
     }
 
-    public function ownerProducts(Request $request, string $uuid): array { return $this->products($request, $uuid, true); }
-    public function customerProducts(Request $request, string $uuid): array { return $this->products($request, $uuid, false); }
+    public function ownerProducts(Request $request, string $uuid): array
+    {
+        return $this->products($request, $uuid, true);
+    }
+
+    public function customerProducts(Request $request, string $uuid): array
+    {
+        return $this->products($request, $uuid, false);
+    }
+
     private function products(Request $request, string $uuid, bool $staff): array
     {
         $thread = $this->thread($request, $uuid, $staff);
@@ -248,9 +340,12 @@ class ChatController extends Controller
         $store = $this->productStore($thread);
         $commerce = app(EcommerceService::class);
         $query = $commerce->catalogQuery($store)->where('p.id', '>', $data['after_id'] ?? 0);
-        if ($q = trim($data['q'] ?? '')) $query->where('p.name', 'like', '%'.$q.'%');
+        if ($q = trim($data['q'] ?? '')) {
+            $query->where('p.name', 'like', '%'.$q.'%');
+        }
         $rows = $query->orderBy('p.id')->limit(21)->get();
         $items = $rows->take(20)->map(fn ($product) => $commerce->productView($store, $product))->values();
+
         return ['items' => $items, 'next_cursor' => $rows->count() > 20 ? $items->last()['id'] : null];
     }
 
@@ -260,53 +355,71 @@ class ChatController extends Controller
         $commerce = app(EcommerceService::class);
         $product = $commerce->catalogQuery($store)->where('p.id', $productId)->first();
         abort_unless($product, 422, 'This product is not available in this shop. Choose another published product.');
+
         return array_intersect_key($commerce->productView($store, $product), array_flip(['id', 'name', 'price', 'currency', 'unit_name', 'photo_url', 'store_slug']));
     }
+
     private function send(Request $request, string $uuid, bool $staff): array
     {
         abort_unless(config('shop_chat.enabled'), 403, 'Chat is currently unavailable.');
         $thread = $this->thread($request, $uuid, $staff);
         $data = $request->validate(['body' => ['nullable', 'string', 'max:2000'], 'client_id' => ['required', 'uuid'],
-            'product_id' => ['nullable', 'integer', 'min:1'],
+            'product_id' => ['nullable', 'integer', 'min:1'], 'language' => ['sometimes', 'nullable', 'in:en,my'],
             'image' => ['nullable', 'image', 'mimes:jpeg,jpg,png,webp', 'max:2048', 'dimensions:max_width=4096,max_height=4096']]);
+        $language = $data['language'] ?? null;
         $file = $request->file('image');
         $data = ['body' => trim($data['body'] ?? ''), 'client_id' => $data['client_id'], 'product_id' => isset($data['product_id']) ? (int) $data['product_id'] : null];
         abort_unless($data['body'] !== '' || $file || $data['product_id'], 422, 'Enter a message or attach an image or product.');
         $hash = $file ? hash_file('sha256', $file->getRealPath()) : null;
         $storedPath = null;
-        try { $message = DB::transaction(function () use ($thread, $data, $staff, $file, $hash, &$storedPath) {
-            $currentThread = DB::table('shop_chat_threads')->where('id', $thread->id)->lockForUpdate()->first();
-            $existing = DB::table('shop_chat_messages')->where('thread_id', $thread->id)->where('client_id', $data['client_id'])->first();
-            if ($existing) {
-                abort_unless($existing->sender === ($staff ? 'owner' : 'customer') && $existing->body === $data['body'] && $existing->image_hash === $hash && ($existing->product_id === null ? null : (int) $existing->product_id) === $data['product_id'], 409, 'This message key was already used.');
-                return $existing;
-            }
-            abort_if(! $staff && ShopCustomerAccess::blocked((int) $thread->business_id, $thread->phone, $thread->platform_customer_id ? 'account:'.$thread->platform_customer_id : null), 403, 'This shop is not accepting new messages from this customer.');
-            $image = [];
-            if ($data['product_id']) $data['product_snapshot'] = json_encode($this->productSnapshot($thread, $data['product_id']), JSON_UNESCAPED_UNICODE);
-            if ($file) {
-                $storedPath = app(\App\Services\ShopChatImages::class)->store($file, (int) $thread->business_id);
-                abort_unless($storedPath, 503, 'Unable to save the image. Please try again.');
-                $image = ['image_path' => $storedPath, 'image_mime' => 'image/webp', 'image_hash' => $hash, 'image_expires_at' => now()->addDays(14)];
-            }
-            $id = DB::table('shop_chat_messages')->insertGetId($data + $image + ['thread_id' => $thread->id, 'sender' => $staff ? 'owner' : 'customer', 'created_at' => now()]);
-            DB::table('shop_chat_threads')->where('id', $thread->id)->update(['updated_at' => now()]);
-            $saved = DB::table('shop_chat_messages')->where('id', $id)->first();
-            if (app(\App\Services\SalesAi\Settings::class)->ready()) {
-                if ($staff) {
-                    DB::table('shop_chat_threads')->where('id', $thread->id)->update(['sales_ai_mode' => 'human', 'sales_ai_version' => $currentThread->sales_ai_version + 1, 'sales_ai_handoff_reason' => null]);
-                } else app(\App\Services\SalesAi\Chat::class)->enqueue($currentThread, $saved);
-            }
-            return $saved;
-        }); } catch (\Throwable $error) { if ($storedPath) Storage::disk('local')->delete($storedPath); throw $error; }
+        try {
+            $message = DB::transaction(function () use ($thread, $data, $staff, $file, $hash, $language, &$storedPath) {
+                $currentThread = DB::table('shop_chat_threads')->where('id', $thread->id)->lockForUpdate()->first();
+                $existing = DB::table('shop_chat_messages')->where('thread_id', $thread->id)->where('client_id', $data['client_id'])->first();
+                if ($existing) {
+                    abort_unless($existing->sender === ($staff ? 'owner' : 'customer') && $existing->body === $data['body'] && $existing->image_hash === $hash && ($existing->product_id === null ? null : (int) $existing->product_id) === $data['product_id'], 409, 'This message key was already used.');
+
+                    return $existing;
+                }
+                abort_if(! $staff && ShopCustomerAccess::blocked((int) $thread->business_id, $thread->phone, $thread->platform_customer_id ? 'account:'.$thread->platform_customer_id : null), 403, 'This shop is not accepting new messages from this customer.');
+                $image = [];
+                if ($data['product_id']) {
+                    $data['product_snapshot'] = json_encode($this->productSnapshot($thread, $data['product_id']), JSON_UNESCAPED_UNICODE);
+                }
+                if ($file) {
+                    $storedPath = app(ShopChatImages::class)->store($file, (int) $thread->business_id);
+                    abort_unless($storedPath, 503, 'Unable to save the image. Please try again.');
+                    $image = ['image_path' => $storedPath, 'image_mime' => 'image/webp', 'image_hash' => $hash, 'image_expires_at' => now()->addDays(14)];
+                }
+                $id = DB::table('shop_chat_messages')->insertGetId($data + $image + ['thread_id' => $thread->id, 'sender' => $staff ? 'owner' : 'customer', 'created_at' => now()]);
+                DB::table('shop_chat_threads')->where('id', $thread->id)->update(['updated_at' => now()]);
+                $saved = DB::table('shop_chat_messages')->where('id', $id)->first();
+                if (app(Settings::class)->ready()) {
+                    if ($staff) {
+                        DB::table('shop_chat_threads')->where('id', $thread->id)->update(['sales_ai_mode' => 'human', 'sales_ai_version' => $currentThread->sales_ai_version + 1, 'sales_ai_handoff_reason' => null]);
+                    } else {
+                        app(Chat::class)->enqueue($currentThread, $saved, $language);
+                    }
+                }
+
+                return $saved;
+            });
+        } catch (\Throwable $error) {
+            if ($storedPath) {
+                Storage::disk('local')->delete($storedPath);
+            } throw $error;
+        }
         $this->realtime->changed($thread, (int) $message->id);
+        app(\App\Services\SalesTelegram\Delivery::class)->stage($thread, (int)$message->id);
+
         return ['message' => $this->messageView($message), 'thread' => $this->view(DB::table('shop_chat_threads')->where('id', $thread->id)->first())];
     }
 
     public function customerHandoff(Request $request, string $uuid): array
     {
         $thread = $this->thread($request, $uuid, false);
-        return ['thread' => $this->view(app(\App\Services\SalesAi\Chat::class)->handoff($thread, 'waiting_owner'))];
+
+        return ['thread' => $this->view(app(Chat::class)->handoff($thread, 'waiting_owner'))];
     }
 
     public function ownerHandoffAll(Request $request): array
@@ -314,7 +427,8 @@ class ChatController extends Controller
         $businessId = app(TenantContext::class)->requireId();
         $data = $request->validate(['selected_uuid' => ['nullable', 'uuid']]);
         $selected = empty($data['selected_uuid']) ? null : DB::table('shop_chat_threads')->where('business_id', $businessId)->where('uuid', $data['selected_uuid'])->firstOrFail();
-        $count = app(\App\Services\SalesAi\Chat::class)->handoffAll($businessId);
+        $count = app(Chat::class)->handoffAll($businessId);
+
         return ['updated_count' => $count, 'thread' => $selected ? $this->view(DB::table('shop_chat_threads')->where('id', $selected->id)->first()) : null];
     }
 
@@ -322,22 +436,35 @@ class ChatController extends Controller
     {
         $thread = $this->thread($request, $uuid, true);
         $data = $request->validate(['mode' => ['required', 'in:ai,human'], 'version' => ['required', 'integer', 'min:1']]);
-        return ['thread' => $this->view(app(\App\Services\SalesAi\Chat::class)->handoff($thread, $data['mode'], (int) $data['version']))];
+
+        return ['thread' => $this->view(app(Chat::class)->handoff($thread, $data['mode'], (int) $data['version']))];
     }
 
-    public function ownerRead(Request $request, string $uuid): array { return $this->read($request, $uuid, true); }
+    public function ownerRead(Request $request, string $uuid): array
+    {
+        return $this->read($request, $uuid, true);
+    }
+
     public function ownerPresence(): array
     {
         DB::table('shop_chat_presence')->updateOrInsert(['business_id' => app(TenantContext::class)->requireId()], ['owner_last_seen_at' => now()]);
+
         return ['ok' => true];
     }
+
     public function customerPresence(Request $request, string $uuid): array
     {
         $thread = $this->thread($request, $uuid, false);
         DB::table('shop_chat_threads')->where('id', $thread->id)->update(['customer_last_seen_at' => now()]);
+
         return ['ok' => true];
     }
-    public function customerRead(Request $request, string $uuid): array { return $this->read($request, $uuid, false); }
+
+    public function customerRead(Request $request, string $uuid): array
+    {
+        return $this->read($request, $uuid, false);
+    }
+
     private function read(Request $request, string $uuid, bool $staff): array
     {
         $thread = $this->thread($request, $uuid, $staff);
@@ -345,12 +472,23 @@ class ChatController extends Controller
         abort_unless(DB::table('shop_chat_messages')->where('thread_id', $thread->id)->where('id', $data['message_id'])->exists(), 422);
         $column = $staff ? 'owner_read_id' : 'customer_read_id';
         $changed = DB::table('shop_chat_threads')->where('id', $thread->id)->where($column, '<', $data['message_id'])->update([$column => $data['message_id']]);
-        if ($changed) $this->realtime->changed($thread, (int) $data['message_id']);
+        if ($changed) {
+            $this->realtime->changed($thread, (int) $data['message_id']);
+        }
+
         return ['ok' => true];
     }
 
-    public function customerAuth(Request $request): array { return $this->authorizeChannel($request, false); }
-    public function ownerAuth(Request $request): array { return $this->authorizeChannel($request, true); }
+    public function customerAuth(Request $request): array
+    {
+        return $this->authorizeChannel($request, false);
+    }
+
+    public function ownerAuth(Request $request): array
+    {
+        return $this->authorizeChannel($request, true);
+    }
+
     private function authorizeChannel(Request $request, bool $staff): array
     {
         $data = $request->validate(['channel_name' => ['required', 'string', 'max:150']]);
@@ -358,9 +496,12 @@ class ChatController extends Controller
         if (! $staff && $channel === 'private-shop.chat.customer.'.$request->attributes->get('platform_customer')->id) {
             return $this->realtime->auth($channel, ['role' => 'customer', 'customer_id' => (int) $request->attributes->get('platform_customer')->id]);
         }
-        if ($staff && $channel === 'private-shop.chat.business.'.app(TenantContext::class)->requireId()) return $this->realtime->auth($channel, ['role' => 'owner', 'business_id' => app(TenantContext::class)->requireId()]);
+        if ($staff && $channel === 'private-shop.chat.business.'.app(TenantContext::class)->requireId()) {
+            return $this->realtime->auth($channel, ['role' => 'owner', 'business_id' => app(TenantContext::class)->requireId()]);
+        }
         abort_unless(preg_match('/^private-shop\.chat\.thread\.([a-f0-9-]{36})$/', $channel, $matches), 403);
         $thread = $this->thread($request, $matches[1], $staff);
+
         return $this->realtime->auth($channel, ['role' => $staff ? 'owner' : 'customer', 'business_id' => (int) $thread->business_id]);
     }
 }

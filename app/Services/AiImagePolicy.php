@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Support\AiLocale;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
@@ -16,27 +17,26 @@ class AiImagePolicy
             ...array_fill_keys(['amount', 'currency', 'provider', 'recipient_name', 'recipient_account', 'transaction_reference', 'paid_at'], 'present|nullable|string|max:200')])->validate();
     }
 
-    public function reply(array &$report): string
+    public function reply(array &$report, string $language = 'en'): string
     {
         if ($report['kind'] === 'unrelated') {
-            return 'This image is not related to the MKPOS system.';
+            return AiLocale::text('unrelated', $language);
         }
         if ($report['kind'] !== 'receipt') {
             return $report['summary'];
         }
         $report['payment_method_check'] = $this->paymentMethod($report);
-        $reply = "Visible subscription receipt details — manual review required.\n";
+        $reply = AiLocale::text('receipt_heading', $language)."\n";
         foreach (['amount', 'currency', 'provider', 'recipient_name', 'recipient_account', 'transaction_reference', 'paid_at', 'payment_status'] as $field) {
-            $reply .= str_replace('_', ' ', $field).': '.($report[$field] ?: 'Unknown')."\n";
+            $value = $report[$field] ?: AiLocale::text('unknown', $language);
+            if ($field === 'payment_status') {
+                $value = AiLocale::text($report[$field] ?: 'unknown', $language);
+            }
+            $reply .= AiLocale::text($field, $language).': '.$value."\n";
         }
-        $reply .= match ($report['payment_method_check']['status']) {
-            'matches_active_recipient' => 'The visible recipient details match a currently active MKPOS subscription payment method.',
-            'does_not_match_active_recipient' => 'The visible recipient details do not match any currently active MKPOS subscription payment method. Contact MKPOS support before making another payment.',
-            'no_active_methods' => 'No active MKPOS subscription payment method is currently configured. Please contact MKPOS support.',
-            default => 'The payment method cannot be confirmed because recipient details are missing or masked. An administrator must check the original receipt.',
-        };
+        $reply .= AiLocale::text($report['payment_method_check']['status'], $language);
 
-        return $reply."\nFunds and receipt authenticity are not verified. An administrator must review the payment and subscription activation.";
+        return $reply."\n".AiLocale::text('manual_review', $language);
     }
 
     public function paymentMethod(array $report): array
@@ -64,12 +64,12 @@ class AiImagePolicy
     }
 
     /** Call only after the runner has rechecked current access, inside its publication transaction. */
-    public function office(object $run, array $report, string $channel): string
+    public function office(object $run, array $report, string $channel, string $language = 'en'): string
     {
         $key = hash('sha256', $channel.':'.$run->id);
         $existing = DB::table('error_reports')->where('image_escalation_key', $key)->first();
         if ($existing) {
-            return $this->reference($existing->id);
+            return $this->reference($existing->id, $language);
         }
         $screenshots = [];
         $path = null;
@@ -90,11 +90,11 @@ class AiImagePolicy
             $id = DB::table('error_reports')->insertGetId(['business_id' => $run->business_id,
                 'user_id' => $channel === 'wyne_wyne' ? $run->user_id : null,
                 'source' => 'assistant', 'app' => $channel === 'wyne_wyne' ? $run->app : 'shop',
-                'image_escalation_key' => $key, 'title' => 'Unresolved MKPOS screenshot — '.$channel,
+                'image_escalation_key' => $key, 'title' => AiLocale::text('office_report_title', $language, ['agent' => $channel === 'wyne_wyne' ? 'Wyne Wyne' : 'Sales AI']),
                 'description' => $report['summary'], 'screenshots' => json_encode($screenshots, JSON_THROW_ON_ERROR),
                 'created_at' => now('UTC'), 'updated_at' => now('UTC')]);
 
-            return $this->reference($id);
+            return $this->reference($id, $language);
         } catch (\Throwable $error) {
             if ($path) {
                 Storage::disk('local')->delete($path);
@@ -103,8 +103,8 @@ class AiImagePolicy
         }
     }
 
-    private function reference(int $id): string
+    private function reference(int $id, string $language): string
     {
-        return 'I cannot reliably explain this MKPOS error. Report ERR-'.str_pad((string) $id, 6, '0', STR_PAD_LEFT).' was submitted to the admin Office for review.';
+        return AiLocale::text('office_submitted', $language, ['reference' => 'ERR-'.str_pad((string) $id, 6, '0', STR_PAD_LEFT)]);
     }
 }

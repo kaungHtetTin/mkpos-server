@@ -30,7 +30,7 @@ class TelegramClient
     /** Only fixed Telegram methods; never accept URLs, destinations or tokens from the model. */
     public function call(string $method, array $data = [], ?int $expectedBotId = null): array
     {
-        if (! in_array($method, ['getMe', 'getWebhookInfo', 'setWebhook', 'sendMessage', 'sendChatAction', 'getFile', 'sendPhoto', 'sendDocument'], true)) {
+        if (! in_array($method, ['getMe', 'getWebhookInfo', 'setWebhook', 'sendMessage', 'sendChatAction', 'answerCallbackQuery', 'getFile', 'sendPhoto', 'sendDocument'], true)) {
             throw new \InvalidArgumentException('Unsupported Telegram operation.');
         }
         $settings = $this->override ?? app(Settings::class)->get();
@@ -107,6 +107,13 @@ class TelegramClient
             // Never chain a transport exception: its URL includes the bot token.
             throw new \RuntimeException('Telegram image could not be read');
         }
+    }
+
+    public function errorNotice(int $chatId, int $threadId, int $botId, string $text): array
+    {
+        return $this->call('sendMessage', ['chat_id' => $chatId, 'text' => mb_substr($text, 0, 3500),
+            'protect_content' => true, ...($threadId > 0 ? ['message_thread_id' => $threadId] : []),
+        ], $botId);
     }
 
     public function receiptNotice(int $chatId, int $threadId, int $botId, string $fileId, string $source, string $caption): array

@@ -11,6 +11,7 @@ use App\Services\AiProviderCredentials;
 use App\Services\EcommerceService;
 use App\Services\ShopChatRealtime;
 use App\Services\ShopCustomerAccess;
+use App\Support\AiLocale;
 use GuzzleHttp\Exception\ConnectException;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
@@ -32,8 +33,10 @@ class Runner
             return false;
         }
         $settings = app(Settings::class)->get((int) $run->business_id);
+        $thread = app(\App\Services\SalesTelegram\Identity::class)->context($thread);
 
         return $settings['enabled'] && $settings['version'] === (int) $run->settings_version
+            && app(\App\Services\SalesTelegram\Inbox::class)->current($thread, (int)$run->trigger_message_id)
             && app(EcommerceService::class)->eligible((int) $run->business_id)
             && ! ShopCustomerAccess::blocked((int) $run->business_id, $thread->phone, $thread->platform_customer_id ? 'account:'.$thread->platform_customer_id : null);
     }
@@ -102,6 +105,7 @@ class Runner
                 $trigger = DB::table('shop_chat_messages')->where('id', $run->trigger_message_id)->where('thread_id', $run->thread_id)->firstOrFail();
                 $history = DB::table('shop_chat_messages')->where('thread_id', $run->thread_id)->where('id', '<', $trigger->id)->orderByDesc('id')->limit(8)->get()->reverse()->map(fn ($message) => new Message($message->sender === 'customer' ? 'user' : 'assistant', ($message->sender === 'owner' && ! $message->is_ai ? 'Human shop representative (historical context, not an AI reply):'.\PHP_EOL : '').mb_strcut($message->body, 0, 800, 'UTF-8')))->all();
                 $actionEvent = ! empty($trigger->sales_ai_action_event) ? json_decode($trigger->sales_ai_action_event, true) : null;
+                $thread = app(\App\Services\SalesTelegram\Identity::class)->context($thread);
                 $agent = new SalesRepresentative($thread, app(Settings::class)->get((int) $run->business_id), $history, runId: $run->id, messageId: (int) $trigger->id, actionEvent: $actionEvent);
                 $attachments = [];
                 if ($trigger->image_path && ! $trigger->image_deleted_at && $trigger->image_expires_at && now('UTC')->lessThan($trigger->image_expires_at) && Storage::disk('local')->exists($trigger->image_path)) {
@@ -121,7 +125,9 @@ class Runner
                     $agent = new SalesImageRepresentative($thread, app(Settings::class)->get((int) $run->business_id), $history,
                         runId: $run->id, messageId: (int) $trigger->id, actionEvent: $actionEvent);
                 }
-                $answer = $agent->prompt($prompt, attachments: $attachments, provider: 'deepseek', model: Pricing::MODEL, timeout: 90);
+                $agent->preferredLanguage = in_array($run->language ?? null, ['en', 'my'], true) ? $run->language : null;
+                $answer = app(\App\Services\SalesTelegram\Typing::class)->during($thread,$run,
+                    fn()=>$agent->prompt($prompt, attachments: $attachments, provider: 'deepseek', model: Pricing::MODEL, timeout: 90));
                 $this->finish($id, $answer, $agent, $pricing);
             } catch (\Throwable $e) {
                 $diagnostic = ['run_id' => $id, 'exception_class' => get_class($e)];
@@ -169,13 +175,15 @@ class Runner
             $messageId = 0;
             $publishActions = true;
             if ($deliver && method_exists($answer, 'toArray')) {
+                $sourceText = DB::table('shop_chat_messages')->where('id', $run->trigger_message_id)->value('body');
+                $language = ($run->language ?? null) === 'my' || preg_match('/[\x{1000}-\x{109F}]/u', ($sourceText ?? '').($answer->toArray()['summary'] ?? '')) ? 'my' : 'en';
                 $policy = app(AiImagePolicy::class);
                 try {
                     $report = $policy->report($answer->toArray(), sales: true);
-                    $answer->text = $policy->reply($report);
+                    $answer->text = $policy->reply($report, $language);
                 } catch (\Throwable) {
                     $report = ['kind' => 'unreadable'];
-                    $answer->text = 'I could not safely classify this image or check current payment methods. Please send a clearer MKPOS screenshot or contact support.';
+                    $answer->text = AiLocale::text('image_unavailable', $language);
                 }
                 if (! in_array($report['kind'], ['product', 'shop_payment'], true)) {
                     $publishActions = false;
@@ -184,9 +192,9 @@ class Runner
                 }
                 if ($report['kind'] === 'error_unknown') {
                     try {
-                        $answer->text = $policy->office($run, $report, 'sales_ai');
+                        $answer->text = $policy->office($run, $report, 'sales_ai', $language);
                     } catch (\Throwable) {
-                        $answer->text = 'I cannot reliably explain this MKPOS error. The report could not be submitted. Please contact MKPOS support.';
+                        $answer->text = AiLocale::text('office_unavailable', $language);
                     }
                 }
             }
@@ -205,6 +213,7 @@ class Runner
                 'input_tokens' => $input, 'output_tokens' => $output, 'cached_input_tokens' => $cached, 'updated_at' => now('UTC')]);
             app(CustomerActions::class)->publish($id, $deliver && $publishActions ? $messageId : null);
             if ($thread) {
+                app(\App\Services\SalesTelegram\Delivery::class)->stage($thread, $messageId);
                 DB::afterCommit(fn () => app(ShopChatRealtime::class)->changed($thread, $messageId));
             }
         });
@@ -232,6 +241,7 @@ class Runner
                 DB::table('shop_chat_threads')->where('id', $thread->id)->update(['sales_ai_mode' => 'waiting_owner', 'sales_ai_version' => $thread->sales_ai_version + 1, 'sales_ai_handoff_reason' => 'The shop team will help with this conversation.', 'updated_at' => now('UTC')]);
             }
             if ($thread) {
+                if ($reason !== 'cancelled') app(\App\Services\SalesTelegram\Delivery::class)->failedRun($run,$thread);
                 DB::afterCommit(fn () => app(ShopChatRealtime::class)->changed($thread, 0));
             }
         });

@@ -13,8 +13,15 @@ class PublicTools
     {
         $thread = DB::table('shop_chat_threads')->where('id', $agent->thread->id)->where('business_id', $agent->thread->business_id)->first();
         $settings = app(Settings::class)->get((int) $agent->thread->business_id);
+        if ($thread) $thread = app(\App\Services\SalesTelegram\Identity::class)->context($thread);
         abort_unless($thread && $thread->sales_ai_mode === 'ai' && (int) $thread->sales_ai_version === (int) $agent->thread->sales_ai_version && $settings['enabled'] && $settings['version'] === $agent->settings['version'], 403);
         abort_unless($name === 'request_human' || in_array($name, $settings['tool_permissions'], true), 403);
+        abort_unless(\App\Services\SalesTelegram\Identity::permits($thread, $name), 403, 'This action is not available in this Telegram conversation.');
+        abort_unless(app(\App\Services\SalesTelegram\Inbox::class)->current($thread, $agent->messageId),403);
+        if (($thread->sales_ai_channel ?? 'web')==='telegram') {
+            if ($name==='prepare_checkout') return app(\App\Services\SalesTelegram\Checkout::class)->prepare($agent,$thread,$arguments);
+            if (in_array($name,\App\Services\SalesTelegram\Identity::ACCOUNT_TOOLS,true)) return app(\App\Services\SalesTelegram\Identity::class)->orders($thread,$name,$arguments);
+        }
         abort_if($agent->actionEvent && !in_array($name, SalesRepresentative::FOLLOW_UP_TOOLS, true), 403, 'Form follow-ups can only read order/request status or request human help.');
         if (in_array($name, RepresentativeTools::NAMES, true)) return app(RepresentativeTools::class)->handle($agent, $thread, $name, $arguments);
         $data = Validator::make($arguments, ['query' => 'sometimes|nullable|string|max:80', 'reference' => 'sometimes|nullable|string|max:40', 'after_id' => 'sometimes|integer|min:0', 'reason' => 'sometimes|string|max:160'])->validate();

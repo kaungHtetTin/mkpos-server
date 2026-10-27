@@ -370,3 +370,18 @@ Live facts still come from official public tools. Private account records, role 
 Group answers use public information. Kaung Kaung does not ask members to post credentials/full receipts in groups. Image-enabled /help and /privacy disclose that unresolved MKPOS error screenshots may be forwarded to the configured admin group as well as any enabled receipt notices. Resetting bot history does not remove copies already sent to Telegram/admin chats.
 
 No additional database migration, cron job, Office build or bot token is needed for this identity/skills update. Upload the backend patch, run php artisan optimize:clear and restart persistent workers. Cron workers use the new code on their next invocation.
+
+
+## Kaung Kaung receipt forwarding gate
+
+A subscription payment screenshot is queued for the admin Telegram group only when the existing server-side AiImagePolicy.paymentMethod comparison confirms that the complete visible recipient account, recipient name and provider match a currently active MKPOS platform payment method. Mismatching, inactive, missing, masked or uncheckable recipients are not forwarded. The customer receives the comparison result and an explicit not-forwarded notice when no notice is reserved.
+
+ReceiptNotices checks the stored extraction against current payment_methods both when reserving the notice and immediately before every send attempt, including existing pending notices and Telegram 429 retries. It never trusts a cached/model-supplied payment_method_check match. A recipient changed or disabled after queueing cancels the pending notice with recipient_not_confirmed. Database lookup failures fail closed without forwarding. Matching remains a recipient check only: bank funds, authenticity and subscription approval still require manual review.
+
+Unresolved MKPOS error screenshots keep their separate configured admin-report route. This update adds no migration, Office build or cron entry. Upload the backend patch, clear Laravel caches and restart persistent workers; bounded cron workers pick it up on their next invocation. Already delivered Telegram images are not recalled.
+
+## Prompt reporting of application defects
+
+Kaung Kaung uses report_application_error for text-only MKPOS UI/UX defects and development/implementation errors. It prepares an observed-symptom summary; the runner binds the current message and conversation, then queues the existing durable admin notice to the saved Telegram group/topic. No screenshot or correction attempt is required. Text reports work independently of image and receipt-notice switches. Image defects use the existing image reporting route, even when their symptoms are recognizable.
+
+Recipient, bot membership, group enablement, conversation version and cancellation checks are rechecked on delivery. Text reports use protected sendMessage; screenshots retain sendPhoto/sendDocument. One notice per source message prevents duplicate delivery on ordinary repeated processing. Replies distinguish queued from sent and report unavailability honestly. No new destination or migration is required. Restart persistent customer-service and Wyne Wyne workers when deploying these PHP changes.

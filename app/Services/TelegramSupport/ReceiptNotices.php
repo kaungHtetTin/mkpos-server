@@ -3,6 +3,8 @@
 namespace App\Services\TelegramSupport;
 
 use App\Jobs\CustomerServiceReceiptNotice;
+use App\Services\AiImagePolicy;
+use App\Support\AiLocale;
 use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -10,8 +12,15 @@ use Illuminate\Support\Facades\Schema;
 
 class ReceiptNotices
 {
-    public function reserve(object $message, bool $errorReport = false): bool
+    public function reserve(object $message): bool
     {
+        $stored = DB::table('customer_service_messages')->where('id', $message->id)->value('image_report_encrypted');
+        $report = $stored ? json_decode(Crypt::decryptString($stored), true, flags: JSON_THROW_ON_ERROR) : [];
+        // Never trust a caller flag or a previously cached/model-supplied match verdict.
+        $errorReport = ($report['kind'] ?? '') === 'error_unknown';
+        if (! $errorReport && ! $this->matchesCurrentRecipient($report)) {
+            return false;
+        }
         $settings = app(Settings::class)->get();
         if ((! $errorReport && ! $settings['receipt_notices_enabled']) || ! $settings['admin_group_chat_id']
             || ! DB::table('telegram_support_groups')->where('bot_id', $message->bot_id)->where('chat_id', $settings['admin_group_chat_id'])
@@ -53,27 +62,39 @@ class ReceiptNotices
                 ->where('is_member', true)->where('status', '!=', 'disabled')->exists();
             $report = $message && $message->image_report_encrypted ? json_decode(Crypt::decryptString($message->image_report_encrypted), true, flags: JSON_THROW_ON_ERROR) : [];
             $isError = ($report['kind'] ?? '') === 'error_unknown';
-            if (! $settings['enabled'] || ! $settings['images_enabled'] || (! $isError && ! $settings['receipt_notices_enabled'])
+            $hasImage = (bool) $message?->image_file_id_encrypted;
+            if (! $settings['enabled'] || (($hasImage || ! $isError) && ! $settings['images_enabled']) || (! $isError && ! $settings['receipt_notices_enabled'])
                 || TelegramClient::idFor((string) $settings['bot_token']) !== (int) $notice->bot_id
                 || (string) $settings['admin_group_chat_id'] !== (string) $notice->chat_id || (int) $settings['admin_group_thread_id'] !== (int) $notice->thread_id
-                || ! $target || ! $message || $message->status === 'cancelled' || ! $message->image_report_encrypted || ! $message->image_file_id_encrypted
+                || ! $target || ! $message || $message->status === 'cancelled' || ! $message->image_report_encrypted || (! $isError && ! $hasImage)
                 || ! $conversation || (int) $conversation->version !== (int) $message->conversation_version || ! app(Groups::class)->allowed($conversation)) {
                 DB::table('customer_service_receipt_notices')->where('message_id', $id)->update(['status' => 'cancelled', 'updated_at' => now('UTC')]);
 
                 return null;
             }
             $report = json_decode(Crypt::decryptString($message->image_report_encrypted), true, flags: JSON_THROW_ON_ERROR);
-            $fileId = Crypt::decryptString($message->image_file_id_encrypted);
-            $caption = "PAYMENT RECEIPT — MANUAL REVIEW REQUIRED\nScreenshot details only. Funds and authenticity NOT verified.\n";
-            foreach (['amount', 'currency', 'provider', 'recipient_name', 'recipient_account', 'transaction_reference', 'paid_at', 'payment_status'] as $field) {
-                $caption .= str_replace('_', ' ', $field).': '.mb_substr(str_replace(["\r", "\n"], ' ', (string) ($report[$field] ?? '')), 0, 65)."\n";
+            // Recheck every delivery attempt, including old queued jobs and Telegram 429 retries.
+            if (! $isError && ! $this->matchesCurrentRecipient($report)) {
+                DB::table('customer_service_receipt_notices')->where('message_id', $id)->update([
+                    'status' => 'cancelled', 'error_code' => 'recipient_not_confirmed', 'updated_at' => now('UTC')]);
+
+                return null;
             }
+            $fileId = $hasImage ? Crypt::decryptString($message->image_file_id_encrypted) : null;
+            $language = $message->language;
             if ($isError) {
-                $caption = "MKPOS ERROR - ADMIN REVIEW REQUIRED\n".mb_substr($report['summary'], 0, 650)."\n";
-            } elseif (isset($report['payment_method_check'])) {
-                $caption .= 'Current recipient: '.$report['payment_method_check']['status']."\n";
+                $caption = AiLocale::text('error_notice_heading', $language).mb_substr($report['summary'], 0, 650)."\n";
+            } else {
+                $caption = AiLocale::text('receipt_notice_heading', $language);
+                foreach (['amount', 'currency', 'provider', 'recipient_name', 'recipient_account', 'transaction_reference', 'paid_at', 'payment_status'] as $field) {
+                    $value = $field === 'payment_status' ? AiLocale::text($report[$field] ?: 'unknown', $language) : (string) ($report[$field] ?? '');
+                    $caption .= AiLocale::text($field, $language).': '.mb_substr(str_replace(["\r", "\n"], ' ', $value), 0, 65)."\n";
+                }
+                $caption .= AiLocale::text('active_recipient_notice', $language)."\n";
             }
-            $caption .= 'Sender ID: '.($conversation->sender_id ?: $conversation->chat_id)."\nSource chat/message: ".$conversation->chat_id.'/'.$message->telegram_message_id."\nReview ID: ".$message->id;
+            $caption .= AiLocale::text('sender_id', $language).': '.($conversation->sender_id ?: $conversation->chat_id)."\n"
+                .AiLocale::text('source_message', $language).': '.$conversation->chat_id.'/'.$message->telegram_message_id."\n"
+                .AiLocale::text('review_id', $language).': '.$message->id;
             DB::table('customer_service_receipt_notices')->where('message_id', $id)->update(['status' => 'sending', 'updated_at' => now('UTC')]);
 
             return [$notice, $message, $fileId, $caption];
@@ -82,7 +103,10 @@ class ReceiptNotices
             return $claim ?? 0;
         }
         [$notice, $message, $fileId, $caption] = $claim;
-        $result = app(TelegramClient::class)->receiptNotice((int) $notice->chat_id, (int) $notice->thread_id, (int) $notice->bot_id, $fileId, $message->image_source, $caption);
+        $client = app(TelegramClient::class);
+        $result = $fileId === null
+            ? $client->errorNotice((int) $notice->chat_id, (int) $notice->thread_id, (int) $notice->bot_id, $caption)
+            : $client->receiptNotice((int) $notice->chat_id, (int) $notice->thread_id, (int) $notice->bot_id, $fileId, $message->image_source, $caption);
         $values = ['updated_at' => now('UTC')];
         if ($result['ok']) {
             $values['status'] = 'sent';
@@ -100,6 +124,19 @@ class ReceiptNotices
     {
         DB::table('customer_service_receipt_notices')->where('message_id', $id)->whereIn('status', ['pending', 'sending'])
             ->update(['status' => 'delivery_unknown', 'error_code' => 'worker_interrupted', 'updated_at' => now('UTC')]);
+    }
+
+    private function matchesCurrentRecipient(array $report): bool
+    {
+        if (($report['kind'] ?? '') !== 'receipt') {
+            return false;
+        }
+        try {
+            return app(AiImagePolicy::class)->paymentMethod($report)['status'] === 'matches_active_recipient';
+        } catch (\Throwable) {
+            // An unavailable method lookup must never disclose the screenshot to a group.
+            return false;
+        }
     }
 
     public function recover(int $limit): void

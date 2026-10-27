@@ -9,6 +9,7 @@ use App\Services\AiAssistantSettings;
 use App\Services\AiBalanceBook;
 use App\Services\AiImagePolicy;
 use App\Services\AiProviderCredentials;
+use App\Support\AiLocale;
 use App\Tenancy\TenantContext;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Crypt;
@@ -110,7 +111,8 @@ class Runner
             if ($hasImage && ! app(Settings::class)->get()['images_enabled']) {
                 throw new \RuntimeException('Images disabled');
             }
-            $agent = $hasImage ? new TelegramImageReader($message->language, identity: KaungKaungService::NAME) : new CustomerServiceAgent($history, $message->language);
+            $agent = $hasImage ? new TelegramImageReader($message->language, identity: KaungKaungService::NAME)
+                : app(CustomerServiceAgent::class, ['history' => $history, 'language' => $message->language]);
             app(AiProviderCredentials::class)->activate();
             $answer = app(TypingIndicator::class)->during($message, $conversation, function () use ($agent, $message, $hasImage) {
                 $attachments = $hasImage ? [app(ImageInput::class)->attachment(Crypt::decryptString($message->image_file_id_encrypted), (int) $message->bot_id)] : [];
@@ -131,21 +133,21 @@ class Runner
             if (trim($answer->text) === '') {
                 throw new \RuntimeException('Empty reply');
             }
-            $report = null;
+            $report = $hasImage ? null : $agent->errorReport;
             $reply = $answer->text;
             if ($hasImage) {
                 $policy = app(AiImagePolicy::class);
                 $report = $policy->report($answer->toArray());
-                $reply = $policy->reply($report);
+                $reply = $policy->reply($report, $message->language);
             }
-            DB::transaction(function () use ($message, $conversation, $agent, $answer, $reply, $report) {
+            DB::transaction(function () use ($message, $conversation, $agent, $answer, $reply, $report, $hasImage) {
                 $current = DB::table('customer_service_conversations')->where('id', $conversation->id)->lockForUpdate()->first();
                 $run = DB::table('customer_service_messages')->where('id', $message->id)->lockForUpdate()->first();
                 if (! $run) {
                     return;
                 }
                 $canDeliver = $run->status === 'processing' && $current && $current->version === $message->conversation_version && app(Groups::class)->allowed($current)
-                    && ($report === null || app(Settings::class)->get()['images_enabled']);
+                    && (! $hasImage || app(Settings::class)->get()['images_enabled']);
                 DB::table('customer_service_messages')->where('id', $message->id)->update([
                     'status' => $canDeliver ? 'ready' : 'cancelled', 'reply' => $canDeliver ? Crypt::encryptString(mb_substr(trim($reply), 0, 3500)) : null,
                     ...($report !== null ? ['image_report_encrypted' => $canDeliver ? Crypt::encryptString(json_encode($report, JSON_THROW_ON_ERROR)) : null] : []),
@@ -153,11 +155,15 @@ class Runner
                     'cached_input_tokens' => $answer->usage->cacheReadInputTokens, 'tools' => json_encode(array_values(array_unique($agent->usedTools))),
                     'charged_at' => now('UTC'), 'updated_at' => now('UTC')]);
                 if ($canDeliver && in_array($report['kind'] ?? '', ['receipt', 'error_unknown'], true)) {
-                    $reserved = app(ReceiptNotices::class)->reserve($message, $report['kind'] === 'error_unknown');
+                    $reserved = app(ReceiptNotices::class)->reserve($message);
+                    if ($report['kind'] === 'receipt' && ! $reserved) {
+                        DB::table('customer_service_messages')->where('id', $message->id)->update([
+                            'reply' => Crypt::encryptString(mb_substr(trim($reply), 0, 3300)."\n".AiLocale::text('not_forwarded', $message->language))]);
+                    }
                     if ($report['kind'] === 'error_unknown') {
                         $notice = $reserved
-                            ? 'I cannot reliably explain this MKPOS error. An image report is queued for the configured admin Telegram group.'
-                            : 'I cannot reliably explain this MKPOS error. No admin group report could be queued; please contact MKPOS support.';
+                            ? AiLocale::text('error_queued', $message->language)
+                            : AiLocale::text('error_not_queued', $message->language);
                         DB::table('customer_service_messages')->where('id', $message->id)->update(['reply' => Crypt::encryptString($notice)]);
                     }
                 }

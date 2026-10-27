@@ -11,14 +11,16 @@ class RefreshTelegramTyping
     {
         return function (RequestInterface $request, array $options) use ($handler) {
             $typing = app(TypingIndicator::class);
-            if ($typing->active() && $request->getMethod() === 'POST'
+            $salesTyping = app(\App\Services\SalesTelegram\Typing::class);
+            if (($typing->active() || $salesTyping->active()) && $request->getMethod() === 'POST'
                 && $request->getUri()->getScheme() === 'https' && $request->getUri()->getHost() === 'api.deepseek.com'
                 && str_ends_with($request->getUri()->getPath(), '/chat/completions')) {
                 $previous = $options['progress'] ?? null;
                 // cURL invokes progress even while waiting for the first response byte.
                 // Telegram requests use a different host and never recurse into this hook.
-                $options['progress'] = function (...$bytes) use ($typing, $previous) {
+                $options['progress'] = function (...$bytes) use ($typing, $salesTyping, $previous) {
                     $typing->tick();
+                    $salesTyping->tick();
 
                     return $previous ? $previous(...$bytes) : 0;
                 };

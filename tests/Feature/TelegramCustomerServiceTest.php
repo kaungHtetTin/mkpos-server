@@ -5,6 +5,7 @@ namespace Tests\Feature;
 use App\Ai\Agents\CustomerServiceAgent;
 use App\Ai\Agents\TelegramImageReader;
 use App\Ai\Tools\CustomerServiceKnowledge;
+use App\Ai\Tools\CustomerServiceErrorReport;
 use App\Ai\Tools\CustomerServiceSkills;
 use App\Http\Client\RefreshTelegramTyping;
 use App\Models\PlatformAdmin;
@@ -17,6 +18,7 @@ use App\Services\TelegramSupport\ReceiptNotices;
 use App\Services\TelegramSupport\Runner;
 use App\Services\TelegramSupport\Settings;
 use App\Services\TelegramSupport\TypingIndicator;
+use App\Support\AiLocale;
 use App\Tenancy\TenantContext;
 use GuzzleHttp\Promise\Create;
 use GuzzleHttp\Psr7\Request;
@@ -152,6 +154,7 @@ class TelegramCustomerServiceTest extends TestCase
 
     private function imageFixture(bool $notices = true, string $kind = 'receipt'): array
     {
+        DB::table('payment_methods')->insertOrIgnore(['id' => 1, 'is_active' => true, 'bank' => 'Fixture Pay', 'account_name' => 'Fixture merchant', 'account_no' => '091234']);
         DB::table('telegram_support_settings')->where('id', 1)->update(['images_enabled' => true, 'receipt_notices_enabled' => $notices,
             'admin_group_chat_id' => -100777, 'admin_group_thread_id' => 77]);
         DB::table('telegram_support_groups')->insertOrIgnore(['bot_id' => 123456, 'chat_id' => -100777, 'title' => 'Private admin group', 'is_member' => true]);
@@ -168,7 +171,7 @@ class TelegramCustomerServiceTest extends TestCase
             'https://api.telegram.org/*' => Http::response(['ok' => true, 'result' => ['message_id' => 501]]),
         ]);
         $report = ['kind' => $kind, 'summary' => 'Visible screenshot details.', 'payment_status' => 'completed', 'amount' => '30000', 'currency' => 'MMK',
-            'provider' => 'Fixture Pay', 'recipient_name' => 'Fixture merchant', 'recipient_account' => '******1234', 'transaction_reference' => '001234', 'paid_at' => '2026-10-27T09:00:00+06:30'];
+            'provider' => 'Fixture Pay', 'recipient_name' => 'Fixture merchant', 'recipient_account' => '091234', 'transaction_reference' => '001234', 'paid_at' => '2026-10-27T09:00:00+06:30'];
         TelegramImageReader::fake([$report]);
 
         return $report;
@@ -182,6 +185,56 @@ class TelegramCustomerServiceTest extends TestCase
         app(Runner::class)->process($this->id());
         $this->assertStringContainsString('No admin group report could be queued', Crypt::decryptString(DB::table('customer_service_messages')->value('reply')));
         $this->assertSame(0, DB::table('customer_service_receipt_notices')->count());
+    }
+
+    public function test_text_application_defect_routes_once_without_image_or_receipt_switches(): void
+    {
+        DB::table('telegram_support_settings')->where('id', 1)->update(['images_enabled' => false, 'receipt_notices_enabled' => false,
+            'admin_group_chat_id' => -100777, 'admin_group_thread_id' => 77]);
+        DB::table('telegram_support_groups')->insertOrIgnore(['bot_id' => 123456, 'chat_id' => -100777, 'title' => 'Private admin group', 'is_member' => true]);
+        $agent = new CustomerServiceAgent;
+        $this->app->bind(CustomerServiceAgent::class, fn () => $agent);
+        CustomerServiceAgent::fake(function () use ($agent) {
+            $tool = new CustomerServiceErrorReport($agent);
+            $result = json_decode($tool->handle(new ToolRequest(['summary' => 'Mobile chat: large gap between keyboard and message input.', 'chat_id' => -100999])), true);
+            $this->assertSame('prepared', $result['status']);
+
+            return 'Prepared for review.';
+        });
+        $this->receive($this->update('Chat input leaves a gap above the keyboard.'))->assertOk();
+        app(Runner::class)->process($this->id());
+        $this->assertStringContainsString('queued for the configured admin', Crypt::decryptString(DB::table('customer_service_messages')->value('reply')));
+        app(ReceiptNotices::class)->process($this->id());
+        app(ReceiptNotices::class)->process($this->id());
+        $this->assertSame('sent', DB::table('customer_service_receipt_notices')->value('status'));
+        $sent = Http::recorded(fn ($request) => str_ends_with($request->url(), '/sendMessage') && $request['chat_id'] === -100777);
+        $this->assertCount(1, $sent);
+        $this->assertSame(77, $sent->first()[0]['message_thread_id']);
+        $this->assertStringContainsString('large gap', $sent->first()[0]['text']);
+        $this->assertStringContainsString('MKPOS ERROR', $sent->first()[0]['text']);
+    }
+
+    public function test_text_application_report_without_admin_destination_does_not_claim_success(): void
+    {
+        $agent = new CustomerServiceAgent;
+        $this->app->bind(CustomerServiceAgent::class, fn () => $agent);
+        CustomerServiceAgent::fake(function () use ($agent) {
+            (new CustomerServiceErrorReport($agent))->handle(new ToolRequest(['summary' => 'Cancel button hover background is misplaced.']));
+
+            return 'Prepared for review.';
+        });
+        $this->receive($this->update('Cancel button hover is broken.'))->assertOk();
+        app(Runner::class)->process($this->id());
+        $this->assertSame(0, DB::table('customer_service_receipt_notices')->count());
+        $this->assertStringContainsString('No admin group report could be queued', Crypt::decryptString(DB::table('customer_service_messages')->value('reply')));
+    }
+
+    public function test_development_defects_are_reported_without_requiring_a_correction(): void
+    {
+        $this->assertStringContainsString('Do not diagnose code', (new CustomerServiceAgent)->instructions());
+        $this->assertStringContainsString('even if you recognize the symptom', (new TelegramImageReader)->instructions());
+        $this->assertStringContainsString('An attempted correction is not a prerequisite', \App\Ai\Skills\ErrorSupport::INSTRUCTIONS);
+        $this->assertStringContainsString('without a separate contact question', implode(' ', \App\Ai\Skills\ErrorSupport::guide()['steps']));
     }
 
     public function test_unknown_error_routes_once_to_admin_even_when_receipt_notices_are_off(): void
@@ -216,6 +269,8 @@ class TelegramCustomerServiceTest extends TestCase
     {
         $policy = app(AiImagePolicy::class);
         $report = $this->imageFixture();
+        DB::table('payment_methods')->delete();
+        $report['recipient_account'] = '******1234';
         $this->assertSame('no_active_methods', $policy->paymentMethod($report)['status']);
         $id = DB::table('payment_methods')->insertGetId(['bank' => 'Fixture Pay', 'account_name' => 'Fixture merchant', 'account_no' => '091234']);
         $this->assertSame('inconclusive', $policy->paymentMethod($report)['status']);
@@ -226,6 +281,81 @@ class TelegramCustomerServiceTest extends TestCase
         $this->assertSame('no_active_methods', $policy->paymentMethod($report)['status']);
         DB::table('payment_methods')->insert(['bank' => 'Other Pay', 'account_name' => 'Fixture merchant', 'account_no' => '091234']);
         $this->assertSame('does_not_match_active_recipient', $policy->paymentMethod($report)['status']);
+    }
+
+    public function test_nonmatching_inactive_missing_and_masked_recipients_never_queue_admin_receipts(): void
+    {
+        config(['telegram_support.per_chat_minute_limit' => 20]);
+        foreach (['wrong_account', 'wrong_name', 'wrong_provider', 'inactive', 'missing', 'masked'] as $index => $case) {
+            $report = $this->imageFixture();
+            if ($case === 'wrong_account') {
+                $report['recipient_account'] = '099999';
+            }
+            if ($case === 'wrong_name') {
+                $report['recipient_name'] = 'Another recipient';
+            }
+            if ($case === 'wrong_provider') {
+                $report['provider'] = 'Other Pay';
+            }
+            if ($case === 'inactive') {
+                DB::table('payment_methods')->update(['is_active' => false]);
+            }
+            if ($case === 'missing') {
+                DB::table('payment_methods')->delete();
+                $report['recipient_account'] = '';
+            }
+            if ($case === 'masked') {
+                $report['recipient_account'] = '******1234';
+            }
+            TelegramImageReader::fake([$report]);
+            $this->receive($this->photoUpdate(500 + $index))->assertOk();
+            $message = DB::table('customer_service_messages')->where('update_id', 500 + $index)->first();
+            app(Runner::class)->process($message->id);
+            $this->assertSame(0, DB::table('customer_service_receipt_notices')->count(), $case);
+            $reply = Crypt::decryptString(DB::table('customer_service_messages')->where('id', $message->id)->value('reply'));
+            $this->assertStringContainsString('not forwarded to the admin group', $reply, $case);
+            Http::assertNotSent(fn ($r) => str_ends_with($r->url(), '/sendPhoto') || str_ends_with($r->url(), '/sendDocument'));
+            DB::table('payment_methods')->delete();
+        }
+    }
+
+    public function test_delivery_rechecks_current_methods_and_ignores_a_forged_cached_match(): void
+    {
+        $this->imageFixture();
+        $this->receive($this->photoUpdate())->assertOk();
+        app(Runner::class)->process($this->id());
+        $this->assertSame(1, DB::table('customer_service_receipt_notices')->count());
+        DB::table('payment_methods')->update(['is_active' => false]);
+        app(ReceiptNotices::class)->process($this->id());
+        $this->assertSame('cancelled', DB::table('customer_service_receipt_notices')->value('status'));
+        $this->assertSame('recipient_not_confirmed', DB::table('customer_service_receipt_notices')->value('error_code'));
+        DB::table('payment_methods')->update(['is_active' => true]);
+        $row = DB::table('customer_service_messages')->first();
+        $report = json_decode(Crypt::decryptString($row->image_report_encrypted), true);
+        $report['recipient_account'] = '099999';
+        $report['payment_method_check']['status'] = 'matches_active_recipient';
+        DB::table('customer_service_messages')->where('id', $row->id)->update(['image_report_encrypted' => Crypt::encryptString(json_encode($report))]);
+        DB::table('customer_service_receipt_notices')->update(['status' => 'pending']);
+        app(ReceiptNotices::class)->process($this->id());
+        $this->assertSame('cancelled', DB::table('customer_service_receipt_notices')->value('status'));
+        Http::assertNotSent(fn ($r) => str_ends_with($r->url(), '/sendPhoto') || str_ends_with($r->url(), '/sendDocument'));
+    }
+
+    public function test_myanmar_receipt_reply_localizes_server_messages_and_keeps_forwarding_blocked(): void
+    {
+        $report = $this->imageFixture();
+        $report['recipient_account'] = '099999';
+        TelegramImageReader::fake([$report]);
+        $update = $this->photoUpdate();
+        $update['message']['from']['language_code'] = 'my';
+        $this->receive($update)->assertOk();
+        app(Runner::class)->process($this->id());
+        $reply = Crypt::decryptString(DB::table('customer_service_messages')->value('reply'));
+        $this->assertStringContainsString(AiLocale::text('not_forwarded', 'my'), $reply);
+        $this->assertStringContainsString(AiLocale::text('does_not_match_active_recipient', 'my'), $reply);
+        $this->assertStringContainsString('001234', $reply);
+        $this->assertStringNotContainsString('not forwarded', $reply);
+        $this->assertSame(0, DB::table('customer_service_receipt_notices')->count());
     }
 
     public function test_receipt_image_is_read_only_in_worker_and_admin_gets_one_manual_review_notice(): void
@@ -256,6 +386,24 @@ class TelegramCustomerServiceTest extends TestCase
         TelegramImageReader::assertPromptedTimes(1);
         TelegramImageReader::assertPrompted(fn (AgentPrompt $p) => count($p->attachments) === 1);
         CustomerServiceAgent::assertNeverPrompted();
+    }
+
+    public function test_myanmar_admin_receipt_notice_preserves_account_reference_and_review_warning(): void
+    {
+        $this->imageFixture();
+        $update = $this->photoUpdate();
+        $update['message']['from']['language_code'] = 'my';
+        $this->receive($update)->assertOk();
+        app(Runner::class)->process($this->id());
+        app(ReceiptNotices::class)->process($this->id());
+        $sent = Http::recorded(fn ($request) => str_ends_with($request->url(), '/sendPhoto'));
+        $this->assertCount(1, $sent);
+        $caption = $sent->first()[0]['caption'];
+        $this->assertStringContainsString(AiLocale::text('recipient_account', 'my'), $caption);
+        $this->assertStringContainsString(AiLocale::text('active_recipient_notice', 'my'), $caption);
+        $this->assertStringContainsString('001234', $caption);
+        $this->assertStringContainsString(AiLocale::text('review_id', 'my'), $caption);
+        $this->assertSame('sent', DB::table('customer_service_receipt_notices')->value('status'));
     }
 
     public function test_general_image_does_not_notify_admin_and_image_documents_are_supported(): void
@@ -316,6 +464,23 @@ class TelegramCustomerServiceTest extends TestCase
         $this->assertSame('sent', DB::table('customer_service_receipt_notices')->value('status'));
         TelegramImageReader::assertPromptedTimes(1);
         $this->assertSame(1, DB::table('ai_balance_entries')->count());
+    }
+
+    public function test_receipt_retry_is_cancelled_when_recipient_changes_after_rate_limit(): void
+    {
+        $this->imageFixture();
+        $this->receive($this->photoUpdate())->assertOk();
+        app(Runner::class)->process($this->id());
+        Http::swap(new Factory);
+        Http::preventStrayRequests();
+        Http::fake(['https://api.telegram.org/*/sendPhoto' => Http::response(['ok' => false, 'error_code' => 429, 'parameters' => ['retry_after' => 2]], 429)]);
+        $this->assertSame(2, app(ReceiptNotices::class)->process($this->id()));
+        DB::table('payment_methods')->update(['account_no' => '099999']);
+        $this->travel(3)->seconds();
+        app(ReceiptNotices::class)->process($this->id());
+        $this->assertSame('cancelled', DB::table('customer_service_receipt_notices')->value('status'));
+        Http::assertSentCount(1);
+        TelegramImageReader::assertPromptedTimes(1);
     }
 
     public function test_ambiguous_admin_notice_is_terminal_and_changed_destination_cancels_pending_notice(): void
@@ -963,8 +1128,9 @@ class TelegramCustomerServiceTest extends TestCase
         $this->assertNotEmpty($guide['skills']['subscription_payments']['steps']);
         $this->assertStringContainsString('do not verify bank funds', implode(' ', $guide['skills']['subscription_payments']['steps']));
         $this->assertContains('get_customer_service_skills', array_map(fn ($item) => $item->name(), iterator_to_array($agent->tools())));
-        $this->assertStringNotContainsString('Kaung Kaung', (new TelegramImageReader)->instructions());
-        $this->assertStringContainsString('Kaung Kaung', (new TelegramImageReader(identity: 'Kaung Kaung'))->instructions());
+        // Knowing Kaung Kaung's role must not give a generic image helper his identity.
+        $this->assertStringNotContainsString('Your public name is Kaung Kaung', (new TelegramImageReader)->instructions());
+        $this->assertStringContainsString('Your public name is Kaung Kaung', (new TelegramImageReader(identity: 'Kaung Kaung'))->instructions());
     }
 
     public function test_start_and_help_use_kaung_kaung_with_images_on_or_off_without_ai_usage(): void

@@ -1,0 +1,27 @@
+<?php
+
+return [
+    'receipt_notice_heading' => "PAYMENT RECEIPT — MANUAL REVIEW REQUIRED\nScreenshot details only. Funds and authenticity NOT verified.\n",
+    'error_notice_heading' => "MKPOS ERROR - ADMIN REVIEW REQUIRED\n",
+    'active_recipient_notice' => 'Recipient matches a currently active MKPOS payment method. Funds are not verified.',
+    'sender_id' => 'Sender ID', 'source_message' => 'Source chat/message', 'review_id' => 'Review ID',
+    'unrelated' => 'This image is not related to the MKPOS system.',
+    'image_unavailable' => 'I could not safely classify this image or check current payment methods. Please send a clearer MKPOS screenshot or contact support.',
+    'receipt_heading' => 'Visible subscription receipt details — manual review required.',
+    'unknown' => 'Unknown',
+    'amount' => 'amount', 'currency' => 'currency', 'provider' => 'provider',
+    'recipient_name' => 'recipient name', 'recipient_account' => 'recipient account',
+    'transaction_reference' => 'transaction reference', 'paid_at' => 'paid at', 'payment_status' => 'payment status',
+    'completed' => 'completed', 'pending' => 'pending', 'failed' => 'failed',
+    'matches_active_recipient' => 'The visible recipient details match a currently active MKPOS subscription payment method.',
+    'does_not_match_active_recipient' => 'The visible recipient details do not match any currently active MKPOS subscription payment method. Contact MKPOS support before making another payment.',
+    'no_active_methods' => 'No active MKPOS subscription payment method is currently configured. Please contact MKPOS support.',
+    'inconclusive' => 'The payment method cannot be confirmed because recipient details are missing or masked. An administrator must check the original receipt.',
+    'manual_review' => 'Funds and receipt authenticity are not verified. An administrator must review the payment and subscription activation.',
+    'not_forwarded' => 'This screenshot was not forwarded to the admin group.',
+    'error_queued' => 'This MKPOS application issue is queued for the configured admin Telegram group for review.',
+    'error_not_queued' => 'No admin group report could be queued for this MKPOS application issue; please contact MKPOS support.',
+    'office_submitted' => 'Report :reference for this MKPOS application issue was submitted to the admin Office for review.',
+    'office_report_title' => 'Unresolved MKPOS screenshot — :agent',
+    'office_unavailable' => 'I cannot reliably explain this MKPOS error. The report could not be submitted. Please contact MKPOS support.',
+];
