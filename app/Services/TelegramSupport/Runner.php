@@ -169,7 +169,7 @@ class Runner
                 }
             });
         } catch (\Throwable $error) {
-            Log::warning('Customer service generation unavailable', ['message_id' => $message->id, 'exception_class' => get_class($error)]);
+            Log::warning('Customer service generation unavailable', ['message_id' => $message->id] + \App\Support\AiFailureDiagnostic::context($error));
             $usage = $answer && DB::table('ai_balance_entries')->where('run_id', $message->id)->exists() ? [
                 'input_tokens' => $answer->usage->inputTokens, 'output_tokens' => $answer->usage->outputTokens,
                 'cached_input_tokens' => $answer->usage->cacheReadInputTokens, 'charged_at' => now('UTC'),

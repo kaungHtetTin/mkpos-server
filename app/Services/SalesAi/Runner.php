@@ -12,7 +12,7 @@ use App\Services\EcommerceService;
 use App\Services\ShopChatRealtime;
 use App\Services\ShopCustomerAccess;
 use App\Support\AiLocale;
-use GuzzleHttp\Exception\ConnectException;
+use App\Support\AiFailureDiagnostic;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -130,13 +130,7 @@ class Runner
                     fn()=>$agent->prompt($prompt, attachments: $attachments, provider: 'deepseek', model: Pricing::MODEL, timeout: 90));
                 $this->finish($id, $answer, $agent, $pricing);
             } catch (\Throwable $e) {
-                $diagnostic = ['run_id' => $id, 'exception_class' => get_class($e)];
-                for ($cause = $e; $cause; $cause = $cause->getPrevious()) {
-                    if ($cause instanceof ConnectException) {
-                        $diagnostic['connection_error_code'] = (int) ($cause->getHandlerContext()['errno'] ?? 0);
-                        break;
-                    }
-                }
+                $diagnostic = ['run_id' => $id] + AiFailureDiagnostic::context($e);
                 // Never log provider headers, raw exceptions, prompts or customer content.
                 Log::warning('Sales AI request failed', $diagnostic);
                 $this->fail($id, 'provider_unavailable');
