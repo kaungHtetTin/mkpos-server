@@ -6,4 +6,6 @@ maintenance.php
 routes.php
 routes.scanned.php
 schedule-*
+cron-worker-*.lock
+*-worker-launch.lock
 services.json
