@@ -1,4 +1,20 @@
-# Defense in depth when the Laravel folder is deployed below a shared web root.
-Options -Indexes
+# Shared-host fallback when the domain points at this Laravel folder.
+# Prefer a document root of public/. Never serve project files directly.
+Options -MultiViews -Indexes
 RewriteEngine On
-RewriteRule !^public(?:/|$) - [F,L]
+
+# Keep Authorization available to Laravel after the internal rewrite.
+RewriteCond %{HTTP:Authorization} .
+RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
+
+RewriteRule (^|/)\.(?!well-known(?:/|$)) - [F,L]
+RewriteRule ^(?:bootstrap|config|database|resources|routes|storage|tests|vendor)(?:/|$) - [F,L,NC]
+RewriteRule ^(?:artisan|composer\.(?:json|lock)|package(?:-lock)?\.json|phpunit\.xml|vite\.config\.[^/]+|README(?:\.[^/]+)?)(?:/|$) - [F,L,NC]
+
+# The public directory has its own front-controller and hidden-file rules.
+# Retain old /public links and stop a second rewrite on internal redirects.
+RewriteRule ^public(?:/|$) - [L]
+
+# Always map into public, including existing files/directories such as app/.
+# A conventional !-f / !-d exception here would expose Laravel source files.
+RewriteRule ^(.*)$ public/$1 [L]
