@@ -1,5 +1,9 @@
 # AI workers on cron-only hosting
 
+For immediate replies using the existing persistent Node socket app, see
+[AI Node dispatch](ai-node-dispatch.md). Keep these cron jobs as recovery when
+enabling Node dispatch.
+
 Wyne Wyne uses direct HTTP replies and requires no worker cron. Remove any old
 `cron:work wyne-wyne` entry. The scheduler recovers Telegram jobs but does not consume its queue.
 Upload the updated PHP source before adding these jobs. No migration is required for

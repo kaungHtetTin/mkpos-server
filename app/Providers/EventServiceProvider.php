@@ -27,7 +27,8 @@ class EventServiceProvider extends ServiceProvider
      */
     public function boot()
     {
-        //
+        Event::listen(\Illuminate\Queue\Events\JobQueued::class,
+            fn ($event) => app(\App\Services\AiQueueWakeup::class)->queued($event));
     }
 
     /**
