@@ -51,7 +51,10 @@ class AppServiceProvider extends ServiceProvider
         }
         Http::globalMiddleware(new RetryAiConnectionFailures);
         Http::globalMiddleware(new RefreshTelegramTyping);
-        RateLimiter::for('ai-chat', fn ($request) => Limit::perMinute(60)->by('ai-read:'.($request->user()?->id ?? $request->ip())));
-        RateLimiter::for('ai-chat-send', fn ($request) => Limit::perMinute(10)->by('ai-send:'.($request->user()?->id ?? $request->ip())));
+        RateLimiter::for('ai-chat', function ($request) {
+            $read = $request->isMethod('GET') || $request->isMethod('HEAD');
+            return Limit::perMinute($read ? 600 : 120)->by(($read ? 'ai-read:' : 'ai-write:').($request->user()?->id ?? $request->ip()));
+        });
+        RateLimiter::for('ai-chat-send', fn ($request) => Limit::perMinute(120)->by('ai-send:'.($request->user()?->id ?? $request->ip())));
     }
 }

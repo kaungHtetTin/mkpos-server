@@ -119,12 +119,14 @@ class ShopController extends Controller
         return $this->commerce->orderView($this->commerce->track($data['reference'], $data['credential']));
     }
 
-    public function proof(Request $request): array
+    public function proof(Request $request, ?array $prevalidatedObserved = null): array
     {
         $data = $request->validate(['reference' => ['required', 'string', 'max:40'], 'credential' => ['required', 'string', 'size:64'],
             'proof' => ['required', 'image', 'mimes:jpeg,jpg,png,webp', 'max:2048']]);
         $order = $this->commerce->track($data['reference'], $data['credential']);
         $path = $data['proof']->store('ecommerce-proofs/'.$order->business_id, 'local');
+        // Internal checkout callers clean this copy if their encompassing transaction rolls back.
+        $request->attributes->set('stored_proof_path', $path);
         try {
             $proofId = DB::transaction(function () use ($order, $path) {
                 $order = DB::table('ecommerce_orders')->where('id', $order->id)->where('business_id', $order->business_id)->lockForUpdate()->first();
@@ -140,7 +142,8 @@ class ShopController extends Controller
                 return $id;
             });
         } catch (\Throwable $e) { Storage::disk('local')->delete($path); throw $e; }
-        $review = app(ShopPaymentProofValidation::class)->process($proofId);
+        $validator = app(ShopPaymentProofValidation::class);
+        $review = $prevalidatedObserved === null ? $validator->process($proofId) : $validator->process($proofId, $prevalidatedObserved);
         if ($review['verdict'] === 'rejected_duplicate') {
             throw \Illuminate\Validation\ValidationException::withMessages(['proof' => 'This bank/provider and transaction ID are already used in MKPOS. Upload a different payment receipt.']);
         }

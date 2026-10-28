@@ -22,18 +22,18 @@ class PosRateLimitTest extends TestCase
     {
         $middleware = app(ThrottleRequests::class);
         $send = fn ($request) => $middleware->handle($request, fn () => response()->json(['ok' => true]), 'api');
-        for ($i = 0; $i < 60; $i++) {
+        for ($i = 0; $i < 120; $i++) {
             $send($this->requestFor('products'));
         }
-        for ($i = 0; $i < 300; $i++) {
+        for ($i = 0; $i < 600; $i++) {
             $send($this->requestFor('products/'.($i + 1).'/photo'));
         }
 
         $this->assertSame(200, $send($this->requestFor('sales', 'POST'))->getStatusCode());
         $this->assertSame(200, $send($this->requestFor('sales/1/receipt'))->getStatusCode());
 
-        // Checkout still has a finite limit, shared with receipt and print requests.
-        for ($i = 0; $i < 58; $i++) {
+        // Checkout writes retain a finite limit, separate from receipt reads.
+        for ($i = 0; $i < 119; $i++) {
             $send($this->requestFor('sales', 'POST'));
         }
         $this->assertSame(200, $send($this->requestFor('sales', 'POST', 2))->getStatusCode());
@@ -47,16 +47,20 @@ class PosRateLimitTest extends TestCase
         $normal = $limiter($this->requestFor('products'));
         $photo = $limiter($this->requestFor('products/1/photo'));
         $checkout = $limiter($this->requestFor('sales', 'POST'));
-        $this->assertSame(300, $photo->maxAttempts);
-        $this->assertSame(60, $checkout->maxAttempts);
+        $this->assertSame(600, $photo->maxAttempts);
+        $this->assertSame(120, $checkout->maxAttempts);
         $this->assertNotSame($normal->key, $photo->key);
         $this->assertNotSame($normal->key, $checkout->key);
         $this->assertNotSame($photo->key, $checkout->key);
         foreach ([['sales/offline-sync', 'POST'], ['sales/1/receipt', 'GET'], ['sales/last/receipt', 'GET'], ['sales/1/print', 'POST']] as [$path, $method]) {
-            $this->assertSame($checkout->key, $limiter($this->requestFor($path, $method))->key);
+            $limit = $limiter($this->requestFor($path, $method));
+            $this->assertSame($method === 'GET' ? 600 : 120, $limit->maxAttempts);
+            if ($method === 'GET') $this->assertNotSame($checkout->key, $limit->key);
+            else $this->assertSame($checkout->key, $limit->key);
         }
         foreach ([['products/1/photo', 'POST'], ['products/1/photo', 'DELETE'], ['sales', 'GET'], ['sales/1', 'PUT'], ['sales/1', 'DELETE']] as [$path, $method]) {
-            $this->assertSame($normal->key, $limiter($this->requestFor($path, $method))->key);
+            $expected = $method === 'GET' ? $normal : $limiter($this->requestFor('products', 'POST'));
+            $this->assertSame($expected->key, $limiter($this->requestFor($path, $method))->key);
         }
         $this->assertNotSame($photo->key, $limiter($this->requestFor('products/1/photo', 'GET', 2))->key);
     }

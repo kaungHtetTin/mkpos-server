@@ -3,14 +3,18 @@
 namespace App\Services\SalesTelegram;
 
 use App\Ai\Agents\SalesRepresentative;
+use App\Jobs\ValidateTelegramCheckoutProof;
 use App\Http\Controllers\Ecommerce\ShopController;
 use App\Services\SalesAi\CheckoutProof;
+use App\Services\SalesAi\CheckoutPaymentPrevalidation;
 use App\Services\SalesAi\RepresentativeTools;
 use App\Services\SalesAi\Settings;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Crypt;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 
 /** Telegram is an authenticated transport, not model consent. Only signed human callbacks submit. */
@@ -53,7 +57,7 @@ class Checkout
 
     public function photo(object $connection, object $conversation, int $update, array $message): bool
     {
-        if ($conversation->chat_id < 0 || ! ($draft = $this->active($conversation)) || ! in_array($draft->step, ['proof', 'review', 'proof_review'], true)) {
+        if ($conversation->chat_id < 0 || ! ($draft = $this->active($conversation)) || ! in_array($draft->step, ['proof', 'review', 'proof_review', 'proof_checking'], true)) {
             return false;
         }
         if ($draft->connection_version !== $connection->version) {
@@ -94,11 +98,12 @@ class Checkout
             $evidence = app(CheckoutProof::class)->stageBytes($bytes, (int) $connection->business_id);
             $payload = $this->payload($draft);
             $old = $payload['evidence_path'] ?? null;
-            $draft = $this->save($draft, array_replace($payload, $evidence), $proofOnly ? 'proof_review' : 'review', ['quote_encrypted' => null]);
+            $draft = $this->startProofCheck($draft, array_replace($payload, $evidence), $update);
             if ($old) {
                 DB::afterCommit(fn () => Storage::disk('local')->delete($old));
             }
             $this->prompt($connection, $conversation, $draft, $update);
+            $this->dispatchProofCheck($draft);
         } catch (\Throwable) {
             if ($evidence) {
                 Storage::disk('local')->delete($evidence['evidence_path']);
@@ -107,6 +112,104 @@ class Checkout
         }
 
         return true;
+    }
+
+    private function startProofCheck(object $draft, array $payload, int $update): object
+    {
+        $payload['payment_prevalidation'] = ['status' => 'pending'];
+        $payload['proof_check_update'] = $update;
+        return $this->save($draft, $payload, 'proof_checking', ['quote_encrypted' => null]);
+    }
+
+    private function dispatchProofCheck(object $draft): void
+    {
+        DB::afterCommit(function () use ($draft) {
+            try { ValidateTelegramCheckoutProof::dispatch($draft->id, (int) $draft->version)->onConnection('sales-ai')->onQueue('sales-ai'); }
+            catch (\Throwable) { Log::warning('Telegram receipt check queued for scheduler recovery'); }
+        });
+    }
+
+    private function proofContext(object $draft): array
+    {
+        $conversation = DB::table('sales_telegram_conversations')->where('id', $draft->conversation_id)->firstOrFail();
+        $connection = DB::table('sales_telegram_connections')->where('id', $conversation->connection_id)->firstOrFail();
+        $thread = app(Identity::class)->context(DB::table('shop_chat_threads')->where('id', $draft->thread_id)->firstOrFail());
+        abort_unless((int) $conversation->thread_id === (int) $draft->thread_id && $conversation->chat_id > 0
+            && (int) $draft->connection_version === (int) $connection->version && app(Inbox::class)->current($thread), 403);
+        $payload = $this->payload($draft);
+        $settings = app(Settings::class)->get($connection->business_id);
+        $proofOnly = ! empty($payload['proof_reference']);
+        abort_unless($settings['enabled'] && in_array($proofOnly ? 'submit_order_payment_proof' : 'prepare_checkout', $settings['tool_permissions'], true), 403);
+        $order = $proofOnly ? $this->proofOrder($thread, $payload['proof_reference']) : null;
+        $quote = $order ? app(CheckoutPaymentPrevalidation::class)->orderQuote($order) : $this->quote($draft);
+        return [$connection, $conversation, $quote, $order ? (int) $order->id : 0];
+    }
+
+    /** Model work runs outside the webhook and database row locks. */
+    public function processProofCheck(string $id, int $version): bool
+    {
+        $lock = Cache::lock('telegram-checkout-proof:'.$id, 150);
+        if (! $lock->get()) return false;
+        try {
+            $draft = DB::table('sales_telegram_checkouts')->where('id', $id)->where('version', $version)->where('step', 'proof_checking')->where('expires_at', '>', now('UTC'))->first();
+            if (! $draft) return true;
+            [$connection, $conversation, $quote, $order] = $this->proofContext($draft);
+            $payload = $this->payload($draft);
+            $check = app(CheckoutPaymentPrevalidation::class)->check((int) $connection->business_id, $quote, $payload, $draft->id, $order);
+            DB::transaction(function () use ($id, $version, $check, $quote) {
+                $current = DB::table('sales_telegram_checkouts')->where('id', $id)->where('version', $version)->where('step', 'proof_checking')->where('expires_at', '>', now('UTC'))->lockForUpdate()->first();
+                if (! $current) return;
+                [$connection, $conversation, $freshQuote] = $this->proofContext($current);
+                abort_unless(hash_equals($quote['quote_hash'], $freshQuote['quote_hash']), 409, 'Checkout changed while checking the receipt.');
+                $payload = $this->payload($current);
+                $payload['payment_prevalidation'] = $check;
+                $step = $check['passed'] ? (! empty($payload['proof_reference']) ? 'proof_review' : 'review') : 'proof';
+                $current = $this->save($current, $payload, $step);
+                $this->prompt($connection, $conversation, $current, $payload['proof_check_update']);
+            });
+            return true;
+        } catch (\Throwable $error) {
+            Log::warning('Telegram checkout receipt prevalidation unavailable', ['checkout_id' => $id, 'exception_class' => get_class($error)]);
+            $this->failProofCheck($id, $version);
+            return true;
+        } finally { $lock->release(); }
+    }
+
+    public function failProofCheck(string $id, int $version): void
+    {
+        DB::transaction(function () use ($id, $version) {
+            $draft = DB::table('sales_telegram_checkouts')->where('id', $id)->where('version', $version)->where('step', 'proof_checking')->where('expires_at', '>', now('UTC'))->lockForUpdate()->first();
+            if (! $draft) return;
+            $payload = $this->payload($draft);
+            $payload['payment_prevalidation'] = ['status' => 'failed', 'passed' => false];
+            $draft = $this->save($draft, $payload, 'proof');
+            try {
+                [$connection, $conversation] = $this->proofContext($draft);
+                $this->prompt($connection, $conversation, $draft, $payload['proof_check_update']);
+            } catch (\Throwable) { /* Revoked connections cannot receive stale checkout messages. */ }
+        });
+    }
+
+    public function recoverProofChecks(int $limit): void
+    {
+        foreach (DB::table('sales_telegram_checkouts')->where('step', 'proof_checking')->where('expires_at', '>', now('UTC'))->orderBy('updated_at')->limit($limit)->get(['id', 'version']) as $draft) {
+            $this->processProofCheck($draft->id, (int) $draft->version);
+        }
+    }
+
+    private function receiptStatus(object $draft, array $payload): string
+    {
+        $check = $payload['payment_prevalidation'] ?? [];
+        if (($check['status'] ?? '') !== 'completed') {
+            $key = match ($check['status'] ?? '') { 'pending' => 'check_pending', 'stale' => 'check_again', default => 'check_unavailable' };
+            if (! empty($payload['proof_reference']) && $key !== 'check_again') $key .= '_proof';
+            return $this->text($draft, $key);
+        }
+        $report = $check['report'];
+        $text = $this->text($draft, $check['passed'] ? 'check_passed' : 'check_blocked')."\n";
+        foreach ($report['checks'] as $row) $text .= $this->text($draft, 'check_'.$row['field']).': '.$this->text($draft, 'check_status_'.$row['status'])."\n";
+        $text .= $this->text($draft, 'check_amount_detail', ['expected' => $report['expected_amount'], 'actual' => $report['observed']['amount'] ?: '?', 'currency' => $report['expected_currency']]);
+        return $text;
     }
 
     public function pruneEvidence(): int
@@ -295,6 +398,12 @@ class Checkout
 
             return;
         }
+        if ($action === 'r' && in_array($draft->step, ['proof', 'review', 'proof_review'], true) && ! empty($payload['evidence_path'])) {
+            $draft = $this->startProofCheck($draft, $payload, $update);
+            $this->prompt($connection, $conversation, $draft, $update);
+            $this->dispatchProofCheck($draft);
+            return;
+        }
         if ($action === 'c' && $draft->step === 'proof_review') {
             try {
                 $settings = app(Settings::class)->get($connection->business_id);
@@ -302,12 +411,15 @@ class Checkout
                 $thread = app(Identity::class)->context(DB::table('shop_chat_threads')->where('id', $draft->thread_id)->firstOrFail());
                 abort_unless(app(Inbox::class)->current($thread), 403);
                 $order = $this->proofOrder($thread, $payload['proof_reference']);
-                app(CheckoutProof::class)->attach($order, $payload);
+                app(CheckoutProof::class)->attach($order, $payload, true, $draft->id);
                 $draft = $this->save($draft, $payload, 'ordered', ['order_reference' => $order->reference]);
                 DB::afterCommit(fn () => Storage::disk('local')->delete($payload['evidence_path']));
                 app(Delivery::class)->notice($update, $this->text($draft, 'proof_submitted', ['reference' => $order->reference]), [], $draft->thread_id);
             } catch (\Throwable) {
-                app(Delivery::class)->notice($update, $this->text($draft, 'proof_invalid'), [], $draft->thread_id);
+                app(Delivery::class)->notice($update, $this->text($draft, 'check_again'), ['inline_keyboard' => [
+                    [$this->button($draft, $conversation, 'r', $this->text($draft, 'check_retry'))],
+                    [$this->button($draft, $conversation, 'x', $this->text($draft, 'cancel_proof'))],
+                ]], $draft->thread_id);
             }
 
             return;
@@ -359,13 +471,31 @@ class Checkout
         $payload = $this->payload($draft);
         $rows = [];
         $text = $prefix.$this->text($draft, $draft->step);
+        if ($draft->step === 'proof_checking') {
+            app(Delivery::class)->notice($update, $this->receiptStatus($draft, $payload), ['inline_keyboard' => [[$this->button($draft, $conversation, 'x', $this->text($draft, 'cancel'))]]], $draft->thread_id);
+            return;
+        }
+        if ($draft->step === 'proof' && ! empty($payload['evidence_path'])) {
+            $text = $prefix.$this->receiptStatus($draft, $payload)."\n".$this->text($draft, 'proof');
+            $rows[] = [$this->button($draft, $conversation, 'r', $this->text($draft, 'check_retry'))];
+        }
         if (! empty($payload['proof_reference'])) {
             $thread = app(Identity::class)->context(DB::table('shop_chat_threads')->where('id', $draft->thread_id)->firstOrFail());
             $order = $this->proofOrder($thread, $payload['proof_reference']);
             $text = $order->reference.' · '.$order->total.' '.$order->currency."\n".$this->text($draft, $draft->step === 'proof_review' ? 'proof_attached' : 'proof_existing');
+            if (! empty($payload['payment_prevalidation'])) $text .= "\n".$this->receiptStatus($draft, $payload);
             if ($draft->step === 'proof_review') {
                 app(CheckoutProof::class)->image($payload);
-                $rows[] = [$this->button($draft, $conversation, 'c', $this->text($draft, 'submit_proof'))];
+                try {
+                    $checker = app(CheckoutPaymentPrevalidation::class);
+                    $checker->validate((int) $order->business_id, $checker->orderQuote($order), $payload, $draft->id, (int) $order->id);
+                    $rows[] = [$this->button($draft, $conversation, 'c', $this->text($draft, 'submit_proof'))];
+                } catch (\Throwable) {
+                    $payload['payment_prevalidation'] = ['status' => 'stale', 'passed' => false];
+                    $draft = $this->save($draft, $payload, 'proof');
+                    $text = $this->text($draft, 'check_again');
+                    $rows[] = [$this->button($draft, $conversation, 'r', $this->text($draft, 'check_retry'))];
+                }
             }
             $rows[] = [$this->button($draft, $conversation, 'x', $this->text($draft, 'cancel_proof'))];
             app(Delivery::class)->notice($update, $text, ['inline_keyboard' => $rows], $draft->thread_id);
@@ -432,7 +562,19 @@ class Checkout
                         return;
                     }
                     app(CheckoutProof::class)->image($payload);
-                    $text .= $this->text($draft, 'proof_attached')."\n";
+                    try {
+                        app(CheckoutPaymentPrevalidation::class)->validate((int) $connection->business_id, $quote, $payload, $draft->id);
+                    } catch (\Throwable) {
+                        $payload['payment_prevalidation'] = ['status' => 'stale', 'passed' => false];
+                        $draft = $this->save($draft, $payload, 'proof', ['quote_encrypted' => null]);
+                        app(Delivery::class)->notice($update, $text."\n".$this->text($draft, 'check_again'), ['inline_keyboard' => [
+                            [$this->button($draft, $conversation, 'r', $this->text($draft, 'check_retry'))],
+                            [$this->button($draft, $conversation, 'e', $this->text($draft, 'edit'))],
+                            [$this->button($draft, $conversation, 'x', $this->text($draft, 'cancel'))],
+                        ]], $draft->thread_id);
+                        return;
+                    }
+                    $text .= $this->receiptStatus($draft, $payload)."\n".$this->text($draft, 'proof_attached')."\n";
                 }
                 if (($quote['delivery_fee_recipient'] ?? '') === 'delivery_service') {
                     $text .= $this->text($draft, 'courier')."\n";
@@ -460,12 +602,12 @@ class Checkout
             abort_unless($draft->quote_encrypted, 409);
             $quote = json_decode(Crypt::decryptString($draft->quote_encrypted), true, flags: JSON_THROW_ON_ERROR);
             $data = $this->payload($draft);
-            unset($data['choices'],$data['page'],$data['evidence_path'],$data['evidence_hash']);
+            unset($data['choices'],$data['page'],$data['evidence_path'],$data['evidence_hash'],$data['payment_prevalidation'],$data['proof_check_update']);
             $data += ['idempotency_key' => $draft->id, 'quote_hash' => $quote['quote_hash']];
             $thread = app(Identity::class)->context(DB::table('shop_chat_threads')->where('id', $draft->thread_id)->firstOrFail());
             abort_unless(app(Inbox::class)->current($thread) && $conversation->chat_id > 0 && (int) $conversation->thread_id === (int) $draft->thread_id, 403);
             $store = app(RepresentativeTools::class)->store($thread);
-            $result = app(CheckoutProof::class)->submit($thread, $store, $data, $this->payload($draft));
+            $result = app(CheckoutProof::class)->submit($thread, $store, $data, $this->payload($draft), true, $draft->id);
             DB::table('sales_telegram_checkouts')->where('id', $draft->id)->update(['step' => 'ordered', 'order_reference' => $result['reference'],
                 'result_encrypted' => Crypt::encryptString(json_encode($result, JSON_THROW_ON_ERROR)), 'updated_at' => now('UTC')]);
             $payload = $this->payload($draft);

@@ -133,4 +133,26 @@ class AgentSkillManagementTest extends TestCase
         $this->actingAs($admin,'office')->getJson('/api/office/agent-skills')->assertForbidden();
         $this->postJson('/api/office/agent-skills',$this->content())->assertForbidden();
     }
+
+    public function test_telegram_prevalidation_guidance_update_preserves_office_drafts_and_history(): void
+    {
+        $skill = DB::table('ai_skills')->where('slug', 'sales-telegram-channel')->first();
+        $old = DB::table('ai_skill_versions')->where('skill_id', $skill->id)->orderBy('number')->first();
+        $content = json_decode($old->content, true);
+        $draft = $content;
+        $draft['body'] .= "\nOffice custom instruction kept for later publication.";
+        DB::table('ai_skills')->where('id', $skill->id)->update(['published_version_id' => $old->id, 'draft' => json_encode($draft)]);
+        $before = DB::table('ai_skill_versions')->where('skill_id', $skill->id)->count();
+        $migration = require database_path('migrations/2026_10_28_000008_update_telegram_receipt_prevalidation_guidance.php');
+        $migration->up();
+        $current = DB::table('ai_skills')->find($skill->id);
+        $published = json_decode(DB::table('ai_skill_versions')->where('id', $current->published_version_id)->value('content'), true);
+        $this->assertStringContainsString('Telegram checkout receipt prevalidation', $published['body']);
+        $this->assertStringStartsWith($content['body'], $published['body']);
+        $this->assertStringContainsString('Office custom instruction kept', json_decode($current->draft, true)['body']);
+        $this->assertSame($old->content, DB::table('ai_skill_versions')->where('id', $old->id)->value('content'));
+        $this->assertSame($before + 1, DB::table('ai_skill_versions')->where('skill_id', $skill->id)->count());
+        $migration->up();
+        $this->assertSame($before + 1, DB::table('ai_skill_versions')->where('skill_id', $skill->id)->count());
+    }
 }

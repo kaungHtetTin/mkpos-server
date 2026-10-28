@@ -41,33 +41,59 @@ class CheckoutProof
         return new UploadedFile($disk->path($evidence['evidence_path']), 'payment.webp', test: true);
     }
 
-    public function attach(object $order, array $evidence): array
+    public function attach(object $order, array $evidence, bool $requirePrevalidation = false, string $scope = ''): array
     {
         $proof = Request::create('/', 'POST', ['reference' => $order->reference,
             'credential' => app(EcommerceService::class)->customerTrackingCredential($order)],
             files: ['proof' => $this->image($evidence)]);
-
-        return app(ShopController::class)->proof($proof);
+        if (! $requirePrevalidation) return app(ShopController::class)->proof($proof);
+        try {
+            return DB::transaction(function () use ($order, $evidence, $scope, $proof) {
+                DB::table('businesses')->where('id', $order->business_id)->lockForUpdate()->first();
+                DB::table('ai_balance_accounts')->where('id', 1)->lockForUpdate()->first();
+                $checker = app(CheckoutPaymentPrevalidation::class);
+                $review = $checker->validate($order->business_id, $checker->orderQuote($order), $evidence, $scope, $order->id);
+                $result = app(ShopController::class)->proof($proof, $review['observed']);
+                abort_unless(($result['validation']['status'] ?? '') === 'completed' && ($result['validation']['verdict'] ?? '') === 'looks_consistent', 422, 'Receipt checking did not pass.');
+                return $result;
+            });
+        } catch (\Throwable $error) {
+            if ($path = $proof->attributes->get('stored_proof_path')) Storage::disk('local')->delete($path);
+            throw $error;
+        }
     }
 
     /** Customer-confirmed checkout and its proof succeed or roll back together. */
-    public function submit(object $thread, object $store, array $values, array $evidence = []): array
+    public function submit(object $thread, object $store, array $values, array $evidence = [], bool $requirePrevalidation = false, string $scope = ''): array
     {
-        return DB::transaction(function () use ($thread, $store, $values, $evidence) {
-            $quote = app(EcommerceService::class)->quote($store, $values);
-            $required = ($quote['payment_method']['type'] ?? '') !== 'cash';
-            $file = $required ? $this->image($evidence) : null;
-            $request = Request::create('/', 'POST', $values);
-            if ($thread->platform_customer_id) {
-                $request->attributes->set('platform_customer', (object) ['id' => $thread->platform_customer_id]);
-            }
-            $saved = app(ShopController::class)->checkout($request, $store->slug);
-            if ($file) {
-                $proof = Request::create('/', 'POST', ['reference' => $saved['reference'], 'credential' => $saved['tracking_credential']], files: ['proof' => $file]);
-                app(ShopController::class)->proof($proof);
-            }
-
-            return $saved + ['payment_status' => $required ? 'proof_submitted' : 'unpaid', 'payment_verified' => false];
-        });
+        $proofRequest = null;
+        try {
+            return DB::transaction(function () use ($thread, $store, $values, $evidence, $requirePrevalidation, $scope, &$proofRequest) {
+                $quote = app(EcommerceService::class)->quote($store, $values);
+                $required = ($quote['payment_method']['type'] ?? '') !== 'cash';
+                $file = $required ? $this->image($evidence) : null;
+                $review = null;
+                if ($required && $requirePrevalidation) {
+                    DB::table('businesses')->where('id', $store->business_id)->lockForUpdate()->first();
+                    DB::table('ai_balance_accounts')->where('id', 1)->lockForUpdate()->first();
+                    $review = app(CheckoutPaymentPrevalidation::class)->validate($store->business_id, $quote, $evidence, $scope);
+                }
+                $request = Request::create('/', 'POST', $values);
+                if ($thread->platform_customer_id) {
+                    $request->attributes->set('platform_customer', (object) ['id' => $thread->platform_customer_id]);
+                }
+                $saved = app(ShopController::class)->checkout($request, $store->slug);
+                if ($file) {
+                    $proofRequest = Request::create('/', 'POST', ['reference' => $saved['reference'], 'credential' => $saved['tracking_credential']], files: ['proof' => $file]);
+                    $result = $review === null ? app(ShopController::class)->proof($proofRequest) : app(ShopController::class)->proof($proofRequest, $review['observed']);
+                    if ($review !== null) abort_unless(($result['validation']['status'] ?? '') === 'completed' && ($result['validation']['verdict'] ?? '') === 'looks_consistent', 422, 'Receipt checking did not pass.');
+                }
+    
+                return $saved + ['payment_status' => $required ? 'proof_submitted' : 'unpaid', 'payment_verified' => false];
+            });
+        } catch (\Throwable $error) {
+            if ($path = $proofRequest?->attributes->get('stored_proof_path')) Storage::disk('local')->delete($path);
+            throw $error;
+        }
     }
 }

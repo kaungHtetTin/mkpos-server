@@ -29,7 +29,7 @@ class AdminPinProtection
         $actor = $request->user('web');
         $recovery = $allowOwnerRecovery && $actor?->role === 'owner';
         $key = 'admin-pin:'.app(TenantContext::class)->requireId().':'.($actor?->id ?? 'unknown').':'.$request->ip();
-        if (RateLimiter::tooManyAttempts($key, 5)) {
+        if (RateLimiter::tooManyAttempts($key, 120)) {
             throw new HttpResponseException(response()->json(['message' => 'Too many incorrect PIN attempts. Try again shortly.', 'code' => 'admin_pin_locked'], 429)->header('Retry-After', RateLimiter::availableIn($key)));
         }
         $pin = $request->input('authorization_pin', $legacyPin ?? $request->input('admin_pin', ''));

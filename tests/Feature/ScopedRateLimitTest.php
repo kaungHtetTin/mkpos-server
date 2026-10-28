@@ -17,6 +17,51 @@ use Tests\TestCase;
 
 class ScopedRateLimitTest extends TestCase
 {
+    public function test_shop_get_and_head_allow_600_without_consuming_the_120_write_budget(): void
+    {
+        $facade = \Illuminate\Support\Facades\RateLimiter::class;
+        foreach (['api', 'shop-public', 'ai-chat', 'mcp-account'] as $name) {
+            $limiter = $facade::limiter($name);
+            $get = $limiter($this->request('api/ecommerce/rate-method-probe', 'GET'));
+            $head = $limiter($this->request('api/ecommerce/rate-method-probe', 'HEAD'));
+            $this->assertSame(600, $get->maxAttempts, $name);
+            $this->assertSame($get->key, $head->key, $name);
+            foreach (['POST', 'PUT', 'PATCH', 'DELETE'] as $method) {
+                $write = $limiter($this->request('api/ecommerce/rate-method-probe', $method));
+                $this->assertSame(120, $write->maxAttempts, $name);
+                $this->assertNotSame($get->key, $write->key, $name);
+            }
+        }
+        \Illuminate\Support\Facades\Route::match(['GET', 'HEAD', 'POST'], '/api/ecommerce/rate-method-probe', fn () => response()->json(['ok' => true]))
+            ->middleware(['api', 'throttle:shop-public']);
+        for ($i = 0; $i < 600; $i++) $this->getJson('/api/ecommerce/rate-method-probe')->assertOk();
+        $this->getJson('/api/ecommerce/rate-method-probe')->assertStatus(429)->assertHeader('Retry-After');
+        for ($i = 0; $i < 120; $i++) $this->postJson('/api/ecommerce/rate-method-probe')->assertOk();
+        $this->postJson('/api/ecommerce/rate-method-probe')->assertStatus(429)->assertHeader('Retry-After');
+    }
+
+    public function test_registered_route_throttles_keep_their_configured_per_minute_limits(): void
+    {
+        foreach (\Illuminate\Support\Facades\Route::getRoutes() as $route) {
+            foreach ($route->gatherMiddleware() as $middleware) {
+                if (! str_starts_with($middleware, 'throttle:')) continue;
+                $name = substr($middleware, strlen('throttle:'));
+                if (is_numeric(explode(',', $name)[0])) {
+                    $expected = in_array('GET', $route->methods(), true) || in_array($route->getName(), ['telegram.customer-service', 'sales-telegram.webhook'], true) ? '600,1' : '120,1';
+                    $this->assertSame($expected, $name, $route->uri());
+                } else {
+                    $limiter = \Illuminate\Support\Facades\RateLimiter::limiter($name);
+                    $this->assertNotNull($limiter, $name);
+                    $limit = $limiter($this->request($route->uri(), $route->methods()[0]));
+                    foreach (is_array($limit) ? $limit : [$limit] as $entry) {
+                        $this->assertSame(in_array($route->methods()[0], ['GET', 'HEAD'], true) ? 600 : 120, $entry->maxAttempts, $name.':'.$route->uri());
+                        $this->assertSame(60, $entry->decaySeconds, $name);
+                    }
+                }
+            }
+        }
+    }
+
     public function test_customer_authentication_runs_before_both_real_route_throttles(): void
     {
         $this->mock(\App\Services\PlatformCustomerSessions::class, function ($mock) {
@@ -97,7 +142,7 @@ class ScopedRateLimitTest extends TestCase
         $delivery = $api($this->request('api/ai-assistant/conversations/1/messages/client/delivery', 'GET'));
         $normal = $api($this->request('api/products', 'GET'));
         $this->assertNotSame($normal->key, $delivery->key);
-        $this->assertSame(60, $delivery->maxAttempts);
+        $this->assertSame(600, $delivery->maxAttempts);
         Log::spy();
         $middleware = new ScopedThrottleRequests(new RateLimiter(new Repository(new ArrayStore)));
         $request = $this->request('api/diagnostic/{id}', path: 'api/diagnostic/secret');

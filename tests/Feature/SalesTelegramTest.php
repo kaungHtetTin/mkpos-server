@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use App\Ai\Agents\SalesRepresentative;
+use App\Ai\Agents\SystemAgent;
 use App\Services\SalesAi\PublicTools;
 use App\Services\SalesAi\Runner;
 use App\Services\SalesAi\Settings;
@@ -21,6 +22,7 @@ use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\URL;
 use Illuminate\Support\Str;
+use PHPUnit\Framework\Attributes\DataProvider;
 use Tests\TestCase;
 
 class SalesTelegramTest extends TestCase
@@ -165,8 +167,9 @@ class SalesTelegramTest extends TestCase
         return $draft;
     }
 
-    private function sendReceipt(): void
+    private function sendReceipt(array $overrides = [], bool $process = true): void
     {
+        SystemAgent::fake([$this->receiptFields($overrides)]);
         $receipt = UploadedFile::fake()->image('receipt.png');
         $bytes = file_get_contents($receipt->getRealPath());
         Http::swap(new \Illuminate\Http\Client\Factory);
@@ -177,6 +180,24 @@ class SalesTelegramTest extends TestCase
             return Http::response(['ok' => true, 'result' => ['message_id' => 44]]);
         });
         $this->receive($this->update('', extra: ['photo' => [['file_id' => 'receipt_image_123', 'file_size' => strlen($bytes), 'width' => 10, 'height' => 10]]]));
+        if ($process) {
+            $draft = DB::table('sales_telegram_checkouts')->where('step', 'proof_checking')->where('thread_id', $this->thread()->id)->orderByDesc('created_at')->first();
+            if ($draft) app(Checkout::class)->processProofCheck($draft->id, (int) $draft->version);
+        }
+
+    }
+
+    private function receiptFields(array $overrides = []): array
+    {
+        return array_replace(['readable' => true, 'payment_status' => 'completed', 'amount' => '3000', 'currency' => 'MMK',
+            'recipient_account' => '09123456789', 'recipient_name' => 'Shop owner', 'provider' => 'KBZPay',
+            'transaction_reference' => 'TG-'.Str::upper(Str::random(12)), 'paid_at' => now()->toIso8601String(), 'notes' => ''], $overrides);
+    }
+
+    private function latestButtons(): array
+    {
+        $outbox = DB::table('sales_telegram_outbox')->whereNotNull('reply_markup')->orderByDesc('id')->firstOrFail();
+        return collect(json_decode($outbox->reply_markup, true)['inline_keyboard'])->flatten(1)->pluck('text')->all();
     }
 
     public function test_transfer_checkout_waits_for_a_photo_and_submits_order_and_proof_once(): void
@@ -195,6 +216,184 @@ class SalesTelegramTest extends TestCase
         $this->assertSame('pending', $proof->status);
         Storage::disk('local')->assertExists($proof->proof_path);
         $this->assertSame(0, DB::table('ecommerce_payments')->where('order_id', $order->id)->where('type', 'confirm')->count());
+        SystemAgent::assertPromptedTimes(1); // The confirmed proof reuses the extraction.
+    }
+
+    public function test_receipt_check_runs_after_webhook_and_can_be_recovered_by_the_existing_scheduler(): void
+    {
+        $draft = $this->checkoutDraft('Bank transfer');
+        $this->sendReceipt(process: false);
+        $pending = DB::table('sales_telegram_checkouts')->find($draft->id);
+        $this->assertSame('proof_checking', $pending->step);
+        SystemAgent::assertPromptedTimes(0);
+        $this->assertNotContains('Confirm order', $this->latestButtons());
+        $this->assertSame(0, DB::table('ecommerce_orders')->where('business_id', $this->connection->business_id)->count());
+        app(Checkout::class)->recoverProofChecks(10);
+        $this->assertSame('review', DB::table('sales_telegram_checkouts')->where('id', $draft->id)->value('step'));
+        (new \App\Jobs\ValidateTelegramCheckoutProof($draft->id, (int) $pending->version))->handle(app(Checkout::class));
+        SystemAgent::assertPromptedTimes(1);
+        $this->assertContains('Confirm order', $this->latestButtons());
+    }
+
+    public static function invalidReceiptFields(): array
+    {
+        return [
+            'amount' => [['amount' => '2999']], 'currency' => [['currency' => 'USD']],
+            'recipient' => [['recipient_name' => 'Different owner']], 'account' => [['recipient_account' => '09123450000']],
+            'bank' => [['provider' => 'AYA Pay']], 'unreadable' => [['readable' => false]],
+            'pending transfer' => [['payment_status' => 'pending']], 'failed transfer' => [['payment_status' => 'failed']],
+            'missing reference' => [['transaction_reference' => '']], 'uncertain evidence' => [['notes' => 'Cannot read recipient.']],
+        ];
+    }
+
+    #[DataProvider('invalidReceiptFields')]
+    public function test_receipt_must_pass_every_required_check_before_confirm_is_available(array $fields): void
+    {
+        $draft = $this->checkoutDraft('Bank transfer');
+        $this->sendReceipt($fields);
+        $row = DB::table('sales_telegram_checkouts')->find($draft->id);
+        $payload = json_decode(Crypt::decryptString($row->payload_encrypted), true);
+        $this->assertSame('proof', $row->step);
+        $this->assertFalse($payload['payment_prevalidation']['passed']);
+        $this->assertNotContains('Confirm order', $this->latestButtons());
+        $this->assertContains('Check receipt again', $this->latestButtons());
+        $this->assertSame('Guest Buyer', $payload['customer_name']);
+        $this->assertSame(0, DB::table('ecommerce_orders')->where('business_id', $this->connection->business_id)->count());
+        $this->assertSame(0, DB::table('ecommerce_stock_reservations')->where('business_id', $this->connection->business_id)->count());
+    }
+
+    public function test_receipt_replacement_ignores_the_old_queued_result(): void
+    {
+        $draft = $this->checkoutDraft('Bank transfer');
+        $this->sendReceipt(process: false);
+        $old = DB::table('sales_telegram_checkouts')->find($draft->id);
+        $this->sendReceipt(process: false);
+        $current = DB::table('sales_telegram_checkouts')->find($draft->id);
+        app(Checkout::class)->processProofCheck($old->id, (int) $old->version);
+        SystemAgent::assertPromptedTimes(0);
+        app(Checkout::class)->processProofCheck($current->id, (int) $current->version);
+        SystemAgent::assertPromptedTimes(1);
+        $this->assertSame('review', DB::table('sales_telegram_checkouts')->where('id', $draft->id)->value('step'));
+    }
+
+    public function test_receipt_checker_failure_keeps_the_draft_and_allows_an_explicit_retry(): void
+    {
+        $draft = $this->checkoutDraft('Bank transfer');
+        $this->sendReceipt(process: false);
+        SystemAgent::fake(fn () => throw new \RuntimeException('Receipt service unavailable'));
+        $pending = DB::table('sales_telegram_checkouts')->find($draft->id);
+        app(Checkout::class)->processProofCheck($pending->id, (int) $pending->version);
+        $failed = DB::table('sales_telegram_checkouts')->find($draft->id);
+        $this->assertSame('proof', $failed->step);
+        $this->assertNotContains('Confirm order', $this->latestButtons());
+        SystemAgent::fake([$this->receiptFields()]);
+        $this->click($this->button('Check receipt again'));
+        $retry = DB::table('sales_telegram_checkouts')->find($draft->id);
+        $this->assertSame('proof_checking', $retry->step);
+        app(Checkout::class)->processProofCheck($retry->id, (int) $retry->version);
+        $this->assertSame('review', DB::table('sales_telegram_checkouts')->where('id', $draft->id)->value('step'));
+        $this->assertSame(0, DB::table('ecommerce_orders')->where('business_id', $this->connection->business_id)->count());
+    }
+
+    public static function receiptCheckoutChanges(): array
+    {
+        return ['total' => ['total'], 'cart quantity' => ['cart'], 'receiving account' => ['account']];
+    }
+
+    #[DataProvider('receiptCheckoutChanges')]
+    public function test_receipt_is_invalidated_by_a_changed_quote_before_confirmation(string $change): void
+    {
+        $draft = $this->checkoutDraft('Bank transfer');
+        $this->sendReceipt();
+        $confirm = $this->button('Confirm order');
+        if ($change === 'total') {
+            DB::table('product_prices')->where('business_id', $this->connection->business_id)->where('name', 'Retail')->update(['price' => 2000]);
+        } elseif ($change === 'cart') {
+            $payload = json_decode(Crypt::decryptString(DB::table('sales_telegram_checkouts')->where('id', $draft->id)->value('payload_encrypted')), true);
+            $payload['items'][0]['quantity'] = 3;
+            DB::table('sales_telegram_checkouts')->where('id', $draft->id)->update(['payload_encrypted' => Crypt::encryptString(json_encode($payload))]);
+        } else {
+            $methods = json_decode(DB::table('storefront_settings')->where('business_id', $this->connection->business_id)->value('payment_methods'), true);
+            $methods[1]['account_no'] = '09999990000';
+            DB::table('storefront_settings')->where('business_id', $this->connection->business_id)->update(['payment_methods' => json_encode($methods)]);
+        }
+        $this->click($confirm);
+        $this->assertSame('proof', DB::table('sales_telegram_checkouts')->where('id', $draft->id)->value('step'));
+        $this->assertNotContains('Confirm order', $this->latestButtons());
+        $this->assertSame(0, DB::table('ecommerce_orders')->where('business_id', $this->connection->business_id)->count());
+    }
+
+    public function test_receipt_expiry_requires_a_new_check_without_losing_the_uploaded_image(): void
+    {
+        $draft = $this->checkoutDraft('Bank transfer');
+        $this->sendReceipt();
+        $confirm = $this->button('Confirm order');
+        $this->travel(16)->minutes();
+        try {
+            $this->click($confirm);
+            $row = DB::table('sales_telegram_checkouts')->find($draft->id);
+            $payload = json_decode(Crypt::decryptString($row->payload_encrypted), true);
+            $this->assertSame('proof', $row->step);
+            Storage::disk('local')->assertExists($payload['evidence_path']);
+            $this->assertContains('Check receipt again', $this->latestButtons());
+            $this->assertSame(0, DB::table('ecommerce_orders')->where('business_id', $this->connection->business_id)->count());
+        } finally { $this->travelBack(); }
+    }
+
+    public function test_receipt_duplicate_claimed_after_prevalidation_is_blocked_before_order_creation(): void
+    {
+        $draft = $this->checkoutDraft('Bank transfer');
+        $this->sendReceipt();
+        $confirm = $this->button('Confirm order');
+        $payload = json_decode(Crypt::decryptString(DB::table('sales_telegram_checkouts')->where('id', $draft->id)->value('payload_encrypted')), true);
+        $report = $payload['payment_prevalidation']['report'];
+        app(\App\Services\PaymentReceiptClaims::class)->claim($report['transaction_key'], 'shop', 9999999, $report['payment_provider'], $report['observed']['transaction_reference']);
+        $this->click($confirm);
+        $this->assertNotContains('Confirm order', $this->latestButtons());
+        $this->assertSame(0, DB::table('ecommerce_orders')->where('business_id', $this->connection->business_id)->count());
+    }
+
+    public function test_receipt_prevalidation_cannot_be_skipped_or_forged_by_checkout_state(): void
+    {
+        $draft = $this->checkoutDraft('Bank transfer');
+        $this->sendReceipt();
+        $confirm = $this->button('Confirm order');
+        $payload = json_decode(Crypt::decryptString(DB::table('sales_telegram_checkouts')->where('id', $draft->id)->value('payload_encrypted')), true);
+        $payload['payment_prevalidation']['token'] = 'forged';
+        $payload['payment_prevalidation']['passed'] = true;
+        DB::table('sales_telegram_checkouts')->where('id', $draft->id)->update(['payload_encrypted' => Crypt::encryptString(json_encode($payload))]);
+        $this->click($confirm);
+        $this->assertSame(0, DB::table('ecommerce_orders')->where('business_id', $this->connection->business_id)->count());
+        $this->assertNotContains('Confirm order', $this->latestButtons());
+    }
+
+    public function test_receipt_image_cannot_change_after_it_was_checked(): void
+    {
+        $draft = $this->checkoutDraft('Bank transfer');
+        $this->sendReceipt();
+        $confirm = $this->button('Confirm order');
+        $payload = json_decode(Crypt::decryptString(DB::table('sales_telegram_checkouts')->where('id', $draft->id)->value('payload_encrypted')), true);
+        Storage::disk('local')->put($payload['evidence_path'], 'changed image');
+        $this->click($confirm);
+        $this->assertSame(0, DB::table('ecommerce_orders')->where('business_id', $this->connection->business_id)->count());
+        $this->assertNotContains('Confirm order', $this->latestButtons());
+    }
+
+    public function test_receipt_finalization_failure_rolls_back_the_order_reservation_and_copied_file(): void
+    {
+        $draft = $this->checkoutDraft('Bank transfer');
+        $observed = $this->receiptFields();
+        $this->mock(\App\Services\ShopPaymentProofValidation::class, function ($mock) use ($observed) {
+            $mock->shouldReceive('extract')->once()->andReturn($observed);
+            $mock->shouldReceive('process')->once()->andReturn(['status' => 'failed', 'verdict' => 'needs_review', 'funds_verified' => false]);
+        });
+        $this->sendReceipt();
+        $this->click($this->button('Confirm order'));
+        $this->assertSame(0, DB::table('ecommerce_orders')->where('business_id', $this->connection->business_id)->count());
+        $this->assertSame(0, DB::table('ecommerce_stock_reservations')->where('business_id', $this->connection->business_id)->count());
+        $this->assertSame([], Storage::disk('local')->allFiles('ecommerce-proofs/'.$this->connection->business_id));
+        $payload = json_decode(Crypt::decryptString(DB::table('sales_telegram_checkouts')->where('id', $draft->id)->value('payload_encrypted')), true);
+        Storage::disk('local')->assertExists($payload['evidence_path']);
     }
 
     public function test_invalid_transfer_screenshot_cannot_advance_or_create_an_order(): void
@@ -210,7 +409,7 @@ class SalesTelegramTest extends TestCase
         $this->checkoutDraft();
         $this->click($this->button('Confirm order'));
         $order = DB::table('ecommerce_orders')->where('business_id', $this->connection->business_id)->sole();
-        DB::table('ecommerce_orders')->where('id', $order->id)->update(['payment_method' => json_encode(['id' => 'bank', 'type' => 'transfer', 'provider' => 'manual', 'bank' => 'KBZPay'])]);
+        DB::table('ecommerce_orders')->where('id', $order->id)->update(['payment_method' => json_encode(['id' => 'bank', 'type' => 'transfer', 'provider' => 'manual', 'bank' => 'KBZPay', 'account_name' => 'Shop owner', 'account_no' => '09123456789'])]);
         $this->receive($this->update('Please attach payment to '.$order->reference));
         $thread = app(Identity::class)->context($this->thread());
         $run = DB::table('sales_ai_runs')->where('thread_id', $thread->id)->orderByDesc('created_at')->orderByDesc('trigger_message_id')->firstOrFail();

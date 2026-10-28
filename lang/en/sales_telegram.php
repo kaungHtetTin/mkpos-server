@@ -1,6 +1,21 @@
 <?php
 
 return [
+    'check_pending' => 'Checking your payment screenshot against this checkout. No order has been submitted. Please wait for the result, or send a replacement screenshot.',
+    'check_pending_proof' => 'Checking the payment screenshot for your existing order. The proof has not been submitted yet. Please wait or send a replacement screenshot.',
+    'check_passed' => 'Receipt prevalidation passed. The shop must still verify that the money was received.',
+    'check_blocked' => 'This receipt did not pass prevalidation. Correct the payment details or send a clear, correct receipt before submitting.',
+    'check_unavailable' => 'Receipt checking is temporarily unavailable. Your checkout is saved and no order was submitted. Retry the check or send another receipt.',
+    'check_unavailable_proof' => 'Receipt checking is temporarily unavailable. Your existing order is unchanged and the proof has not been submitted. Retry the check or send another receipt.',
+    'check_again' => 'The receipt check is missing, expired or no longer matches this checkout. Check the receipt again before submitting.',
+    'check_retry' => 'Check receipt again',
+    'check_recipient_name' => 'Recipient name', 'check_recipient_account' => 'Recipient account',
+    'check_amount' => 'Amount', 'check_currency' => 'Currency', 'check_provider' => 'Bank or wallet',
+    'check_payment_status' => 'Transfer status', 'check_payment_date' => 'Receipt date',
+    'check_transaction_reference' => 'Transaction ID', 'check_duplicate_payment' => 'Duplicate transaction',
+    'check_status_match' => 'Passed', 'check_status_mismatch' => 'Does not match', 'check_status_unknown' => 'Could not verify',
+    'check_status_not_visible' => 'Not visible (optional)', 'check_status_not_required' => 'Not required',
+    'check_amount_detail' => 'Expected: :expected :currency. Receipt: :actual. Payment is not approved automatically.',
     'open_proof' => 'Attach payment screenshot',
     'cancel_proof' => 'Cancel proof submission',
     'proof_existing' => 'Send a JPG, PNG or WebP payment screenshot up to 2 MB for this order. Review it and tap Submit payment proof. Your existing order will not be placed again. Payment awaits shop verification.',

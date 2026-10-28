@@ -42,32 +42,32 @@ Route::prefix('ecommerce')->middleware(['throttle:shop-public', EcommercePublicR
         Route::get('/chat/notifications', [ChatController::class, 'customerNotifications']);
         Route::get('/chat', [ChatController::class, 'customerIndex']);
         Route::get('/chat/{uuid}', [ChatController::class, 'customerShow']);
-        Route::post('/chat/presence', [ChatController::class, 'customerAppPresence'])->middleware('throttle:60,1');
-        Route::post('/stores/{slug}/chat', [ChatController::class, 'start'])->middleware('throttle:10,1');
+        Route::post('/chat/presence', [ChatController::class, 'customerAppPresence'])->middleware('throttle:120,1');
+        Route::post('/stores/{slug}/chat', [ChatController::class, 'start'])->middleware('throttle:120,1');
         Route::get('/chat/{uuid}/messages', [ChatController::class, 'customerMessages']);
-        Route::post('/chat/{uuid}/telegram-link', [SalesTelegramController::class, 'link'])->middleware('throttle:5,1');
+        Route::post('/chat/{uuid}/telegram-link', [SalesTelegramController::class, 'link'])->middleware('throttle:120,1');
         Route::get('/chat/{uuid}/products', [ChatController::class, 'customerProducts']);
         Route::get('/chat/{uuid}/messages/{id}/image', [ChatController::class, 'customerImage'])->whereNumber('id');
         Route::post('/chat/{uuid}/read', [ChatController::class, 'customerRead']);
-        Route::post('/chat/{uuid}/presence', [ChatController::class, 'customerPresence'])->middleware('throttle:60,1');
-        Route::post('/chat/{uuid}/messages', [ChatController::class, 'customerSend'])->middleware('throttle:60,1');
-        Route::post('/chat/{uuid}/handoff', [ChatController::class, 'customerHandoff'])->middleware('throttle:20,1');
+        Route::post('/chat/{uuid}/presence', [ChatController::class, 'customerPresence'])->middleware('throttle:120,1');
+        Route::post('/chat/{uuid}/messages', [ChatController::class, 'customerSend'])->middleware('throttle:120,1');
+        Route::post('/chat/{uuid}/handoff', [ChatController::class, 'customerHandoff'])->middleware('throttle:120,1');
         Route::get('/chat/{uuid}/sales-actions/{id}', [SalesAiActionController::class, 'show'])->whereUuid('id');
-        Route::post('/chat/{uuid}/sales-actions/{id}/review', [SalesAiActionController::class, 'review'])->whereUuid('id')->middleware('throttle:30,1');
-        Route::post('/chat/{uuid}/sales-actions/{id}/confirm', [SalesAiActionController::class, 'confirm'])->whereUuid('id')->middleware('throttle:20,1');
-        Route::post('/chat/{uuid}/sales-actions/{id}/cancel', [SalesAiActionController::class, 'cancel'])->whereUuid('id')->middleware('throttle:30,1');
+        Route::post('/chat/{uuid}/sales-actions/{id}/review', [SalesAiActionController::class, 'review'])->whereUuid('id')->middleware('throttle:120,1');
+        Route::post('/chat/{uuid}/sales-actions/{id}/confirm', [SalesAiActionController::class, 'confirm'])->whereUuid('id')->middleware('throttle:120,1');
+        Route::post('/chat/{uuid}/sales-actions/{id}/cancel', [SalesAiActionController::class, 'cancel'])->whereUuid('id')->middleware('throttle:120,1');
         Route::get('/chat/{uuid}/sales-actions/{id}/image', [SalesAiActionController::class, 'image'])->whereUuid('id');
         Route::post('/chat/auth', [ChatController::class, 'customerAuth']);
     });
-    Route::post('/customer/register', [CustomerAccountController::class, 'register'])->middleware('throttle:10,1');
-    Route::post('/customer/forgot-password', [PasswordResetController::class, 'requestCode'])->middleware('throttle:5,1');
-    Route::post('/customer/reset-password', [PasswordResetController::class, 'reset'])->middleware('throttle:10,1');
-    Route::post('/customer/login', [CustomerAccountController::class, 'login'])->middleware('throttle:10,1');
+    Route::post('/customer/register', [CustomerAccountController::class, 'register'])->middleware('throttle:120,1');
+    Route::post('/customer/forgot-password', [PasswordResetController::class, 'requestCode'])->middleware('throttle:120,1');
+    Route::post('/customer/reset-password', [PasswordResetController::class, 'reset'])->middleware('throttle:120,1');
+    Route::post('/customer/login', [CustomerAccountController::class, 'login'])->middleware('throttle:120,1');
     Route::get('/customer/avatars/{filename}', [CustomerAccountController::class, 'avatar'])->where('filename', '[a-f0-9-]+\.jpg');
     Route::prefix('customer')->middleware(AuthenticatePlatformCustomer::class)->group(function () {
-        Route::post('/mcp/access', [McpSupportAccessController::class, 'customer'])->middleware('throttle:5,1');
+        Route::post('/mcp/access', [McpSupportAccessController::class, 'customer'])->middleware('throttle:120,1');
         Route::get('/store-reports/{slug}', [ShopReportController::class, 'mine']);
-        Route::post('/store-reports/{slug}', [ShopReportController::class, 'submit'])->middleware('throttle:5,1');
+        Route::post('/store-reports/{slug}', [ShopReportController::class, 'submit'])->middleware('throttle:120,1');
         Route::get('/me', [CustomerAccountController::class, 'me']);
         Route::get('/favorites', [CustomerFeaturesController::class, 'favorites']);
         Route::get('/favorite-keys', [CustomerFeaturesController::class, 'favoriteKeys']);
@@ -83,7 +83,7 @@ Route::prefix('ecommerce')->middleware(['throttle:shop-public', EcommercePublicR
         Route::put('/addresses/{id}', [CustomerFeaturesController::class, 'saveAddress'])->whereNumber('id');
         Route::delete('/addresses/{id}', [CustomerFeaturesController::class, 'deleteAddress'])->whereNumber('id');
         Route::put('/profile', [CustomerAccountController::class, 'profile']);
-        Route::post('/profile/avatar', [CustomerAccountController::class, 'updateAvatar'])->middleware('throttle:10,1');
+        Route::post('/profile/avatar', [CustomerAccountController::class, 'updateAvatar'])->middleware('throttle:120,1');
         Route::delete('/profile/avatar', [CustomerAccountController::class, 'deleteAvatar']);
         Route::post('/logout', [CustomerAccountController::class, 'logout']);
         Route::get('/orders', [CustomerAccountController::class, 'orders']);
@@ -94,7 +94,7 @@ Route::prefix('ecommerce')->middleware(['throttle:shop-public', EcommercePublicR
     foreach (['/stores/{slug}/reviews', '/stores/{slug}/products/{id}/reviews'] as $path) {
         Route::get($path, [ReviewController::class, 'index'])->where('id', '[1-9][0-9]*');
         Route::get($path.'/mine', [ReviewController::class, 'mine'])->middleware(AuthenticatePlatformCustomer::class)->where('id', '[1-9][0-9]*');
-        Route::put($path.'/mine', [ReviewController::class, 'save'])->middleware([AuthenticatePlatformCustomer::class, 'throttle:10,1'])->where('id', '[1-9][0-9]*');
+        Route::put($path.'/mine', [ReviewController::class, 'save'])->middleware([AuthenticatePlatformCustomer::class, 'throttle:120,1'])->where('id', '[1-9][0-9]*');
         Route::delete($path.'/mine', [ReviewController::class, 'destroy'])->middleware(AuthenticatePlatformCustomer::class)->where('id', '[1-9][0-9]*');
     }
     Route::get('/stores/{slug}/logo', [ShopController::class, 'logo']);
@@ -107,9 +107,9 @@ Route::prefix('ecommerce')->middleware(['throttle:shop-public', EcommercePublicR
     Route::post('/stores/{slug}/checkout', [ShopController::class, 'checkout'])->middleware(['throttle:shop-checkout', AuthenticatePlatformCustomer::class.':optional']);
     Route::post('/tracking', [ShopController::class, 'tracking'])->middleware('throttle:shop-tracking');
     Route::post('/proofs', [ShopController::class, 'proof'])->middleware('throttle:shop-proofs');
-    Route::post('/order-requests', [OrderRequestController::class, 'store'])->middleware('throttle:10,1');
+    Route::post('/order-requests', [OrderRequestController::class, 'store'])->middleware('throttle:120,1');
     Route::get('/marketplace/shops', [ShopController::class, 'discovery']);
-    Route::get('/marketplace/radar', [ShopRadarController::class, 'index'])->middleware('throttle:60,1');
+    Route::get('/marketplace/radar', [ShopRadarController::class, 'index'])->middleware('throttle:600,1');
     Route::get('/marketplace/categories', [ShopController::class, 'marketplaceCategories']);
     Route::get('/marketplace/products', [ShopController::class, 'marketplaceProducts']);
 });
@@ -117,8 +117,8 @@ Route::prefix('ecommerce')->middleware(['throttle:shop-public', EcommercePublicR
 Route::prefix('shop-admin')->middleware(['auth:sanctum', 'business'])->group(function () {
     Route::get('/sales-ai/telegram', [SalesTelegramController::class, 'show']);
     Route::put('/sales-ai/telegram', [SalesTelegramController::class, 'update']);
-    Route::post('/sales-ai/telegram/test', [SalesTelegramController::class, 'test'])->middleware('throttle:5,1');
-    Route::post('/sales-ai/telegram/register', [SalesTelegramController::class, 'register'])->middleware('throttle:5,1');
+    Route::post('/sales-ai/telegram/test', [SalesTelegramController::class, 'test'])->middleware('throttle:120,1');
+    Route::post('/sales-ai/telegram/register', [SalesTelegramController::class, 'register'])->middleware('throttle:120,1');
     Route::get('/sales-ai/telegram/groups', [SalesTelegramController::class, 'groups']);
     Route::post('/sales-ai/telegram/groups', [SalesTelegramController::class, 'saveGroup']);
     Route::get('/sales-ai/telegram/groups/{group}', [SalesTelegramController::class, 'group'])->whereNumber('group');
@@ -127,7 +127,7 @@ Route::prefix('shop-admin')->middleware(['auth:sanctum', 'business'])->group(fun
     Route::put('/sales-ai', [SalesAiController::class, 'update']);
     Route::get('/sales-ai/wallet', [SalesAiController::class, 'wallet']);
     Route::get('/sales-ai/topups', [SalesAiController::class, 'topups']);
-    Route::post('/sales-ai/topups', [SalesAiController::class, 'submit'])->middleware('throttle:5,1');
+    Route::post('/sales-ai/topups', [SalesAiController::class, 'submit'])->middleware('throttle:120,1');
     Route::get('/sales-ai/topups/{id}', [SalesAiController::class, 'detail'])->whereNumber('id');
     Route::post('/sales-ai/topups/{id}/cancel', [SalesAiController::class, 'cancel'])->whereNumber('id');
     Route::get('/sales-ai/topups/{id}/screenshot', [SalesAiController::class, 'screenshot'])->whereNumber('id');
@@ -181,22 +181,22 @@ Route::prefix('shop-admin')->middleware(['auth:sanctum', 'business', RequireShop
         Route::get('/chat/config', [ChatController::class, 'ownerConfig']);
         Route::get('/chat/notifications', [ChatController::class, 'ownerNotifications']);
         Route::get('/chat/unread', [ChatController::class, 'unread']);
-        Route::post('/chat/presence', [ChatController::class, 'ownerPresence'])->middleware('throttle:60,1');
+        Route::post('/chat/presence', [ChatController::class, 'ownerPresence'])->middleware('throttle:120,1');
         Route::get('/chat', [ChatController::class, 'index']);
         Route::get('/chat/{uuid}/messages', [ChatController::class, 'ownerMessages']);
-        Route::post('/chat/handoff-all', [ChatController::class, 'ownerHandoffAll'])->middleware(['module:ecommerce_process', 'throttle:10,1']);
-        Route::post('/chat/{uuid}/handoff', [ChatController::class, 'ownerHandoff'])->middleware('throttle:20,1');
+        Route::post('/chat/handoff-all', [ChatController::class, 'ownerHandoffAll'])->middleware(['module:ecommerce_process', 'throttle:120,1']);
+        Route::post('/chat/{uuid}/handoff', [ChatController::class, 'ownerHandoff'])->middleware('throttle:120,1');
         Route::get('/chat/{uuid}/products', [ChatController::class, 'ownerProducts']);
         Route::get('/chat/{uuid}/messages/{id}/image', [ChatController::class, 'ownerImage'])->whereNumber('id');
         Route::post('/chat/{uuid}/read', [ChatController::class, 'ownerRead']);
         Route::post('/chat/auth', [ChatController::class, 'ownerAuth']);
-        Route::post('/chat/{uuid}/messages', [ChatController::class, 'ownerSend'])->middleware(['module:ecommerce_process', 'throttle:60,1']);
-        Route::post('/chat/{uuid}/messages/{id}/retry-telegram', [ChatController::class, 'ownerRetryTelegram'])->whereNumber('id')->middleware(['module:ecommerce_process', 'throttle:30,1']);
+        Route::post('/chat/{uuid}/messages', [ChatController::class, 'ownerSend'])->middleware(['module:ecommerce_process', 'throttle:120,1']);
+        Route::post('/chat/{uuid}/messages/{id}/retry-telegram', [ChatController::class, 'ownerRetryTelegram'])->whereNumber('id')->middleware(['module:ecommerce_process', 'throttle:120,1']);
         Route::get('/customers', [ShopCustomerController::class, 'index']);
         Route::get('/customers/{customerKey}', [ShopCustomerController::class, 'show']);
         Route::get('/customers/{customerKey}/history', [ShopCustomerController::class, 'history']);
         Route::get('/customers/{customerKey}/orders', [ShopCustomerController::class, 'orders']);
-        Route::post('/customers/{customerKey}/chat', [ShopCustomerController::class, 'chat'])->middleware(['module:ecommerce_process', 'throttle:60,1']);
+        Route::post('/customers/{customerKey}/chat', [ShopCustomerController::class, 'chat'])->middleware(['module:ecommerce_process', 'throttle:120,1']);
         Route::put('/customers/{customerKey}/block', [ShopCustomerController::class, 'block'])->middleware('module:ecommerce_process');
         Route::post('/customers/{customerKey}/credit-contact', [ShopCustomerController::class, 'creditContact'])->middleware(['subscription', 'module:customers']);
         Route::get('/customers/{customerKey}/credit-options', [ShopCustomerController::class, 'creditOptions'])->middleware(['subscription', 'module:customers']);
@@ -219,7 +219,7 @@ Route::prefix('shop-admin')->middleware(['auth:sanctum', 'business', RequireShop
 Route::prefix('office/ecommerce')->middleware('office.auth')->group(function () {
     Route::get('/reports', [ShopReportController::class, 'index']);
     Route::get('/reports/{id}', [ShopReportController::class, 'show'])->whereNumber('id');
-    Route::put('/reports/{id}', [ShopReportController::class, 'review'])->whereNumber('id')->middleware('throttle:30,1');
+    Route::put('/reports/{id}', [ShopReportController::class, 'review'])->whereNumber('id')->middleware('throttle:120,1');
     Route::get('/stores', function (Request $request) {
         $limit = max(1, min(100, (int) $request->query('limit', 30)));
         $rows = DB::table('storefront_settings')->orderBy('id')->offset(max(0, (int) $request->query('offset', 0)))->limit($limit + 1)

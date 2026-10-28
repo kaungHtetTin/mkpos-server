@@ -13,7 +13,7 @@ use Laravel\Mcp\Facades\Mcp;
 
 // Public knowledge only, including published plans and tutorials. No business login required.
 Mcp::web('/mcp/knowledge', KnowledgeServer::class)
-    ->middleware('throttle:60,1');
+    ->middleware('throttle:120,1');
 
 Mcp::local('mkpos-knowledge', KnowledgeServer::class);
 
@@ -27,10 +27,10 @@ Mcp::web('/mcp/system-agent', SystemAgentServer::class)
 Route::post('/mcp/evidence', [McpSupportAccessController::class, 'evidence'])
     ->middleware([AuthenticateSupportMcp::class.':account', 'throttle:mcp-evidence']);
 Route::delete('/mcp/access', [McpSupportAccessController::class, 'revoke'])
-    ->middleware([AuthenticateSupportMcp::class.':account', 'throttle:10,1']);
+    ->middleware([AuthenticateSupportMcp::class.':account', 'throttle:120,1']);
 Route::delete('/mcp/admin/access', [McpSupportAccessController::class, 'revoke'])
-    ->middleware([AuthenticateSupportMcp::class.':admin', 'throttle:10,1']);
+    ->middleware([AuthenticateSupportMcp::class.':admin', 'throttle:120,1']);
 
 // Private cross-business review data. Never register this tool on the public server.
 Mcp::web('/mcp/subscription-payments', SubscriptionPaymentsServer::class)
-    ->middleware(['throttle:30,1', AuthenticatePaymentsMcp::class]);
+    ->middleware(['throttle:120,1', AuthenticatePaymentsMcp::class]);

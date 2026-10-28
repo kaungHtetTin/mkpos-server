@@ -38,7 +38,7 @@ class ScopedThrottleRequests extends ThrottleRequests
         ], 429, $headers));
     }
 
-    public function handle($request, \Closure $next, $maxAttempts = 60, $decayMinutes = 1, $prefix = '')
+    public function handle($request, \Closure $next, $maxAttempts = 120, $decayMinutes = 1, $prefix = '')
     {
         $previous = $request->attributes->get('_rate_limit_scope');
         $request->attributes->set('_rate_limit_scope', is_numeric($maxAttempts) ? 'action' : (string) $maxAttempts);

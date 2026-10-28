@@ -67,18 +67,18 @@ require __DIR__.'/ecommerce.php';
 */
 
 Route::get('/health', fn () => ['ok' => DB::selectOne('SELECT 1') !== null, 'backend' => 'laravel', 'database' => 'mysql']);
-Route::get('/health/workers', [\App\Http\Controllers\WorkerHealthController::class, 'show'])->middleware('throttle:30,1');
-Route::post('/auth/register', [AuthController::class, 'register'])->middleware('throttle:10,1');
-Route::post('/auth/login', [AuthController::class, 'login'])->middleware('throttle:10,1');
-Route::post('/auth/forgot-password', [PasswordResetController::class, 'requestCode'])->middleware('throttle:5,1');
-Route::post('/auth/reset-password', [PasswordResetController::class, 'reset'])->middleware('throttle:10,1');
+Route::get('/health/workers', [\App\Http\Controllers\WorkerHealthController::class, 'show'])->middleware('throttle:600,1');
+Route::post('/auth/register', [AuthController::class, 'register'])->middleware('throttle:120,1');
+Route::post('/auth/login', [AuthController::class, 'login'])->middleware('throttle:120,1');
+Route::post('/auth/forgot-password', [PasswordResetController::class, 'requestCode'])->middleware('throttle:120,1');
+Route::post('/auth/reset-password', [PasswordResetController::class, 'reset'])->middleware('throttle:120,1');
 Route::get('/contact-settings', [ContactSettingsController::class, 'show']);
-Route::get('/branding/realtime/config', [\App\Http\Controllers\ResourceRealtimeController::class, 'config'])->middleware('throttle:30,1');
-Route::get('/branding/realtime/auth', [\App\Http\Controllers\ResourceRealtimeController::class, 'auth'])->middleware('throttle:30,1');
+Route::get('/branding/realtime/config', [\App\Http\Controllers\ResourceRealtimeController::class, 'config'])->middleware('throttle:600,1');
+Route::get('/branding/realtime/auth', [\App\Http\Controllers\ResourceRealtimeController::class, 'auth'])->middleware('throttle:600,1');
 
 Route::middleware(['auth:sanctum', VerifyPasswordReset::class, 'business'])->group(function () {
     Route::get('/realtime/resources/config', [\App\Http\Controllers\ResourceRealtimeController::class, 'config']);
-    Route::post('/realtime/resources/auth', [\App\Http\Controllers\ResourceRealtimeController::class, 'auth'])->middleware('throttle:30,1');
+    Route::post('/realtime/resources/auth', [\App\Http\Controllers\ResourceRealtimeController::class, 'auth'])->middleware('throttle:120,1');
     Route::prefix('ai-assistant')->middleware('throttle:ai-chat')->group(function () {
         Route::get('/config', [AiAssistantController::class, 'config']);
         Route::get('/product-template', [AiAssistantController::class, 'template']);
@@ -92,26 +92,26 @@ Route::middleware(['auth:sanctum', VerifyPasswordReset::class, 'business'])->gro
             Route::get('/purchase-drafts/{draft}', function (\Illuminate\Http\Request $request, string $draft) { return app(\App\Services\AiInvoicePurchases::class)->show($request->user('web'), $draft); })->whereUuid('draft');
             Route::get('/conversations/{conversation}/billing-requests', [AiBillingRequestController::class, 'index'])->whereUuid('conversation');
             Route::get('/conversations/{conversation}/billing-requests/{draft}', [AiBillingRequestController::class, 'show'])->whereUuid('conversation')->whereUuid('draft');
-            Route::post('/conversations/{conversation}/billing-requests/{draft}/validate', [AiBillingRequestController::class, 'validateProof'])->whereUuid('conversation')->whereUuid('draft')->middleware('throttle:10,1');
-            Route::post('/conversations/{conversation}/billing-requests/{draft}/submit', [AiBillingRequestController::class, 'submit'])->whereUuid('conversation')->whereUuid('draft')->middleware('throttle:10,1');
-            Route::post('/conversations/{conversation}/billing-requests/{draft}/cancel', [AiBillingRequestController::class, 'cancel'])->whereUuid('conversation')->whereUuid('draft')->middleware('throttle:10,1');
+            Route::post('/conversations/{conversation}/billing-requests/{draft}/validate', [AiBillingRequestController::class, 'validateProof'])->whereUuid('conversation')->whereUuid('draft')->middleware('throttle:120,1');
+            Route::post('/conversations/{conversation}/billing-requests/{draft}/submit', [AiBillingRequestController::class, 'submit'])->whereUuid('conversation')->whereUuid('draft')->middleware('throttle:120,1');
+            Route::post('/conversations/{conversation}/billing-requests/{draft}/cancel', [AiBillingRequestController::class, 'cancel'])->whereUuid('conversation')->whereUuid('draft')->middleware('throttle:120,1');
             Route::get('/error-reports', [ErrorReportController::class, 'index']);
             Route::get('/error-report-requests/{draft}', [ErrorReportController::class, 'draft'])->whereNumber('draft');
-            Route::post('/error-report-requests/{draft}/submit', [ErrorReportController::class, 'complete'])->whereNumber('draft')->middleware('throttle:10,1');
-            Route::post('/error-reports', [ErrorReportController::class, 'store'])->middleware('throttle:10,1');
+            Route::post('/error-report-requests/{draft}/submit', [ErrorReportController::class, 'complete'])->whereNumber('draft')->middleware('throttle:120,1');
+            Route::post('/error-reports', [ErrorReportController::class, 'store'])->middleware('throttle:120,1');
             Route::get('/error-reports/{report}', [ErrorReportController::class, 'show'])->whereNumber('report');
             Route::get('/conversations/{conversation}/actions', [AiBusinessActionController::class, 'index'])->whereUuid('conversation');
             Route::get('/conversations/{conversation}/actions/{action}', [AiBusinessActionController::class, 'show'])->whereUuid(['conversation', 'action']);
-            Route::post('/conversations/{conversation}/actions/{action}/confirm', [AiBusinessActionController::class, 'confirm'])->whereUuid(['conversation', 'action'])->middleware('throttle:30,1');
+            Route::post('/conversations/{conversation}/actions/{action}/confirm', [AiBusinessActionController::class, 'confirm'])->whereUuid(['conversation', 'action'])->middleware('throttle:120,1');
             Route::post('/conversations/{conversation}/actions/{action}/cancel', [AiBusinessActionController::class, 'cancel'])->whereUuid(['conversation', 'action']);
             Route::post('/conversations/{conversation}/actions/{action}/revise', [AiBusinessActionController::class, 'revise'])->whereUuid(['conversation', 'action']);
         });
     });
     Route::get('/auth/me', [AuthController::class, 'me']);
 
-    Route::post('/mcp/access', [McpSupportAccessController::class, 'owner'])->middleware('throttle:5,1');
+    Route::post('/mcp/access', [McpSupportAccessController::class, 'owner'])->middleware('throttle:120,1');
     Route::put('/auth/profile', [AuthController::class, 'updateProfile'])
-        ->middleware(['throttle:10,1', 'subscription']);
+        ->middleware(['throttle:120,1', 'subscription']);
     Route::post('/auth/logout', [AuthController::class, 'logout']);
     Route::get('/app-config', fn () => array_merge(config('mkpos'), [
         'business' => array_merge(
@@ -136,7 +136,7 @@ Route::middleware(['auth:sanctum', VerifyPasswordReset::class, 'business'])->gro
         Route::get('/subscription/plans', [SubscriptionController::class, 'plans']);
         Route::get('/subscription/payment-methods', [SubscriptionController::class, 'paymentMethods']);
         Route::get('/subscription/billing-history', [SubscriptionController::class, 'billingHistory']);
-        Route::post('/subscription/requests', [SubscriptionController::class, 'requestPlan'])->middleware('throttle:5,1');
+        Route::post('/subscription/requests', [SubscriptionController::class, 'requestPlan'])->middleware('throttle:120,1');
     });
 
     Route::middleware('subscription')->group(function () {
@@ -258,7 +258,7 @@ Route::middleware(['auth:sanctum', VerifyPasswordReset::class, 'business'])->gro
             Route::get('/staff/{id}', [StaffController::class, 'show']);
             Route::post('/staff', [StaffController::class, 'store']);
             Route::put('/staff/{id}', [StaffController::class, 'update']);
-            Route::put('/staff/{id}/password', [StaffController::class, 'resetPassword'])->middleware('throttle:10,1');
+            Route::put('/staff/{id}/password', [StaffController::class, 'resetPassword'])->middleware('throttle:120,1');
             Route::delete('/staff/{id}', [StaffController::class, 'destroy']);
 
             Route::post('/settings/logo', [SettingsController::class, 'uploadLogo']);
@@ -266,7 +266,7 @@ Route::middleware(['auth:sanctum', VerifyPasswordReset::class, 'business'])->gro
             Route::put('/settings/timezone', [BusinessTimezoneController::class, 'update']);
             Route::delete('/settings/logo', [SettingsController::class, 'deleteLogo']);
             Route::get('/data/status', [DataBackupController::class, 'status']);
-            Route::post('/data/reset', [DataBackupController::class, 'reset'])->middleware('throttle:3,1');
+            Route::post('/data/reset', [DataBackupController::class, 'reset'])->middleware('throttle:120,1');
         });
         Route::put('/settings', [SettingsController::class, 'update']);
         Route::get('/settings/printers', [SettingsController::class, 'printers']);
@@ -283,25 +283,25 @@ Route::middleware(['auth:sanctum', VerifyPasswordReset::class, 'business'])->gro
 Route::get('/branding', [BrandingController::class, 'show']);
 Route::get('/branding/assets/{asset}', [BrandingController::class, 'asset'])->whereIn('asset', ['logo', 'icon', 'favicon']);
 
-Route::post('/office/auth/login', [OfficeAuthController::class, 'login'])->middleware('throttle:10,1');
+Route::post('/office/auth/login', [OfficeAuthController::class, 'login'])->middleware('throttle:120,1');
 Route::middleware(['office.auth', AuditOfficeAction::class])->prefix('office')->group(function () {
     Route::get('/assistant-approvals', [\App\Http\Controllers\Office\AssistantApprovalController::class, 'index']);
-    Route::post('/assistant-approvals/{id}/approve', [\App\Http\Controllers\Office\AssistantApprovalController::class, 'approve'])->whereNumber('id')->middleware('throttle:30,1');
-    Route::post('/assistant-approvals/{id}/reject', [\App\Http\Controllers\Office\AssistantApprovalController::class, 'reject'])->whereNumber('id')->middleware('throttle:30,1');
-    Route::get('/health/system', \App\Http\Controllers\Office\ServerHealthController::class)->middleware('throttle:30,1');
-    Route::get('/health/workers', [\App\Http\Controllers\WorkerHealthController::class, 'details'])->middleware('throttle:30,1');
+    Route::post('/assistant-approvals/{id}/approve', [\App\Http\Controllers\Office\AssistantApprovalController::class, 'approve'])->whereNumber('id')->middleware('throttle:120,1');
+    Route::post('/assistant-approvals/{id}/reject', [\App\Http\Controllers\Office\AssistantApprovalController::class, 'reject'])->whereNumber('id')->middleware('throttle:120,1');
+    Route::get('/health/system', \App\Http\Controllers\Office\ServerHealthController::class)->middleware('throttle:600,1');
+    Route::get('/health/workers', [\App\Http\Controllers\WorkerHealthController::class, 'details'])->middleware('throttle:600,1');
     Route::get('/error-reports', [App\Http\Controllers\Office\ErrorReportController::class, 'index']);
     Route::get('/error-reports/businesses', [App\Http\Controllers\Office\ErrorReportController::class, 'businesses']);
-    Route::post('/error-reports', [App\Http\Controllers\Office\ErrorReportController::class, 'store'])->middleware('throttle:30,1');
+    Route::post('/error-reports', [App\Http\Controllers\Office\ErrorReportController::class, 'store'])->middleware('throttle:120,1');
     Route::get('/error-reports/{report}', [App\Http\Controllers\Office\ErrorReportController::class, 'show'])->whereNumber('report');
-    Route::put('/error-reports/{report}', [App\Http\Controllers\Office\ErrorReportController::class, 'update'])->whereNumber('report')->middleware('throttle:30,1');
-    Route::delete('/error-reports/{report}', [App\Http\Controllers\Office\ErrorReportController::class, 'destroy'])->whereNumber('report')->middleware('throttle:30,1');
+    Route::put('/error-reports/{report}', [App\Http\Controllers\Office\ErrorReportController::class, 'update'])->whereNumber('report')->middleware('throttle:120,1');
+    Route::delete('/error-reports/{report}', [App\Http\Controllers\Office\ErrorReportController::class, 'destroy'])->whereNumber('report')->middleware('throttle:120,1');
     Route::get('/error-reports/{report}/images/{index}', [App\Http\Controllers\Office\ErrorReportController::class, 'image'])->whereNumber(['report', 'index']);
     Route::prefix('agent-skills/ai/proposals')->controller(\App\Http\Controllers\Office\SkillManagementController::class)->group(function () {
-        Route::post('/', 'prepare')->middleware('throttle:3,1');
+        Route::post('/', 'prepare')->middleware('throttle:120,1');
         Route::get('/{proposal}', 'show')->whereUuid('proposal');
-        Route::post('/{proposal}/apply', 'apply')->whereUuid('proposal')->middleware('throttle:30,1');
-        Route::post('/{proposal}/discard', 'discard')->whereUuid('proposal')->middleware('throttle:30,1');
+        Route::post('/{proposal}/apply', 'apply')->whereUuid('proposal')->middleware('throttle:120,1');
+        Route::post('/{proposal}/discard', 'discard')->whereUuid('proposal')->middleware('throttle:120,1');
     });
     Route::prefix('agent-skills')->controller(\App\Http\Controllers\Office\AgentSkillController::class)->group(function () {
         Route::get('/', 'index');
@@ -324,8 +324,8 @@ Route::middleware(['office.auth', AuditOfficeAction::class])->prefix('office')->
     Route::post('/telegram-support/groups', [\App\Http\Controllers\Office\TelegramSupportGroupsController::class, 'store']);
     Route::put('/telegram-support/groups/{group}', [\App\Http\Controllers\Office\TelegramSupportGroupsController::class, 'update'])->whereNumber('group');
     Route::put('/telegram-support', [\App\Http\Controllers\Office\TelegramSupportSettingsController::class, 'update']);
-    Route::post('/telegram-support/test-connection', [\App\Http\Controllers\Office\TelegramSupportSettingsController::class, 'test'])->middleware('throttle:5,1');
-    Route::post('/telegram-support/register-webhook', [\App\Http\Controllers\Office\TelegramSupportSettingsController::class, 'register'])->middleware('throttle:5,1');
+    Route::post('/telegram-support/test-connection', [\App\Http\Controllers\Office\TelegramSupportSettingsController::class, 'test'])->middleware('throttle:120,1');
+    Route::post('/telegram-support/register-webhook', [\App\Http\Controllers\Office\TelegramSupportSettingsController::class, 'register'])->middleware('throttle:120,1');
     Route::get('/sales-ai/topups', [\App\Http\Controllers\Office\SalesAiTopupController::class, 'index']);
     Route::get('/sales-ai/topups/{id}', [\App\Http\Controllers\Office\SalesAiTopupController::class, 'show'])->whereNumber('id');
     Route::get('/businesses/{businessId}/sales-ai/wallet', [\App\Http\Controllers\Office\SalesAiTopupController::class, 'wallet'])->whereNumber('businessId');
@@ -337,7 +337,7 @@ Route::middleware(['office.auth', AuditOfficeAction::class])->prefix('office')->
     Route::post('/ai-balance-book/top-ups', [AiBalanceBookController::class, 'topUp']);
     Route::put('/ai-assistant', [AiAssistantSettingsController::class, 'update']);
     Route::put('/ai-assistant/api-key', [AiAssistantSettingsController::class, 'replaceKey']);
-    Route::post('/ai-assistant/test-connection', [AiAssistantSettingsController::class, 'testConnection'])->middleware('throttle:5,1');
+    Route::post('/ai-assistant/test-connection', [AiAssistantSettingsController::class, 'testConnection'])->middleware('throttle:120,1');
     Route::get('/admins', [AdminManagementController::class, 'index']);
     Route::post('/admins', [AdminManagementController::class, 'store']);
     Route::put('/admins/{admin}', [AdminManagementController::class, 'update'])->whereNumber('admin');
@@ -349,52 +349,52 @@ Route::middleware(['office.auth', AuditOfficeAction::class])->prefix('office')->
     Route::delete('/bank-books/{bank}', [BankBookController::class, 'destroy'])->whereNumber('bank');
     Route::put('/subscription-bank-book', [BankBookController::class, 'subscriptionAccount']);
     Route::put('/branding', [BrandingController::class, 'update']);
-    Route::post('/branding/theme/preview', [BrandingController::class, 'preview'])->middleware('throttle:5,1');
+    Route::post('/branding/theme/preview', [BrandingController::class, 'preview'])->middleware('throttle:120,1');
     Route::post('/branding/{asset}', [BrandingController::class, 'upload'])->whereIn('asset', ['logo', 'icon', 'favicon']);
     Route::delete('/branding/{asset}', [BrandingController::class, 'reset'])->whereIn('asset', ['logo', 'icon', 'favicon']);
-    Route::post('/mcp/access', [McpSupportAccessController::class, 'admin'])->middleware('throttle:5,1');
+    Route::post('/mcp/access', [McpSupportAccessController::class, 'admin'])->middleware('throttle:120,1');
     Route::get('/activity-alerts', [ActivityAlertController::class, 'index']);
     Route::get('/activity-alerts/config', [ActivityAlertController::class, 'config']);
     Route::post('/activity-alerts/auth', [ActivityAlertController::class, 'auth']);
-    Route::post('/businesses/{businessId}/email', [BusinessOwnerEmailController::class, 'storeOwner'])->whereNumber('businessId')->middleware('throttle:10,1');
-    Route::post('/platform-users/{platformUser}/email', [PlatformUserEmailController::class, 'store'])->whereNumber('platformUser')->middleware('throttle:10,1');
+    Route::post('/businesses/{businessId}/email', [BusinessOwnerEmailController::class, 'storeOwner'])->whereNumber('businessId')->middleware('throttle:120,1');
+    Route::post('/platform-users/{platformUser}/email', [PlatformUserEmailController::class, 'store'])->whereNumber('platformUser')->middleware('throttle:120,1');
     Route::apiResource('platform-users', PlatformUserController::class)->parameters(['platform-users' => 'platformUser'])->whereNumber('platformUser');
     Route::get('/product-reviews', [ProductReviewController::class, 'index']);
     Route::get('/product-reviews/options', [ProductReviewController::class, 'options']);
-    Route::post('/product-reviews', [ProductReviewController::class, 'store'])->middleware('throttle:30,1');
+    Route::post('/product-reviews', [ProductReviewController::class, 'store'])->middleware('throttle:120,1');
     Route::get('/product-reviews/{review}', [ProductReviewController::class, 'show'])->whereNumber('review');
-    Route::put('/product-reviews/{review}', [ProductReviewController::class, 'update'])->whereNumber('review')->middleware('throttle:30,1');
-    Route::delete('/product-reviews/{review}', [ProductReviewController::class, 'destroy'])->whereNumber('review')->middleware('throttle:30,1');
+    Route::put('/product-reviews/{review}', [ProductReviewController::class, 'update'])->whereNumber('review')->middleware('throttle:120,1');
+    Route::delete('/product-reviews/{review}', [ProductReviewController::class, 'destroy'])->whereNumber('review')->middleware('throttle:120,1');
     Route::get('/shop-reviews', [ShopReviewController::class, 'index']);
     Route::get('/shop-reviews/options', [ShopReviewController::class, 'options']);
-    Route::post('/shop-reviews', [ShopReviewController::class, 'store'])->middleware('throttle:30,1');
+    Route::post('/shop-reviews', [ShopReviewController::class, 'store'])->middleware('throttle:120,1');
     Route::get('/shop-reviews/{review}', [ShopReviewController::class, 'show'])->whereNumber('review');
-    Route::put('/shop-reviews/{review}', [ShopReviewController::class, 'update'])->whereNumber('review')->middleware('throttle:30,1');
-    Route::delete('/shop-reviews/{review}', [ShopReviewController::class, 'destroy'])->whereNumber('review')->middleware('throttle:30,1');
+    Route::put('/shop-reviews/{review}', [ShopReviewController::class, 'update'])->whereNumber('review')->middleware('throttle:120,1');
+    Route::delete('/shop-reviews/{review}', [ShopReviewController::class, 'destroy'])->whereNumber('review')->middleware('throttle:120,1');
     Route::get('/tutorials', [TutorialController::class, 'index']);
     Route::get('/marketplace-products', [MarketplaceProductController::class, 'index']);
     Route::get('/marketplace-products/shops', [MarketplaceProductController::class, 'shops']);
-    Route::post('/marketplace-products/link', [MarketplaceProductController::class, 'link'])->middleware('throttle:30,1');
+    Route::post('/marketplace-products/link', [MarketplaceProductController::class, 'link'])->middleware('throttle:120,1');
     Route::get('/marketplace-products/{id}', [MarketplaceProductController::class, 'show'])->whereNumber('id');
     Route::get('/marketplace-categories', [MarketplaceCategoryController::class, 'index']);
     Route::get('/marketplace-categories/options', [MarketplaceCategoryController::class, 'options']);
     Route::get('/marketplace-categories/{id}', [MarketplaceCategoryController::class, 'show'])->whereNumber('id');
-    Route::post('/marketplace-categories', [MarketplaceCategoryController::class, 'store'])->middleware('throttle:30,1');
-    Route::put('/marketplace-categories/{id}', [MarketplaceCategoryController::class, 'update'])->whereNumber('id')->middleware('throttle:30,1');
-    Route::delete('/marketplace-categories/{id}', [MarketplaceCategoryController::class, 'destroy'])->whereNumber('id')->middleware('throttle:30,1');
+    Route::post('/marketplace-categories', [MarketplaceCategoryController::class, 'store'])->middleware('throttle:120,1');
+    Route::put('/marketplace-categories/{id}', [MarketplaceCategoryController::class, 'update'])->whereNumber('id')->middleware('throttle:120,1');
+    Route::delete('/marketplace-categories/{id}', [MarketplaceCategoryController::class, 'destroy'])->whereNumber('id')->middleware('throttle:120,1');
     Route::post('/tutorials', [TutorialController::class, 'store']);
     Route::put('/tutorials/{tutorial}', [TutorialController::class, 'update'])->whereNumber('tutorial');
     Route::delete('/tutorials/{tutorial}', [TutorialController::class, 'destroy'])->whereNumber('tutorial');
     Route::get('/tutorials/{tutorial}/thumbnail', [TutorialController::class, 'thumbnail'])->whereNumber('tutorial');
     Route::get('/auth/me', [OfficeAuthController::class, 'me']);
-    Route::put('/auth/profile', [OfficeAuthController::class, 'updateProfile'])->middleware('throttle:10,1');
+    Route::put('/auth/profile', [OfficeAuthController::class, 'updateProfile'])->middleware('throttle:120,1');
     Route::post('/auth/logout', [OfficeAuthController::class, 'logout']);
     Route::get('/app-releases', [AppReleaseController::class, 'index']);
     Route::get('/contact-settings', [ContactSettingsController::class, 'show']);
-    Route::put('/contact-settings', [ContactSettingsController::class, 'update'])->middleware('throttle:10,1');
+    Route::put('/contact-settings', [ContactSettingsController::class, 'update'])->middleware('throttle:120,1');
     Route::put('/app-releases/{platform}', [AppReleaseController::class, 'store'])
         ->whereIn('platform', AppRelease::PLATFORMS)
-        ->middleware('throttle:12,1');
+        ->middleware('throttle:120,1');
     Route::get('/plans', [PlanController::class, 'index']);
     Route::post('/plans', [PlanController::class, 'store']);
     Route::put('/plans/{id}', [PlanController::class, 'update']);
@@ -404,20 +404,20 @@ Route::middleware(['office.auth', AuditOfficeAction::class])->prefix('office')->
     Route::put('/payment-methods/{id}', [PaymentMethodController::class, 'update']);
     Route::delete('/payment-methods/{id}', [PaymentMethodController::class, 'destroy']);
     Route::get('/businesses', [BusinessSubscriptionController::class, 'index']);
-    Route::delete('/businesses', [BusinessSubscriptionController::class, 'destroyBusinesses'])->middleware('throttle:10,1');
+    Route::delete('/businesses', [BusinessSubscriptionController::class, 'destroyBusinesses'])->middleware('throttle:120,1');
     Route::get('/businesses/{businessId}', [BusinessSubscriptionController::class, 'show']);
-    Route::put('/businesses/{businessId}/owner-password', [BusinessSubscriptionController::class, 'resetOwnerPassword'])->middleware('throttle:10,1');
+    Route::put('/businesses/{businessId}/owner-password', [BusinessSubscriptionController::class, 'resetOwnerPassword'])->middleware('throttle:120,1');
     Route::get('/subscription-requests', [BusinessSubscriptionController::class, 'requests']);
     Route::get('/subscription-payments', [FinancialReportController::class, 'payments']);
     Route::get('/financial-report', [FinancialReportController::class, 'index']);
     Route::get('/financial-book', [FinancialBookController::class, 'index']);
-    Route::put('/financial-book/founders', [FinancialBookController::class, 'updateFounders'])->middleware('throttle:30,1');
-    Route::post('/financial-book/entries', [FinancialBookController::class, 'store'])->middleware('throttle:30,1');
-    Route::patch('/financial-book/entries/{entry}/bank-book', [FinancialBookController::class, 'assignBank'])->whereNumber('entry')->middleware('throttle:30,1');
-    Route::post('/financial-book/entries/{entry}/void', [FinancialBookController::class, 'void'])->whereNumber('entry')->middleware('throttle:30,1');
+    Route::put('/financial-book/founders', [FinancialBookController::class, 'updateFounders'])->middleware('throttle:120,1');
+    Route::post('/financial-book/entries', [FinancialBookController::class, 'store'])->middleware('throttle:120,1');
+    Route::patch('/financial-book/entries/{entry}/bank-book', [FinancialBookController::class, 'assignBank'])->whereNumber('entry')->middleware('throttle:120,1');
+    Route::post('/financial-book/entries/{entry}/void', [FinancialBookController::class, 'void'])->whereNumber('entry')->middleware('throttle:120,1');
     Route::delete('/financial-records/{paymentId}', [FinancialReportController::class, 'destroy'])->whereNumber('paymentId');
     Route::put('/businesses/{businessId}/subscription', [BusinessSubscriptionController::class, 'assign']);
-    Route::patch('/businesses/{businessId}/subscriptions/{subscriptionId}/period', [BusinessSubscriptionController::class, 'updatePeriod'])->whereNumber(['businessId', 'subscriptionId'])->middleware('throttle:30,1');
+    Route::patch('/businesses/{businessId}/subscriptions/{subscriptionId}/period', [BusinessSubscriptionController::class, 'updatePeriod'])->whereNumber(['businessId', 'subscriptionId'])->middleware('throttle:120,1');
     Route::post('/businesses/{businessId}/subscription/renew', [BusinessSubscriptionController::class, 'renew']);
     Route::post('/businesses/{businessId}/subscription/trial/extend', [BusinessSubscriptionController::class, 'extendTrial']);
     Route::patch('/businesses/{businessId}/subscription/status', [BusinessSubscriptionController::class, 'setStatus']);

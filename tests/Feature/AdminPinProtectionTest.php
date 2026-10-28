@@ -87,9 +87,10 @@ class AdminPinProtectionTest extends TestCase
     }
     public function test_wrong_attempts_are_limited_and_never_mutate_stock(): void
     {
+        $this->withoutMiddleware(\App\Http\Middleware\ScopedThrottleRequests::class);
         $p = $this->product();
-        for ($i = 0; $i < 5; $i++) $this->postJson('/api/products/'.$p['id'].'/adjust-stock', ['quantity' => 1, 'authorization_pin' => 'wrong'])->assertForbidden();
-        $this->postJson('/api/products/'.$p['id'].'/adjust-stock', ['quantity' => 1, 'authorization_pin' => '2468'])->assertStatus(429)->assertHeader('Retry-After');
+        for ($i = 0; $i < 120; $i++) $this->postJson('/api/products/'.$p['id'].'/adjust-stock', ['quantity' => 1, 'authorization_pin' => 'wrong'])->assertForbidden();
+        $this->postJson('/api/products/'.$p['id'].'/adjust-stock', ['quantity' => 1, 'authorization_pin' => '2468'])->assertStatus(429)->assertHeader('Retry-After')->assertJsonPath('code', 'admin_pin_locked');
         $this->assertDatabaseHas('products', ['id' => $p['id'], 'stock' => 20]);
     }
     private function registerOwner(string $businessName, string $email): array

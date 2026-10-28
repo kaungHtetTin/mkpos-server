@@ -18,7 +18,7 @@ class ShopPaymentProofValidation
         $book = app(AiBalanceBook::class);
         $book->funded();
         $pricing = $book->pricing('deepseek-flash');
-        abort_unless(preg_match('#^ecommerce-proofs/[0-9]+/[a-zA-Z0-9._-]+$#', $path), 422);
+        abort_unless(preg_match('#^(?:ecommerce-proofs|sales-ai-action-proofs)/[0-9]+/[a-zA-Z0-9._-]+$#', $path), 422);
         $disk = Storage::disk('local');
         abort_unless($disk->exists($path) && $disk->size($path) <= 2 * 1024 * 1024, 422);
         $bytes = $disk->get($path);
@@ -35,11 +35,11 @@ class ShopPaymentProofValidation
             ...array_fill_keys(['amount', 'currency', 'recipient_account', 'recipient_name', 'provider', 'transaction_reference', 'paid_at', 'notes'], 'present|nullable|string|max:2000')])->validate();
     }
 
-    public function process(int $id): array
+    public function process(int $id, ?array $prevalidatedObserved = null): array
     {
         $proof = DB::table('ecommerce_payments')->where('id', $id)->where('type', 'proof')->firstOrFail();
         try {
-            $observed = $this->extract($proof->proof_path);
+            $observed = $prevalidatedObserved ?? $this->extract($proof->proof_path);
             return DB::transaction(function () use ($proof, $observed) {
                 // Serialize duplicate detection and reference storage across this shop's uploads.
                 DB::table('businesses')->where('id', $proof->business_id)->lockForUpdate()->first();

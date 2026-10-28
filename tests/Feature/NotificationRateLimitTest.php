@@ -25,22 +25,23 @@ class NotificationRateLimitTest extends TestCase
         $limiter = RateLimiter::limiter('api');
         $normal = $limiter($this->requestFor('products'));
         $alerts = $limiter($this->requestFor('activity-alerts'));
-        $this->assertSame(120, $alerts->maxAttempts);
+        $this->assertSame(600, $alerts->maxAttempts);
         $this->assertNotSame($normal->key, $alerts->key);
         foreach (['activity-alerts', 'subscription/alerts', 'shop-admin/order-notifications'] as $base) {
             foreach ([[$base, 'GET'], [$base.'/config', 'GET'], [$base.'/auth', 'POST']] as [$path, $method]) {
-                $this->assertSame($alerts->key, $limiter($this->requestFor($path, $method))->key);
+                $expected = $method === 'GET' ? $alerts : $limiter($this->requestFor('activity-alerts/auth', 'POST'));
+                $this->assertSame($expected->key, $limiter($this->requestFor($path, $method))->key);
             }
         }
         $office = $limiter($this->requestFor('office/activity-alerts'));
         $this->assertNotSame($alerts->key, $office->key);
         $this->assertSame($office->key, $limiter($this->requestFor('office/activity-alerts/config'))->key);
-        $this->assertSame($office->key, $limiter($this->requestFor('office/activity-alerts/auth', 'POST'))->key);
+        $this->assertNotSame($office->key, $limiter($this->requestFor('office/activity-alerts/auth', 'POST'))->key);
         $this->assertNotSame($alerts->key, $limiter($this->requestFor('activity-alerts', 'GET', 2))->key);
 
         $middleware = app(ThrottleRequests::class);
         $send = fn ($request) => $middleware->handle($request, fn () => response()->json(['ok' => true]), 'api');
-        for ($i = 0; $i < 120; $i++) {
+        for ($i = 0; $i < 600; $i++) {
             $send($this->requestFor('activity-alerts'));
         }
         $this->assertSame(200, $send($this->requestFor('products'))->getStatusCode());
@@ -60,7 +61,8 @@ class NotificationRateLimitTest extends TestCase
                 ['ecommerce/chat/auth', 'POST'], ['ecommerce/order-alerts/feed', 'POST'],
                 ['ecommerce/order-alerts/config', 'POST'], ['ecommerce/order-alerts/auth', 'POST'],
                 ['ecommerce/customer/notifications', 'GET']] as [$path, $method]) {
-                $this->assertSame($background->key, $limiter($this->requestFor($path, $method))->key);
+                $expected = $method === 'GET' ? $background : $limiter($this->requestFor('ecommerce/chat/thread/read', 'POST'));
+                $this->assertSame($expected->key, $limiter($this->requestFor($path, $method))->key);
             }
             $this->assertSame($normal->key, $limiter($this->requestFor('ecommerce/chat/thread/messages', 'POST'))->key);
         }
@@ -75,7 +77,7 @@ class NotificationRateLimitTest extends TestCase
         $this->assertNotSame($business->key, $health->key);
         $this->assertNotSame($business->key, $shop->key);
         $this->assertNotSame($health->key, $shop->key);
-        $this->assertSame(120, $health->maxAttempts);
+        $this->assertSame(600, $health->maxAttempts);
     }
 
     public function test_cross_origin_clients_can_read_the_server_retry_delay(): void

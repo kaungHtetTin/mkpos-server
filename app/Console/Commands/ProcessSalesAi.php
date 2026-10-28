@@ -17,6 +17,7 @@ class ProcessSalesAi extends Command
         foreach (DB::table('sales_ai_runs')->where('status', 'processing')->where('started_at', '<', now('UTC')->subMinutes(10))->limit(100)->pluck('id') as $id) $runner->fail($id, 'worker_interrupted');
         $limit = max(1, min(100, (int) $this->option('limit')));
         foreach (DB::table('sales_ai_runs')->where('status', 'pending')->orderBy('created_at')->limit($limit)->pluck('id') as $id) $runner->process($id);
+        app(\App\Services\SalesTelegram\Checkout::class)->recoverProofChecks($limit);
         app(\App\Services\SalesTelegram\Delivery::class)->recover($limit * 2);
         return self::SUCCESS;
     }
