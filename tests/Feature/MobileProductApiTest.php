@@ -83,6 +83,52 @@ class MobileProductApiTest extends TestCase
             ->assertJsonCount(3);
     }
 
+    public function test_name_sorting_applies_before_pagination_with_stable_ties_and_filters(): void
+    {
+        $this->withHeaders([
+            'Origin' => 'http://127.0.0.1:5176',
+            'Referer' => 'http://127.0.0.1:5176/products',
+        ]);
+
+        $session = $this->postJson('/api/auth/register', [
+            'business_name' => 'Mobile Inventory Shop',
+            'owner_name' => 'Mobile Owner',
+            'email' => 'mobile-product-sorting@example.com',
+            'password' => 'password123',
+            'password_confirmation' => 'password123',
+        ])->assertCreated()->json();
+
+        $planId = DB::table('subscription_plans')->insertGetId([
+            'name' => 'Mobile Test Plan', 'slug' => 'mobile-test-plan-'.uniqid(), 'price' => 1000,
+            'currency' => 'Ks', 'duration_days' => 30, 'features' => '[]', 'is_active' => true,
+            'sort_order' => 0, 'created_at' => now(), 'updated_at' => now(),
+        ]);
+        DB::table('business_subscriptions')->insert([
+            'business_id' => $session['business']['id'], 'subscription_plan_id' => $planId,
+            'status' => 'active', 'starts_at' => now(), 'ends_at' => now()->addDays(30),
+            'price_paid' => 1000, 'created_at' => now(), 'updated_at' => now(),
+        ]);
+
+        $ids = [];
+        foreach (['Zulu', 'Alpha', 'Alpha'] as $name) {
+            $ids[] = $this->postJson('/api/products', [
+                'name' => $name, 'category' => 'Sorted', 'price' => 1000,
+                'cost' => 500, 'stock' => 2,
+                'prices' => [['name' => 'Retail', 'price' => 1000]],
+            ])->assertOk()->json('id');
+        }
+        $scope = '/api/products?with_total=true&category=Sorted&stock_status=in_stock&limit=1';
+        foreach (['name_asc' => [$ids[1], $ids[2], $ids[0]], 'name_desc' => [$ids[0], $ids[2], $ids[1]]] as $sort => $expected) {
+            foreach ($expected as $offset => $id) {
+                $this->getJson($scope.'&sort='.$sort.'&offset='.$offset)
+                    ->assertOk()->assertJsonPath('total', 3)
+                    ->assertJsonCount(1, 'items')->assertJsonPath('items.0.id', $id);
+            }
+        }
+        $this->getJson($scope)->assertOk()->assertJsonPath('items.0.id', $ids[1]);
+        $this->getJson($scope.'&sort=invalid')->assertOk()->assertJsonPath('items.0.id', $ids[1]);
+    }
+
     private function png(int $width, int $height): string
     {
         $chunk = static fn (string $type, string $data): string => pack('N', strlen($data))

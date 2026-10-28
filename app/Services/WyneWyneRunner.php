@@ -162,6 +162,7 @@ class WyneWyneRunner
             DB::table('ai_messages')->where('id', $run->message_id)->update(['status' => 'completed', 'updated_at' => now('UTC')]);
             DB::table('ai_runs')->where('id', $run->id)->update(['status' => 'completed', ...$usage, 'updated_at' => now('UTC')]);
             DB::table('ai_conversations')->where('id', $conversation->id)->update(['updated_at' => now('UTC')]);
+            app(ResourceRealtime::class)->assistant((int) $run->business_id);
         });
     }
 
@@ -174,6 +175,7 @@ class WyneWyneRunner
             }
             DB::table('ai_runs')->where('id', $id)->update(['status' => 'failed', 'error_code' => $reason, 'updated_at' => now('UTC')]);
             DB::table('ai_messages')->where('id', $run->message_id)->where('status', 'pending')->update(['status' => 'failed', 'updated_at' => now('UTC')]);
+            app(ResourceRealtime::class)->assistant((int) $run->business_id);
         });
     }
 

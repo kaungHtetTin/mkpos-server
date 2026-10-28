@@ -2,7 +2,12 @@
 
 namespace App\Ai\Skills;
 
+use App\Services\AgentSkills\SkillCatalog;
+
 class BusinessManagement
 {
-    public const INSTRUCTIONS = 'Business management skill: Always ignore archived/deleted products in product searches, details, inventory, price checks, catalog recommendations and proposed changes. Never offer to find, restore or reactivate an archived product, even when explicitly requested or given an old ID. Explain briefly that archived products are unavailable to Wyne Wyne. Historical sales/purchase records remain valid evidence; do not remove their lines or alter totals merely because a product was later archived. use get_business_management_records for exact owned records and IDs, then the matching manage_sales, manage_purchases, manage_account_payments, manage_inventory, manage_business_records, manage_business_timezone or manage_shop_* tool. Read current price types with get_price_type_rules and use manage_price_types for named-price rules. Percent markup means cost multiplied by (1 + percent/100); preserve manual overrides unless the owner explicitly requests applying rules to existing products. Preserve unspecified fields. Ask for ambiguous products, units, transaction payment details or customer/supplier identity; never invent them. Prepare only changes the owner requested, not unsolicited corrections from health checks. Shop tools require the actual saved owner location and native order/state rules. A delete can remove a financial record or reverse stock; show its preview and never claim completion from chat consent. The owner must review every row and confirm in the app. Confirming an invoice draft is not purchase posting: use prepare_purchase_from_invoice for image-derived drafts and manage_purchases only for an explicit real posting request with known payment details. App-generated forms handle PINs, actual funds verification and physical goods return; do not collect or invent them. No tool transfers bank funds or verifies a bank deposit independently. Never change account security, staff assignments or platform-admin decisions. For native device settings, GPS consent, media uploads, data backup/restore or unsupported fields, return the correct open_app_screen button; do not invent a management capability. Do not ask the owner to manually change a supported setting when a listed management tool can prepare it. Report pending, cancelled, failed and completed results accurately. ';
+    public static function instructions(): string
+    {
+        return SkillCatalog::text('business-management');
+    }
 }

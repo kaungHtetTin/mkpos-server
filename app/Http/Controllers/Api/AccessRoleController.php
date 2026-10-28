@@ -37,6 +37,7 @@ class AccessRoleController extends Controller
 
     public function store(Request $request)
     {
+        app(\App\Services\AdminPinProtection::class)->authorize($request);
         $businessId = (int) $request->user('web')->business_id;
         $data = $this->validated($request, $businessId);
         $role = AccessRole::create([
@@ -50,6 +51,7 @@ class AccessRoleController extends Controller
 
     public function update(Request $request, int $id): array
     {
+        app(\App\Services\AdminPinProtection::class)->authorize($request);
         $businessId = (int) $request->user('web')->business_id;
         $role = AccessRole::where('business_id', $businessId)->findOrFail($id);
         $data = $this->validated($request, $businessId, $id);
@@ -63,6 +65,7 @@ class AccessRoleController extends Controller
 
     public function destroy(Request $request, int $id): array
     {
+        app(\App\Services\AdminPinProtection::class)->authorize($request);
         $businessId = (int) $request->user('web')->business_id;
         $role = AccessRole::where('business_id', $businessId)->findOrFail($id);
         abort_if($role->staff()->where('role', 'staff')->exists(), 422, 'Reassign or delete this role\'s staff before deleting it.');

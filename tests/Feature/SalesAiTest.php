@@ -140,8 +140,8 @@ class SalesAiTest extends TestCase
         $this->assertSame(0, DB::table('error_reports')->where('business_id', $this->business)->count());
         SalesImageRepresentative::assertPrompted(function ($prompt) {
             $names = collect($prompt->agent->tools())->map(fn ($tool) => $tool->name())->all();
-            $this->assertStringContainsString(PaymentScreenshotReview::READING_INSTRUCTIONS, $prompt->agent->instructions());
-            $this->assertStringContainsString(PaymentScreenshotReview::SALES_INSTRUCTIONS, $prompt->agent->instructions());
+            $this->assertStringContainsString(PaymentScreenshotReview::instructions('reading'), $prompt->agent->instructions());
+            $this->assertStringContainsString(PaymentScreenshotReview::instructions('sales'), $prompt->agent->instructions());
             $this->assertStringNotContainsString('System payment review context:', $prompt->agent->instructions());
             $this->assertContains('find_product_from_image', $names);
             $this->assertContains('submit_order_payment_proof', $names);
@@ -153,12 +153,12 @@ class SalesAiTest extends TestCase
         $settings = app(Settings::class)->get($this->business);
         $settings['tool_permissions'] = [];
         $agent = new SalesImageRepresentative($thread, $settings);
-        $this->assertSame(['request_human'], collect($agent->tools())->map(fn ($tool) => $tool->name())->all());
+        $this->assertSame(['get_sales_skills', 'request_human'], collect($agent->tools())->map(fn ($tool) => $tool->name())->all());
         $this->assertStringContainsString('budget', $agent->instructions());
         $this->assertStringContainsString('Never compare a shop order receipt against MKPOS', $agent->instructions());
         $this->assertStringContainsString('customer confirmation', $agent->instructions());
         $this->assertStringContainsString('Only the shop owner/team confirms actual receipt of funds', $agent->instructions());
-        $this->assertStringContainsString('Telegram shop payment proof still goes through', $agent->instructions());
+        $this->assertStringContainsString('Telegram shop payment proof uses the native private', $agent->instructions());
     }
 
     public function test_image_scope_and_unknown_error_escalation_are_bound_to_this_shop(): void
@@ -269,6 +269,8 @@ class SalesAiTest extends TestCase
         $id = $this->send();
         app(Runner::class)->process($id);
         $this->assertSame(1_517_040, (int) DB::table('sales_ai_runs')->where('id', $id)->value('charge_micros'));
+        Http::swap(new \Illuminate\Http\Client\Factory);
+        Http::preventStrayRequests();
         Http::fake(['api.deepseek.com/*' => Http::response(['error' => ['message' => 'Unavailable']], 503)]);
         $id = $this->send('Another question');
         app(Runner::class)->process($id);

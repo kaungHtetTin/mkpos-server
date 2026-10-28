@@ -20,6 +20,7 @@ class PublicTools
         abort_unless(app(\App\Services\SalesTelegram\Inbox::class)->current($thread, $agent->messageId),403);
         if (($thread->sales_ai_channel ?? 'web')==='telegram') {
             if ($name==='prepare_checkout') return app(\App\Services\SalesTelegram\Checkout::class)->prepare($agent,$thread,$arguments);
+            if ($name==='submit_order_payment_proof') return app(\App\Services\SalesTelegram\Checkout::class)->prepareProof($agent,$thread,$arguments);
             if (in_array($name,\App\Services\SalesTelegram\Identity::ACCOUNT_TOOLS,true)) return app(\App\Services\SalesTelegram\Identity::class)->orders($thread,$name,$arguments);
         }
         abort_if($agent->actionEvent && !in_array($name, SalesRepresentative::FOLLOW_UP_TOOLS, true), 403, 'Form follow-ups can only read order/request status or request human help.');

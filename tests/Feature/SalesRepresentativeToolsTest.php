@@ -92,10 +92,49 @@ class SalesRepresentativeToolsTest extends TestCase
         return $this->postJson($this->url($a['action_id']).'/review', ['revision' => $review['revision'], 'preview_hash' => $review['preview_hash'], 'values' => ['items' => [['product_id' => $this->product, 'quantity' => 2]], 'fulfillment' => 'pickup', 'payment_method_id' => $method, 'customer_name' => 'Buyer', 'phone' => '099999999']])->assertOk()->json();
     }
 
+    private function existingUnpaidTransferOrder(): string
+    {
+        $store = app(RepresentativeTools::class)->store($this->thread);
+        $values = ['items' => [['product_id' => $this->product, 'quantity' => 2]], 'fulfillment' => 'pickup',
+            'payment_method_id' => 'bank', 'customer_name' => 'Buyer', 'phone' => '099999999', 'idempotency_key' => (string) Str::uuid()];
+        $quote = app(EcommerceService::class)->quote($store, $values);
+        // Existing orders from the native shop remain eligible for the separate proof flow.
+        return app(EcommerceService::class)->checkout($store, $values + ['quote_hash' => $quote['quote_hash']], $this->thread->platform_customer_id)['reference'];
+    }
+
+    public function test_non_cod_checkout_requires_reviewed_proof_and_saves_it_with_the_order_once(): void
+    {
+        $a = $this->checkout($this->agent(), 'bank');
+        $this->assertFalse($a['preview']['ready']);
+        $this->assertTrue($a['preview']['payment_proof_required']);
+        $this->postJson($this->url($a['id']).'/confirm', ['revision' => $a['revision'], 'preview_hash' => $a['preview_hash'], 'confirmed' => true])->assertUnprocessable();
+        $this->assertSame(0, DB::table('ecommerce_orders')->where('business_id', $this->thread->business_id)->count());
+        $a = $this->post($this->url($a['id']).'/review', ['revision' => (string) $a['revision'], 'preview_hash' => $a['preview_hash'],
+            'values' => json_encode(array_diff_key($a['values'], array_flip(['idempotency_key', 'quote_hash']))), 'image' => UploadedFile::fake()->image('checkout-payment.png')])->assertOk()->assertJsonPath('has_image', true)->assertJsonPath('preview.ready', true)->json();
+        $this->get($this->url($a['id']).'/image')->assertOk();
+        $result = $this->confirm($a); $this->confirm($a);
+        $this->assertSame('proof_submitted', $result['result']['payment_status']);
+        $order = DB::table('ecommerce_orders')->where('reference', $result['result']['reference'])->first();
+        $this->assertSame('proof_submitted', $order->payment_status);
+        $this->assertSame(1, DB::table('ecommerce_payments')->where('order_id', $order->id)->where('type', 'proof')->count());
+        $this->assertSame(0, DB::table('ecommerce_payments')->where('order_id', $order->id)->where('type', 'confirm')->count());
+    }
+
+    public function test_a_changed_reviewed_checkout_screenshot_cannot_place_an_order(): void
+    {
+        $a = $this->checkout($this->agent(), 'bank');
+        $a = $this->post($this->url($a['id']).'/review', ['revision' => (string) $a['revision'], 'preview_hash' => $a['preview_hash'],
+            'values' => json_encode(array_diff_key($a['values'], array_flip(['idempotency_key', 'quote_hash']))), 'image' => UploadedFile::fake()->image('receipt.png')])->assertOk()->json();
+        $payload = json_decode(DB::table('sales_ai_actions')->where('id', $a['id'])->value('payload'), true);
+        Storage::disk('local')->put($payload['evidence_path'], 'changed image bytes');
+        $this->postJson($this->url($a['id']).'/confirm', ['revision' => $a['revision'], 'preview_hash' => $a['preview_hash'], 'confirmed' => true])->assertConflict();
+        $this->assertSame(0, DB::table('ecommerce_orders')->where('business_id', $this->thread->business_id)->count());
+    }
+
     public function test_all_schemas_are_available_and_public_catalog_policies_comparison_and_budget_are_verified(): void
     {
         $agent = $this->agent();
-        $this->assertCount(21, iterator_to_array((function () use ($agent) { yield from $agent->tools(); })()));
+        $this->assertCount(22, iterator_to_array((function () use ($agent) { yield from $agent->tools(); })()));
         foreach ($agent->tools() as $tool) $tool->schema(new \Illuminate\JsonSchema\JsonSchemaTypeFactory);
         $p = $this->tool($agent, 'get_product_details', ['product_id' => $this->product]);
         $this->assertSame(100, $p['price']); $this->assertArrayNotHasKey('cost', $p);
@@ -157,7 +196,7 @@ class SalesRepresentativeToolsTest extends TestCase
 
     public function test_payment_proof_needs_an_image_review_and_stays_pending_shop_verification(): void
     {
-        $agent = $this->agent(); $order = $this->confirm($this->checkout($agent, 'bank'))['result']['reference'];
+        $order = $this->existingUnpaidTransferOrder();
         $agent = $this->agent(true);
         $id = $this->tool($agent, 'submit_order_payment_proof', ['reference' => $order])['action_id'];
         $this->publish($agent);
@@ -233,7 +272,7 @@ class SalesRepresentativeToolsTest extends TestCase
 
     public function test_handoff_cancels_authority_and_expiry_prunes_private_review_images(): void
     {
-        $agent = $this->agent(); $reference = $this->confirm($this->checkout($agent, 'bank'))['result']['reference'];
+        $reference = $this->existingUnpaidTransferOrder();
         $agent = $this->agent(); $id = $this->tool($agent, 'submit_order_payment_proof', ['reference' => $reference])['action_id'];
         $this->publish($agent); $a = $this->getJson($this->url($id))->assertOk()->json();
         $a = $this->post($this->url($id).'/review', ['revision' => (string) $a['revision'], 'preview_hash' => $a['preview_hash'], 'values' => '{}', 'image' => UploadedFile::fake()->image('receipt.png')])->assertOk()->json();
@@ -332,13 +371,14 @@ class SalesRepresentativeToolsTest extends TestCase
     public function test_confirmed_form_triggers_one_real_ai_follow_up_from_the_verified_result(): void
     {
         $a = $this->checkout($this->agent()); $done = $this->confirm($a); $this->confirm($a);
+        DB::table('sales_ai_runs')->where('business_id', $this->thread->business_id)->where('status', 'processing')->update(['status' => 'completed']);
         $runs = $this->feedbackRuns($a['id']); $this->assertCount(2, $runs);
         Http::fake(['api.deepseek.com/*' => Http::response($this->feedbackReply('Your order '.$done['result']['reference'].' is placed. Payment is awaiting shop verification.'))]);
         foreach ($runs as $run) app(\App\Services\SalesAi\Runner::class)->process($run->id);
         Http::assertSentCount(1);
         Http::assertSent(function ($r) use ($done) {
             $data = $r->data();
-            $this->assertEqualsCanonicalizing(['get_customer_order_details', 'get_customer_request_status', 'request_human'], array_column(array_column($data['tools'], 'function'), 'name'));
+            $this->assertEqualsCanonicalizing(['get_customer_order_details', 'get_customer_request_status', 'get_sales_skills', 'request_human'], array_column(array_column($data['tools'], 'function'), 'name'));
             return str_contains(json_encode($data['messages']), $done['result']['reference']) && str_contains(json_encode($data['messages']), 'order_created');
         });
         $reply = DB::table('shop_chat_messages')->whereIn('sales_ai_run_id', $runs->pluck('id'))->where('is_ai', true)->first();
@@ -380,7 +420,7 @@ class SalesRepresentativeToolsTest extends TestCase
     {
         $base = $this->agent();
         $agent = new SalesRepresentative($base->thread, $base->settings, runId: $base->runId, messageId: $base->messageId, actionEvent: ['outcome' => 'completed']);
-        $this->assertCount(3, iterator_to_array((function () use ($agent) { yield from $agent->tools(); })()));
+        $this->assertCount(4, iterator_to_array((function () use ($agent) { yield from $agent->tools(); })()));
         try { $this->tool($agent, 'prepare_checkout', ['items' => [['product_id' => $this->product, 'quantity' => 2]]]); $this->fail('Follow-ups must not prepare mutations'); }
         catch (\Symfony\Component\HttpKernel\Exception\HttpException $e) { $this->assertSame(403, $e->getStatusCode()); }
         $this->assertSame(0, DB::table('sales_ai_actions')->where('business_id', $this->thread->business_id)->count());
@@ -389,6 +429,7 @@ class SalesRepresentativeToolsTest extends TestCase
     public function test_a_new_form_result_suppresses_an_in_flight_preview_reply_without_handing_off(): void
     {
         $a = $this->checkout($this->agent()); $run = $this->feedbackRuns($a['id'])->first();
+        DB::table('sales_ai_runs')->where('business_id', $this->thread->business_id)->where('status', 'processing')->update(['status' => 'completed']);
         Http::fake(['api.deepseek.com/*' => function () use ($a) {
             $this->confirm($a);
             return Http::response($this->feedbackReply('The quote is ready; confirm your order.'));

@@ -112,7 +112,7 @@ class Runner
                 throw new \RuntimeException('Images disabled');
             }
             $agent = $hasImage ? new TelegramImageReader($message->language, identity: KaungKaungService::NAME)
-                : app(CustomerServiceAgent::class, ['history' => $history, 'language' => $message->language]);
+                : app(CustomerServiceAgent::class, ['history' => $history, 'language' => $message->language, 'channel' => $conversation->chat_id < 0 ? 'telegram_group' : 'telegram_private', 'runReference' => (string) $message->id]);
             app(AiProviderCredentials::class)->activate();
             $answer = app(TypingIndicator::class)->during($message, $conversation, function () use ($agent, $message, $hasImage) {
                 $attachments = $hasImage ? [app(ImageInput::class)->attachment(Crypt::decryptString($message->image_file_id_encrypted), (int) $message->bot_id)] : [];

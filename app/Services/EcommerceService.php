@@ -302,6 +302,7 @@ class EcommerceService
             $order = DB::table('ecommerce_orders')->where('business_id', $businessId)->where('id', $id)->lockForUpdate()->first();
             abort_unless($order, 404, 'Order unavailable.');
             if ($order->status === $next) return $this->orderView($order, true);
+            if ($next === 'return_pending' || $returned) app(AdminPinProtection::class)->authorize();
             $allowed = ['pending' => ['accepted', 'cancelled'], 'accepted' => ['packing', 'cancelled'],
                 'packing' => ['ready_for_pickup', 'dispatched', 'cancelled'], 'ready_for_pickup' => ['completed', 'cancelled'],
                 'dispatched' => ['completed', 'return_pending'], 'return_pending' => ['cancelled']];
@@ -340,6 +341,7 @@ class EcommerceService
 
     public function payment(int $businessId, int $id, string $action, array $data, int $actor): array
     {
+        if ($action === 'refund') app(AdminPinProtection::class)->authorize();
         return DB::transaction(function () use ($businessId, $id, $action, $data, $actor) {
             DB::table('ai_balance_accounts')->where('id', 1)->lockForUpdate()->first();
             $order = DB::table('ecommerce_orders')->where('business_id', $businessId)->where('id', $id)->lockForUpdate()->first();

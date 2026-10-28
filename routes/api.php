@@ -73,8 +73,12 @@ Route::post('/auth/login', [AuthController::class, 'login'])->middleware('thrott
 Route::post('/auth/forgot-password', [PasswordResetController::class, 'requestCode'])->middleware('throttle:5,1');
 Route::post('/auth/reset-password', [PasswordResetController::class, 'reset'])->middleware('throttle:10,1');
 Route::get('/contact-settings', [ContactSettingsController::class, 'show']);
+Route::get('/branding/realtime/config', [\App\Http\Controllers\ResourceRealtimeController::class, 'config'])->middleware('throttle:30,1');
+Route::get('/branding/realtime/auth', [\App\Http\Controllers\ResourceRealtimeController::class, 'auth'])->middleware('throttle:30,1');
 
 Route::middleware(['auth:sanctum', VerifyPasswordReset::class, 'business'])->group(function () {
+    Route::get('/realtime/resources/config', [\App\Http\Controllers\ResourceRealtimeController::class, 'config']);
+    Route::post('/realtime/resources/auth', [\App\Http\Controllers\ResourceRealtimeController::class, 'auth'])->middleware('throttle:30,1');
     Route::prefix('ai-assistant')->middleware('throttle:ai-chat')->group(function () {
         Route::get('/config', [AiAssistantController::class, 'config']);
         Route::get('/product-template', [AiAssistantController::class, 'template']);
@@ -293,6 +297,27 @@ Route::middleware(['office.auth', AuditOfficeAction::class])->prefix('office')->
     Route::put('/error-reports/{report}', [App\Http\Controllers\Office\ErrorReportController::class, 'update'])->whereNumber('report')->middleware('throttle:30,1');
     Route::delete('/error-reports/{report}', [App\Http\Controllers\Office\ErrorReportController::class, 'destroy'])->whereNumber('report')->middleware('throttle:30,1');
     Route::get('/error-reports/{report}/images/{index}', [App\Http\Controllers\Office\ErrorReportController::class, 'image'])->whereNumber(['report', 'index']);
+    Route::prefix('agent-skills/ai/proposals')->controller(\App\Http\Controllers\Office\SkillManagementController::class)->group(function () {
+        Route::post('/', 'prepare')->middleware('throttle:3,1');
+        Route::get('/{proposal}', 'show')->whereUuid('proposal');
+        Route::post('/{proposal}/apply', 'apply')->whereUuid('proposal')->middleware('throttle:30,1');
+        Route::post('/{proposal}/discard', 'discard')->whereUuid('proposal')->middleware('throttle:30,1');
+    });
+    Route::prefix('agent-skills')->controller(\App\Http\Controllers\Office\AgentSkillController::class)->group(function () {
+        Route::get('/', 'index');
+        Route::post('/', 'store');
+        Route::post('/preview', 'preview');
+        Route::get('/{skill}', 'show')->whereNumber('skill');
+        Route::put('/{skill}', 'update')->whereNumber('skill');
+        Route::delete('/{skill}', 'destroy')->whereNumber('skill');
+        Route::get('/{skill}/versions', 'versions')->whereNumber('skill');
+        Route::get('/{skill}/versions/{version}', 'version')->whereNumber(['skill','version']);
+        Route::post('/{skill}/publish', 'publish')->whereNumber('skill');
+        Route::post('/{skill}/versions/{version}/restore', 'restore')->whereNumber(['skill','version']);
+    });
+    Route::get('/agent-assignments', [\App\Http\Controllers\Office\AgentSkillController::class, 'agents']);
+    Route::get('/agent-assignments/{agent}', [\App\Http\Controllers\Office\AgentSkillController::class, 'assignments']);
+    Route::put('/agent-assignments/{agent}', [\App\Http\Controllers\Office\AgentSkillController::class, 'saveAssignments']);
     Route::get('/ai-assistant', [AiAssistantSettingsController::class, 'show']);
     Route::get('/telegram-support', [\App\Http\Controllers\Office\TelegramSupportSettingsController::class, 'show']);
     Route::get('/telegram-support/groups', [\App\Http\Controllers\Office\TelegramSupportGroupsController::class, 'index']);

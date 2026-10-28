@@ -68,6 +68,11 @@ class WorkerHealthTest extends TestCase
             '--max-time' => 45, '--sleep' => 1, '--timeout' => 360, '--tries' => 60, '--no-interaction' => true,
         ]]], $command->invocations);
         $this->assertSame('cron_idle', DB::table('worker_heartbeats')->where('worker', 'sales_ai')->value('state'));
+        $command->invocations = [];
+        $this->assertSame(0, $command->run(new ArrayInput(['queue' => 'wyne-wyne']), new NullOutput));
+        $this->assertSame('wyne-wyne', $command->invocations[0][1]['connection']);
+        $this->assertSame('wyne-wyne', $command->invocations[0][1]['--queue']);
+        $this->assertSame('cron_idle', DB::table('worker_heartbeats')->where('worker', 'wyne_wyne')->value('state'));
         $this->artisan('cron:work', ['queue' => 'unknown'])->assertFailed();
     }
 
@@ -113,6 +118,7 @@ class WorkerHealthTest extends TestCase
     private function healthy(): void
     {
         Event::dispatch(new Looping('sales-ai', 'sales-ai'));
+        Event::dispatch(new Looping('wyne-wyne', 'wyne-wyne'));
         foreach (['schedule:run', 'system-agent:validate-payments'] as $command) {
             $this->commandEvent($command, true);
             $this->commandEvent($command, false);
@@ -124,7 +130,7 @@ class WorkerHealthTest extends TestCase
         $this->getJson('/api/health/workers')->assertStatus(503)->assertJsonPath('ok', false)
             ->assertJsonPath('workers.sales_ai.status', 'missing')->assertJsonPath('workers.scheduler.status', 'missing')
             ->assertJsonPath('workers.payment_validation.status', 'missing')->assertJsonPath('workers.default_queue.status', 'not_required')
-            ->assertJsonPath('wyne_wyne.worker_required', false)->assertJsonPath('wyne_wyne.mode', 'http')->assertJsonPath('workers.wyne_wyne.status', 'not_required')->assertHeader('Cache-Control', 'no-store, private');
+            ->assertJsonPath('wyne_wyne.worker_required', true)->assertJsonPath('wyne_wyne.mode', 'queue')->assertJsonPath('workers.wyne_wyne.status', 'missing')->assertHeader('Cache-Control', 'no-store, private');
         $this->assertSame(0, DB::table('worker_heartbeats')->count());
         Queue::assertNothingPushed();
         Http::assertNothingSent();

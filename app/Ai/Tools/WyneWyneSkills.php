@@ -3,7 +3,6 @@
 namespace App\Ai\Tools;
 
 use App\Ai\Agents\MkposAssistant;
-use App\Ai\Skills\WyneWyneService;
 use App\Services\AiAssistantAccess;
 use Illuminate\Contracts\JsonSchema\JsonSchema;
 use Laravel\Ai\Contracts\Tool;
@@ -25,15 +24,15 @@ class WyneWyneSkills implements Tool
 
     public function schema(JsonSchema $schema): array
     {
-        return ['topic' => $schema->string()->enum(['all', ...array_keys(WyneWyneService::GUIDES)])->required()];
+        return ['topic' => $schema->string()->enum(['all', ...array_keys($this->agent->skillSession()->guides())])->required()];
     }
 
     public function handle(Request $request): string
     {
-        $input = $request->validate(['topic' => 'required|in:all,'.implode(',', array_keys(WyneWyneService::GUIDES))]);
+        $input = $request->validate(['topic' => 'required|in:all,'.implode(',', array_keys($this->agent->skillSession()->guides()))]);
         $this->agent->usedTools[] = $this->name();
         $access = app(AiAssistantAccess::class)->context($this->agent->actor);
-        $guides = array_filter(WyneWyneService::GUIDES, function ($guide) use ($access) {
+        $guides = array_filter($this->agent->skillSession()->guides(), function ($guide) use ($access) {
             return (! $guide['private'] || $access['can_read_business_data'])
                 && (! $guide['modules'] || count(array_intersect($guide['modules'], $access['enabled_modules'])) > 0);
         });
@@ -54,7 +53,7 @@ class WyneWyneSkills implements Tool
             $guide['available_tools'] = array_values(array_intersect($guide['tools'], $tools));
             unset($guide['private'], $guide['modules'], $guide['tools']);
             if ($input['topic'] === 'all') {
-                unset($guide['steps']);
+                unset($guide['steps'], $guide['examples']);
             }
         }
 

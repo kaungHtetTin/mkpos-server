@@ -15,6 +15,7 @@ class PriceTypeController extends ApiController
 
     public function store(Request $request): array
     {
+        app(\App\Services\AdminPinProtection::class)->authorize($request);
         $data = $this->validated($request);
         $name = $this->clean($data['name']);
         abort_if(DB::table('price_type_rules')->where('name', $name)->exists(), 409, 'Price type already exists');
@@ -31,6 +32,7 @@ class PriceTypeController extends ApiController
 
     public function update(Request $request, string $priceType): array
     {
+        app(\App\Services\AdminPinProtection::class)->authorize($request);
         $data = $this->validated($request);
         $old = $this->clean($priceType);
         $name = $this->clean($data['name']);
@@ -59,6 +61,7 @@ class PriceTypeController extends ApiController
 
     public function destroy(string $priceType): array
     {
+        app(\App\Services\AdminPinProtection::class)->authorize();
         $name = $this->clean($priceType);
         $types = $this->configured();
         abort_if(! $types->contains(fn ($item) => strcasecmp($item, $name) === 0), 404, 'Price type not found');

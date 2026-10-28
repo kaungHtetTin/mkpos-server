@@ -34,6 +34,7 @@ class StaffController extends Controller
 
     public function store(Request $request)
     {
+        app(\App\Services\AdminPinProtection::class)->authorize($request);
         $businessId = (int) $request->user('web')->business_id;
         $data = $this->validated($request, $businessId);
         $staff = User::create([
@@ -51,6 +52,7 @@ class StaffController extends Controller
 
     public function update(Request $request, int $id): array
     {
+        app(\App\Services\AdminPinProtection::class)->authorize($request);
         $businessId = (int) $request->user('web')->business_id;
         $staff = $this->staff($businessId, $id);
         $data = $this->validated($request, $businessId, $staff);
@@ -66,6 +68,7 @@ class StaffController extends Controller
 
     public function resetPassword(Request $request, int $id): array
     {
+        app(\App\Services\AdminPinProtection::class)->authorize($request);
         $businessId = (int) $request->user('web')->business_id;
         $data = $request->validate(['password' => ['required', 'confirmed', Password::min(8)]]);
         $staff = $this->staff($businessId, $id);
@@ -76,6 +79,7 @@ class StaffController extends Controller
 
     public function destroy(Request $request, int $id): array
     {
+        app(\App\Services\AdminPinProtection::class)->authorize($request);
         $this->staff((int) $request->user('web')->business_id, $id)->delete();
 
         return ['ok' => true];

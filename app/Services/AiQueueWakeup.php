@@ -10,7 +10,7 @@ use Illuminate\Support\Str;
 
 class AiQueueWakeup
 {
-    public const QUEUES = ['sales-ai', 'customer-service'];
+    public const QUEUES = ['sales-ai', 'customer-service', 'wyne-wyne'];
 
     public function queued(JobQueued $event): void
     {

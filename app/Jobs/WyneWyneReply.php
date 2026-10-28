@@ -28,9 +28,7 @@ class WyneWyneReply implements ShouldQueue
 
     public function handle(WyneWyneRunner $runner): void
     {
-        // Compatibility for jobs serialized before HTTP delivery was introduced.
-        // Never replay an old provider request in a worker; let the user retry.
-        $runner->fail($this->runId, 'http_retry_required');
+        if (! $runner->process($this->runId)) $this->release(5);
     }
 
     public function failed(?\Throwable $error): void

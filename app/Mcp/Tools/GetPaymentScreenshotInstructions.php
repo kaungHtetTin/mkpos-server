@@ -52,7 +52,7 @@ class GetPaymentScreenshotInstructions extends Tool
             'payment_method_lookup_status' => $lookupStatus,
             'active_payment_methods' => $methods,
             'forwarding_gate' => $lookupStatus === 'unavailable' ? 'blocked_lookup_unavailable' : ($methods ? 'requires_matching_active_method' : 'blocked_no_active_methods'),
-            'shared_receipt_skill' => \App\Ai\Skills\PaymentScreenshotReview::COMMON_INSTRUCTIONS,
+            'shared_receipt_skill' => \App\Ai\Skills\PaymentScreenshotReview::instructions('common'),
             'duplicate_policy' => 'A matching canonical bank/provider and transaction ID already used anywhere in MKPOS is rejected. Use the authenticated check_payment_screenshot server result; instructions alone cannot establish uniqueness. Do not forward a rejected duplicate or claim acceptance when the server check is unavailable.',
             'matching_policy' => [
                 'source' => 'Current active payment_methods managed by MKPOS Office. Call this tool for every payment screenshot immediately before matching; never reuse an older result.',

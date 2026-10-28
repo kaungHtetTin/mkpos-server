@@ -46,6 +46,7 @@ class ExpenseController extends ApiController
 
     public function update(Request $request, int $id)
     {
+        app(\App\Services\AdminPinProtection::class)->authorize($request);
         $expense = DB::table('expenses')->where('id', $id)->first();
         abort_if(! $expense, 404, 'Expense not found');
         abort_if($expense->status === 'voided', 400, 'Voided expense cannot be edited');

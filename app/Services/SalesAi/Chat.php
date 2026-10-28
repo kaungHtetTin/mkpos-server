@@ -36,7 +36,7 @@ class Chat
                 abort_unless(app(Settings::class)->get((int) $current->business_id)['enabled'], 422, 'Enable Sales AI in Shop settings first.');
             }
             if ($current->sales_ai_mode !== $mode) {
-                DB::table('shop_chat_threads')->where('id', $thread->id)->update(['sales_ai_mode' => $mode, 'sales_ai_version' => $current->sales_ai_version + 1, 'sales_ai_handoff_reason' => null, 'updated_at' => now('UTC')]);
+                DB::table('shop_chat_threads')->where('id', $thread->id)->update(['sales_ai_mode' => $mode, 'sales_ai_version' => $current->sales_ai_version + 1, 'sales_ai_handoff_reason' => null, ...\App\Support\ChatTime::thread()]);
             }
             $fresh = DB::table('shop_chat_threads')->where('id', $thread->id)->first();
             // Handover changes who handles future messages. It never replays history.

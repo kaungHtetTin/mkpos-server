@@ -6,7 +6,7 @@ use App\Services\PlatformCustomerSessions;
 use Closure;
 use Illuminate\Http\Request;
 
-class AuthenticatePlatformCustomer
+class AuthenticatePlatformCustomer implements \Illuminate\Contracts\Auth\Middleware\AuthenticatesRequests
 {
     public function handle(Request $request, Closure $next, string $mode = 'required')
     {

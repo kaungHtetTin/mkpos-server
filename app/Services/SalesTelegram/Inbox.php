@@ -118,6 +118,9 @@ class Inbox
             $text = is_string($message['text'] ?? null) ? trim($message['text']) : '';
             $language = preg_match('/\p{Myanmar}/u', $text) || str_starts_with($message['from']['language_code'] ?? '', 'my') ? 'my' : 'en';
             $notice = null;
+            if (!empty($message['photo']) || !empty($message['document'])) {
+                if (app(Checkout::class)->photo($connection, $conversation, $record->id, $message)) return;
+            }
             if (preg_match('/^\/start(?:@\w+)?\s+link_(.*)$/Ds', $text, $link)) {
                 $notice = ! $isGroup && preg_match('/^[A-Za-z0-9]{40}$/D', $link[1]) && app(Identity::class)->consume($connection, $sender, $link[1]) ? 'linked' : 'link_failed';
                 $conversation = DB::table('sales_telegram_conversations')->where('id', $conversation->id)->first();
@@ -168,13 +171,14 @@ class Inbox
             }
             if (! $conversation->thread_id) {
                 $threadId = DB::table('shop_chat_threads')->insertGetId(['uuid' => (string) Str::uuid(), 'business_id' => $connection->business_id, 'customer_name' => mb_substr(($message['from']['first_name'] ?? 'Telegram customer').' (Telegram)', 0, 255),
-                    'phone' => 'tg:'.$connection->id.':'.$sender, 'sales_ai_channel' => 'telegram', 'sales_ai_mode' => 'ai', 'sales_ai_version' => 1, 'created_at' => now('UTC'), 'updated_at' => now('UTC')]);
+                    'phone' => 'tg:'.$connection->id.':'.$sender, 'sales_ai_channel' => 'telegram', 'sales_ai_mode' => 'ai', 'sales_ai_version' => 1, ...\App\Support\ChatTime::thread(true)]);
                 DB::table('sales_telegram_conversations')->where('id', $conversation->id)->update(['thread_id' => $threadId]);
             } else {
                 $threadId = $conversation->thread_id;
             }
             $thread = DB::table('shop_chat_threads')->where('id', $threadId)->first();
-            $messageId = DB::table('shop_chat_messages')->insertGetId(['thread_id' => $threadId, 'client_id' => (string) Str::uuid(), 'sender' => 'customer', 'body' => mb_substr($text, 0, 2000), 'created_at' => now('UTC')]);
+            $messageId = DB::table('shop_chat_messages')->insertGetId(['thread_id' => $threadId, 'client_id' => (string) Str::uuid(), 'sender' => 'customer', 'body' => mb_substr($text, 0, 2000), ...\App\Support\ChatTime::message()]);
+            DB::table('shop_chat_threads')->where('id', $threadId)->update(\App\Support\ChatTime::thread());
             DB::table('sales_telegram_updates')->where('id', $record->id)->update(['trigger_message_id' => $messageId, 'status' => 'ai']);
             DB::afterCommit(fn () => app(ShopChatRealtime::class)->changed($thread, $messageId));
             if ($thread->sales_ai_mode !== 'ai') {

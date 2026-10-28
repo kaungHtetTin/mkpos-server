@@ -24,6 +24,7 @@ class AiBusinessActionController extends ApiController
     public function confirm(Request $request, string $conversation, string $action, AiBusinessActions $actions): array
     {
         $data = $request->validate(['preview_hash' => 'required|string|size:64', 'reviewed_count' => 'required|integer|min:1|max:5000', 'admin_pin' => 'sometimes|nullable|string|max:64', 'verified_payment' => 'sometimes|boolean', 'verified_goods_return' => 'sometimes|boolean']);
+        if ($request->has('authorization_pin')) $data['admin_pin'] = $request->validate(['authorization_pin' => 'required|string|max:64'])['authorization_pin'];
         if (! app()->runningUnitTests()) {
             // An approved CSV may span many internal checkpoints; finish its atomic transaction
             // even if the browser disconnects, then let a retry retrieve the saved result.

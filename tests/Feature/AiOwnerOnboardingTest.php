@@ -22,6 +22,7 @@ class AiOwnerOnboardingTest extends TestCase
     {
         parent::setUp();
         $this->setUpBusinessFixture();
+        (require database_path('migrations/2026_10_28_000006_create_agent_skill_library.php'))->up();
     }
 
     protected function tearDown(): void
@@ -132,7 +133,7 @@ class AiOwnerOnboardingTest extends TestCase
 
     public function test_guides_cover_supported_workflows_without_expanding_owner_privileges(): void
     {
-        foreach (array_keys(OwnerOnboarding::GUIDES) as $topic) {
+        foreach (array_keys(OwnerOnboarding::guides()) as $topic) {
             $guide = $this->read('get_feature_guide', ['topic' => $topic]);
             $this->assertSame($topic, $guide['topic']);
             $this->assertNotEmpty($guide['steps']);

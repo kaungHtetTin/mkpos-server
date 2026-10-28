@@ -404,8 +404,14 @@ class AiManagementTest extends TestCase
     public function test_return_cancellation_refund_and_resolution_keep_native_goods_and_payment_gates(): void
     {
         $this->shopFixture();
-        DB::table('ecommerce_orders')->where('id', 1)->update(['status' => 'return_pending', 'payment_status' => 'paid']);
+        (require database_path('migrations/2026_10_25_000002_create_ai_balance_book_tables.php'))->up();
+        foreach (['payment_provider', 'transaction_reference', 'transaction_key', 'ai_validation'] as $column) {
+            if (! Schema::hasColumn('ecommerce_payments', $column)) Schema::table('ecommerce_payments', fn ($table) => $table->string($column)->nullable());
+        }
+
+        DB::table('ecommerce_orders')->where('id', 1)->update(['status' => 'return_pending', 'payment_status' => 'paid', 'payment_method' => json_encode(['type' => 'cod', 'provider' => 'manual'])]);
         DB::table('ecommerce_stock_reservations')->insert(['business_id' => 1, 'order_id' => 1, 'product_id' => 1, 'quantity' => 1]);
+        DB::table('settings')->insert(['key' => 'admin_pin_hash', 'value' => password_hash('4567', PASSWORD_DEFAULT)]);
         $a = $this->propose('manage_shop_orders', ['action' => 'transition', 'record_id' => 1, 'data' => ['status' => 'cancelled', 'reason' => 'Goods returned']]);
         $this->assertTrue($a['requires_goods_verification']);
         try {
@@ -414,10 +420,14 @@ class AiManagementTest extends TestCase
         } catch (HttpExceptionInterface $e) {
             $this->assertSame(422, $e->getStatusCode());
         }
-        $this->approve($a, ['verified_goods_return' => true]);
+        $this->assertTrue($a['requires_pin']);
+        try { $this->approve($a, ['verified_goods_return' => true]); $this->fail('Missing PIN accepted'); }
+        catch (HttpExceptionInterface $e) { $this->assertSame(403, $e->getStatusCode()); }
+        $this->approve($a, ['verified_goods_return' => true, 'admin_pin' => '4567']);
         $this->assertDatabaseHas('ecommerce_orders', ['id' => 1, 'status' => 'cancelled', 'payment_status' => 'refund_pending']);
         $refund = $this->propose('manage_shop_orders', ['action' => 'record_refund', 'record_id' => 1, 'data' => ['amount' => 100, 'reference' => 'RF-1']]);
-        $this->approve($refund, ['verified_payment' => true]);
+        $this->assertTrue($refund['requires_pin']);
+        $this->approve($refund, ['verified_payment' => true, 'admin_pin' => '4567']);
         $this->assertDatabaseHas('ecommerce_orders', ['id' => 1, 'payment_status' => 'refunded']);
         $this->assertEquals(2, DB::table('products')->where('id', 1)->value('stock'));
     }
@@ -498,4 +508,28 @@ class AiManagementTest extends TestCase
         $this->assertDatabaseHas('product_prices', ['business_id' => 1, 'name' => 'Standard', 'price' => 100]);
         $this->assertDatabaseMissing('product_prices', ['business_id' => 1, 'name' => 'Retail']);
     }
+    public function test_extended_pin_protection_applies_to_wyne_wyne_management(): void
+    {
+        $this->nativeFixture();
+        DB::table('settings')->insert(['key' => 'admin_pin_hash', 'value' => password_hash('4567', PASSWORD_DEFAULT)]);
+        foreach ([
+            ['manage_inventory', ['action' => 'adjust', 'record_id' => 1, 'data' => ['quantity' => 1, 'reason' => 'Count']]],
+            ['manage_purchases', ['action' => 'update', 'record_id' => 1, 'data' => ['note' => 'Correction']]],
+            ['manage_account_payments', ['action' => 'update', 'party' => 'customer', 'record_id' => 1, 'data' => ['amount' => 35]]],
+            ['manage_business_records', ['action' => 'archive', 'type' => 'product', 'record_id' => 1]],
+        ] as [$operation, $input]) {
+            $a = $this->propose($operation, $input);
+            $this->assertTrue($a['requires_pin']);
+            try {
+                $this->approve($a);
+                $this->fail('Missing PIN accepted');
+            } catch (HttpExceptionInterface $e) { $this->assertSame(403, $e->getStatusCode()); }
+        }
+        $this->assertEquals(2, DB::table('products')->where('id', 1)->value('stock'));
+        $a = $this->propose('manage_inventory', ['action' => 'adjust', 'record_id' => 1, 'data' => ['quantity' => 1, 'reason' => 'Count']]);
+        $this->approve($a, ['admin_pin' => '4567']);
+        $this->assertEquals(3, DB::table('products')->where('id', 1)->value('stock'));
+        $this->assertStringNotContainsString('4567', DB::table('ai_management_audits')->pluck('review')->implode(''));
+    }
+
 }

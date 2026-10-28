@@ -6,50 +6,61 @@
 
 This skill adds no tools, shared memory, account linking, messaging, delegation or permissions. Referrals are guidance unless an existing authorized tool confirms an actual handoff/report. Agents must use current verified links/settings, preserve owner/staff and customer/tenant boundaries, and never claim another agent received private history or files. Internal helpers retain their bounded task and structured output. Existing payment matching, manual approval and customer/owner confirmation rules still apply. No migration or frontend build is required; deploy the PHP changes and restart long-running PHP queue workers to load the new prompts. Cron-only commands load them on their next invocation.
 
-## Direct HTTP replies
+## Queued replies with Node wakeup and cron recovery
 
-Wyne Wyne validates and saves a message, runs the provider immediately in the
-same HTTP request, then returns HTTP 200 with the completed user/assistant
-exchange, proposals, billing forms and weekly usage. It needs no queue worker
-or minute cron job to start a reply. Provider and tool execution time still applies.
-Only one reply per user can run at a time, including across conversations.
+Wyne Wyne validates and saves the user message, run and database job together,
+then returns HTTP 202 immediately. The browser no longer waits for model or tool
+execution. A duplicate client ID returns the existing pending/completed exchange
+without another job or charge. Only one reply per user can be active across all
+conversations. The database queue must use the same database connection as the
+message/run transaction; a missing queue fails submission before saving work.
 
-Desktop, Windows and mobile wait for this response (390-second client timeout).
-The PHP request allows up to 360 seconds, with existing 40-second provider-call
-limits. Configure the web server, PHP-FPM and reverse proxy request timeouts to
-allow at least 400 seconds; hosting hard limits cannot be overridden in PHP.
-Use concurrent PHP request handling so unrelated requests can proceed.
+After commit, Laravel sends the signed `wyne-wyne` wakeup to Node `/ai-jobs`.
+Node asynchronously calls Laravel's signed `/integrations/ai-jobs/process`
+endpoint to run one real queue job, exactly like Sales AI and customer service.
+Node holds no model keys or database credentials. Its callback and the cron worker
+share the same queue overlap lock. See [AI Node dispatch](ai-node-dispatch.md).
 
-The existing message-tracking migration is still required on new installations:
+Keep `schedule:run` every minute and add a separate every-minute recovery worker:
 
 ```sh
-php artisan migrate --path=database/migrations/2026_10_26_000004_queue_wyne_wyne_replies.php --force
+/opt/alt/php83/usr/bin/php /ABSOLUTE/LARAVEL/PATH/artisan cron:work wyne-wyne
 ```
 
-Duplicate client IDs return the saved exchange without another provider call or
-charge. Failed replies return HTTP 503 and require an explicit user retry.
-Delivery GET requests are retained to reconcile saved work after a lost HTTP
-connection or reload; normal sends do not poll for a reply. A disconnected
-client does not prevent the server from saving a completed response.
+A supervised `queue:work wyne-wyne --queue=wyne-wyne --sleep=2 --timeout=360
+--tries=60` worker is an alternative on hosts that allow persistent processes.
+Windows development/production launchers start the dedicated worker in the
+background; `start-wyne-wyne.cmd` also starts it independently. Cron workers allow
+180 seconds between heartbeat runs; health now reports `worker_required: true`
+and `mode: queue`. Missing or stale workers make health fail.
 
-The runner preserves tenant scope, role/subscription checks before generation
-and publication, private attachments, owner approvals and once-only accounting.
-Existing message history, image/CSV uploads, proposals, billing and navigation
-are unchanged. Actual reported provider usage is recorded even when revoked
-access prevents publication.
+The existing message-tracking migration and jobs table must be installed. No new
+migration is introduced by this switch. Run normal pending migrations before
+deploying. Restart Node and persistent Laravel workers, rebuild desktop/mobile,
+and rebuild configuration/route caches if used. Keep the existing Node dispatch
+secrets and the `wyne-wyne` queue allowlist on both hosts.
 
-Remove any `cron:work wyne-wyne` cron entry and stop the old Wyne Wyne worker
-or Supervisor program when deploying. Keep Sales AI, Telegram and the regular
-scheduler running. The Windows combined launchers no longer start Wyne Wyne;
-its old standalone launcher now explains that no worker is required. Old queued
-jobs are retired without model execution and their saved messages can be retried.
-The minute `wyne-wyne:recover` task only marks abandoned requests older than ten
-minutes failed; it never dispatches jobs or replays a provider call.
+Desktop, Windows and mobile submit with a 30-second acknowledgement timeout.
+After acceptance they remain busy until their private delivery receipt completes.
+Socket hints trigger an immediate authenticated fetch; polling reconciles missed
+hints, reloads and lost acknowledgements without resubmitting the saved message.
+A failed worker reply is shown through the receipt, not as a failed submission;
+the user can explicitly retry the same saved message key.
 
-Worker health reports `wyne_wyne.worker_required: false`, `mode: http`.
-A missing Wyne Wyne worker does not make health fail. Existing release archives
-must be regenerated to include this change; uploading current PHP source changes
-the server flow, while rebuilt clients remove the old short response timeout.
+The runner claims `pending` work before contacting the provider and never
+replays `processing`, completed or failed runs. The scheduler's
+`wyne-wyne:recover` task requeues unstarted work with missing/old dispatch stamps,
+without calling the model itself. It marks processing attempts older than ten
+minutes as `worker_interrupted`; these require an explicit retry. Historical
+unlinked usage rows are never queued. Duplicate recovery jobs remain harmless
+because the run claim prevents a second model call.
+
+Tenant scope, current roles/subscriptions, private attachments, owner approvals,
+weekly quotas and once-only accounting are rechecked in the worker. Usage is
+recorded even if revoked access prevents publishing a generated reply. Queue
+failure or Node downtime preserves the database job for cron; hosting request
+limits still apply to Node-triggered PHP callbacks. Configure those limits for
+up to 360 seconds or rely on the CLI cron worker.
 
 ## Conversation privacy after role changes
 

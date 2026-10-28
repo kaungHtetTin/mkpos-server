@@ -89,6 +89,7 @@ class SupplierController extends ApiController
 
     public function storePayment(Request $request, int $id): array
     {
+        if ($request->input('direction') === 'supplier_to_shop') app(\App\Services\AdminPinProtection::class)->authorize($request);
         abort_if(! DB::table('suppliers')->where('id', $id)->where('is_active', true)->exists(), 404, 'Supplier not found');
         $data = $this->validatedPayment($request);
         $paymentId = DB::table('supplier_payments')->insertGetId($data + ['supplier_id' => $id, 'status' => 'completed', 'created_at' => now(), 'updated_at' => now()]);
@@ -140,6 +141,7 @@ class SupplierController extends ApiController
 
     public function updatePayment(Request $request, int $id): array
     {
+        app(\App\Services\AdminPinProtection::class)->authorize($request);
         $data = $this->validatedPayment($request, true);
         abort_if(! DB::table('supplier_payments')->where('id', $id)->update($data + ['updated_at' => now()]), 404, 'Supplier payment not found');
 
@@ -148,6 +150,7 @@ class SupplierController extends ApiController
 
     public function destroyPayment(int $id): array
     {
+        app(\App\Services\AdminPinProtection::class)->authorize();
         $payment = DB::table('supplier_payments')->where('id', $id)->first();
         abort_if(! $payment, 404, 'Supplier payment not found');
         DB::table('supplier_payments')->where('id', $id)->delete();

@@ -68,6 +68,7 @@ class OrderRequestController extends Controller
             $row = DB::table('shop_order_requests')->where('business_id', $business)->where('order_id', $id)->where('id', $requestId)->lockForUpdate()->first();
             abort_unless($row, 404);
             if ($row->status === $data['status']) return $this->commerce->orderView($order, true);
+            if ($row->type === 'return' && $data['status'] !== 'rejected') app(\App\Services\AdminPinProtection::class)->authorize($request);
             abort_unless($row->status === 'pending' || ($row->type === 'return' && $row->status === 'approved' && $data['status'] === 'resolved'), 409, 'This request has already been reviewed.');
             if ($row->type === 'change') abort_unless(in_array($data['status'], ['resolved', 'rejected']), 422, 'Handle the requested change with the customer, then mark resolved or rejected. This does not edit order snapshots.');
             if ($data['status'] === 'resolved' && $row->type !== 'change') abort_unless($row->type === 'return' && $order->sale_voided && $order->payment_status === 'refunded', 409, 'Use the controlled sale void and full refund workflow before resolving this request.');

@@ -34,7 +34,7 @@ class AiManagementOperations
         if ($operation === 'manage_price_types') {
             abort_unless(in_array('products', config('mkpos.enabled_modules', []), true), 403, 'Products module is unavailable.');
 
-            return app(AiPriceRuleActions::class)->build($input);
+            return app(AiPriceRuleActions::class)->build($input) + ['requires_pin' => app(AdminPinProtection::class)->configured()];
         }
         if ($operation === 'manage_business_timezone') {
             abort_unless(in_array('settings', config('mkpos.enabled_modules', []), true), 403, 'Settings module is unavailable.');
@@ -68,6 +68,7 @@ class AiManagementOperations
     {
         if (in_array($operation, AiSalesAiManagement::OPERATIONS, true)) return app(AiSalesAiManagement::class)->execute($operation, $payload, $userId);
         if ($operation === 'manage_price_types') {
+            app(AdminPinProtection::class)->authorize(request(), $approval['admin_pin'] ?? '');
             return app(AiPriceRuleActions::class)->execute($payload);
         }
         if ($operation === 'manage_business_timezone') {

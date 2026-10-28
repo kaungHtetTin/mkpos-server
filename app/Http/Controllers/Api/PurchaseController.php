@@ -80,6 +80,7 @@ class PurchaseController extends ApiController
 
     public function update(Request $request, int $id)
     {
+        app(\App\Services\AdminPinProtection::class)->authorize($request);
         $data = $this->validated($request);
 
         return DB::transaction(function () use ($data, $id) {

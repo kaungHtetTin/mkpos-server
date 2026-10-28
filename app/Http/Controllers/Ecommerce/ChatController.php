@@ -75,9 +75,10 @@ class ChatController extends Controller
         $items = $rows->take($limit)->map(function ($thread) {
             $messages = DB::table('shop_chat_messages')->where('thread_id', $thread->id);
             $latest = (clone $messages)->orderByDesc('id')->first();
+            $view = $this->view($thread);
 
             return ['uuid' => $thread->uuid, 'shop_name' => $thread->shop_name, 'slug' => $thread->slug,
-                'owner_active' => $this->view($thread)['owner_active'],
+                'owner_active' => $view['owner_active'], 'timezone' => $view['timezone'],
                 'updated_at' => AppTime::utc($latest?->created_at ?? $thread->updated_at),
                 'product' => $latest?->product_snapshot ? json_decode($latest->product_snapshot, true) : null,
                 'preview' => $latest ? mb_substr($latest->body !== '' ? $latest->body : ($latest->product_snapshot ? 'Shared product' : 'Sent an image'), 0, 160) : '',
@@ -156,7 +157,7 @@ class ChatController extends Controller
             abort_if(ShopCustomerAccess::blocked((int) $store->business_id, $phone, 'account:'.$account->id), 403, 'This shop is not accepting new chats from this customer.');
             $id = DB::table('shop_chat_threads')->insertGetId(['uuid' => (string) Str::uuid(), 'business_id' => $store->business_id,
                 'platform_customer_id' => $account->id, 'customer_name' => $account->name, 'phone' => $phone,
-                'created_at' => now(), 'updated_at' => now()]);
+                ...\App\Support\ChatTime::thread(true, false)]);
 
             return ['thread' => $this->view(DB::table('shop_chat_threads')->where('id', $id)->first())];
         });
@@ -431,8 +432,8 @@ class ChatController extends Controller
                     abort_unless($storedPath, 503, 'Unable to save the image. Please try again.');
                     $image = ['image_path' => $storedPath, 'image_mime' => 'image/webp', 'image_hash' => $hash, 'image_expires_at' => now()->addDays(14)];
                 }
-                $id = DB::table('shop_chat_messages')->insertGetId($data + $image + ['thread_id' => $thread->id, 'sender' => $staff ? 'owner' : 'customer', 'created_at' => now()]);
-                DB::table('shop_chat_threads')->where('id', $thread->id)->update(['updated_at' => now()]);
+                $id = DB::table('shop_chat_messages')->insertGetId($data + $image + ['thread_id' => $thread->id, 'sender' => $staff ? 'owner' : 'customer', ...\App\Support\ChatTime::message(false)]);
+                DB::table('shop_chat_threads')->where('id', $thread->id)->update(\App\Support\ChatTime::thread(false, false));
                 $saved = DB::table('shop_chat_messages')->where('id', $id)->first();
                 if (app(Settings::class)->ready()) {
                     if ($staff) {

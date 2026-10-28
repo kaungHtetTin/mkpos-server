@@ -204,18 +204,30 @@ class CustomerActions
                 $row = $this->row($thread, $id, true); $this->authorizeMutation($thread, $row); $this->digest($row, $input);
                 abort_if(array_diff(array_keys($input), ['revision', 'preview_hash', 'values']), 422, 'Unsupported review fields.');
                 $values = $input['values'] ?? []; abort_unless(is_array($values), 422, 'Review values must be an object.');
-                abort_if($file && !in_array($row->kind, ['proof', 'return']), 422, 'Images are supported for payment proofs and returns only.');
+                abort_if($file && !in_array($row->kind, ['checkout', 'proof', 'return']), 422, 'Images are supported for checkout, payment proofs and returns only.');
                 $p = json_decode($row->payload, true); $preview = json_decode($row->preview, true);
                 if ($row->kind === 'checkout') {
-                    abort_if($file || array_diff(array_keys($values), ['items', 'coupon_code', 'fulfillment', 'payment_method_id', 'delivery_zone_id', 'customer_name', 'phone', 'email', 'address', 'notes']), 422, 'Unsupported checkout fields.');
+                    abort_if(array_diff(array_keys($values), ['items', 'coupon_code', 'fulfillment', 'payment_method_id', 'delivery_zone_id', 'customer_name', 'phone', 'email', 'address', 'notes']), 422, 'Unsupported checkout fields.');
                     $values['items'] = $this->reader()->items($values['items'] ?? $p['items']);
                     $r = Request::create('/', 'POST', $values + ['idempotency_key' => $row->id, 'quote_hash' => str_repeat('0', 64)]);
                     $values = app(ShopController::class)->checkoutData($r, true);
                     $store = $this->reader()->store($thread);
                     $quote = app(EcommerceService::class)->quote($store, $values);
+                    if ($file) {
+                        $old = $p['evidence_path'] ?? null;
+                        $p = array_replace($p, app(CheckoutProof::class)->stage($file, (int) $thread->business_id));
+                        $newPath = $p['evidence_path'];
+                        if ($old && $old !== $newPath) DB::afterCommit(fn () => Storage::disk('local')->delete($old));
+                    }
                     $values['quote_hash'] = $quote['quote_hash'];
                     $p['values'] = $values; $p['cart_version'] = $this->cart($thread, true)['version'];
                     $preview = $quote + ['customer_name' => $values['customer_name'], 'phone' => $values['phone'], 'email' => $values['email'] ?? '', 'address' => $values['address'] ?? '', 'notes' => $values['notes'] ?? '', 'ready' => true, 'notice' => $quote['delivery_fee_recipient'] === 'delivery_service' ? 'Courier charges are payable separately; they are not included in this total. Stock is reserved only on Confirm order.' : 'Stock is reserved only after you press Confirm order.'];
+                    $preview['payment_proof_required'] = ($quote['payment_method']['type'] ?? '') !== 'cash';
+                    if ($preview['payment_proof_required']) {
+                        $preview['ready'] = !empty($p['evidence_path']);
+                        if ($preview['ready']) app(CheckoutProof::class)->image($p);
+                        else $preview['notice'] = 'Attach and review a payment screenshot before confirming this order. Payment remains subject to shop verification.';
+                    }
                 } elseif ($row->kind === 'cart') {
                     abort_if($file || array_diff(array_keys($values), ['items']), 422, 'Only cart items may be edited.');
                     $p['items'] = $this->reader()->items($values['items'] ?? $p['items'], true);
@@ -279,10 +291,8 @@ class CustomerActions
                 } elseif ($row->kind === 'checkout') {
                     $cart = $this->cart($thread, true);
                     abort_unless($cart['version'] === $p['cart_version'], 409, 'Your cart changed. Refresh the checkout review.');
-                    $r = Request::create('/', 'POST', $p['values']);
-                    $r->attributes->set('platform_customer', (object) ['id' => $thread->platform_customer_id]);
-                    $saved = app(ShopController::class)->checkout($r, $this->reader()->store($thread)->slug);
-                    $result = ['reference' => $saved['reference'], 'total' => $saved['total'], 'order_created' => true, 'payment_verified' => false];
+                    $saved = app(CheckoutProof::class)->submit($thread, $this->reader()->store($thread), $p['values'], $p);
+                    $result = ['reference' => $saved['reference'], 'total' => $saved['total'], 'order_created' => true, 'payment_status' => $saved['payment_status'], 'payment_verified' => false];
                     $remaining = [];
                     foreach ($cart['items'] as $item) {
                         $ordered = collect($p['values']['items'])->firstWhere('product_id', $item['product_id']);
@@ -311,6 +321,7 @@ class CustomerActions
                     }
                     if (!empty($p['evidence_path'])) DB::afterCommit(fn () => Storage::disk('local')->delete($p['evidence_path']));
                 }
+                if ($row->kind === 'checkout' && !empty($p['evidence_path'])) DB::afterCommit(fn () => Storage::disk('local')->delete($p['evidence_path']));
                 $this->table($thread)->where('id', $id)->update(['status' => 'completed', 'result' => $this->json($result), 'updated_at' => now('UTC')]);
                 app(ActionFeedback::class)->record($thread, $id, 'confirm');
                 DB::afterCommit(fn () => app(ShopChatRealtime::class)->changed($thread, (int) $row->message_id));

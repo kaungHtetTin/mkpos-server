@@ -42,6 +42,18 @@ class AiNodeQueueTest extends TestCase
         SalesAiReply::dispatch($id)->onConnection('sales-ai')->onQueue('sales-ai')->delay($delay);
     }
 
+    public function test_wyne_wyne_jobs_wake_node_and_generate_in_the_real_worker(): void
+    {
+        Http::fake(['socket.example.test/*' => Http::response(['accepted' => true], 202)]);
+        $runner = $this->mock(\App\Services\WyneWyneRunner::class);
+        $runner->shouldReceive('process')->once()->with('legacy-fixture')->andReturn(true);
+        $runner->shouldNotReceive('fail');
+        \App\Jobs\WyneWyneReply::dispatch('legacy-fixture');
+        Http::assertSent(fn ($request) => $request['queue'] === 'wyne-wyne');
+        $this->sendCallback(queue: 'wyne-wyne')->assertOk()->assertJsonPath('retry_after', null);
+        $this->assertSame(0, DB::table('jobs')->count());
+    }
+
     private function sendCallback(string $queue = 'sales-ai', ?string $nonce = null, string $purpose = 'process', ?int $time = null)
     {
         $body = json_encode(['queue' => $queue, 'request_id' => $nonce ?? (string) Str::uuid()]);
@@ -52,6 +64,16 @@ class AiNodeQueueTest extends TestCase
             'HTTP_X_AI_TIMESTAMP' => $timestamp,
             'HTTP_X_AI_SIGNATURE' => hash_hmac('sha256', $purpose."\n".$timestamp."\n".$body, self::SECRET),
         ], content: $body);
+    }
+
+    public function test_wyne_wyne_callback_shares_the_cron_overlap_lock(): void
+    {
+        $lock = fopen(storage_path('framework/cron-worker-wyne-wyne.lock'), 'c');
+        flock($lock, LOCK_EX);
+        try {
+            $this->mock(\App\Services\WyneWyneRunner::class)->shouldNotReceive('process');
+            $this->sendCallback(queue: 'wyne-wyne')->assertOk()->assertJsonPath('retry_after', 2);
+        } finally { flock($lock, LOCK_UN); fclose($lock); }
     }
 
     public function test_committed_jobs_send_identifier_only_signed_wakeups_and_rollback_sends_nothing(): void

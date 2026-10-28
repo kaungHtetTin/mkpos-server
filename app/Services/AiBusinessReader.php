@@ -80,7 +80,7 @@ class AiBusinessReader
             || array_intersect(self::MODULES[$tool], config('mkpos.enabled_modules', []))));
     }
 
-    public function run(User $actor, string $tool, array $arguments): array
+    public function run(User $actor, string $tool, array $arguments, ?\App\Services\AgentSkills\SkillSession $skills = null): array
     {
         if ($tool === 'open_app_screen') {
             $args = $this->validate($tool, $arguments);
@@ -108,7 +108,7 @@ class AiBusinessReader
         }
         // Read access follows existing GET routes: expired subscriptions retain history.
         $data = match ($tool) {
-            'get_setup_progress', 'check_business_readiness', 'get_feature_guide', 'get_next_setup_step', 'open_app_screen' => app(AiOwnerOnboarding::class)->run($tool, $args),
+            'get_setup_progress', 'check_business_readiness', 'get_feature_guide', 'get_next_setup_step', 'open_app_screen' => app(AiOwnerOnboarding::class)->run($tool, $args, $skills),
             'get_app_settings' => app(AiAppSettings::class)->read(),
             'get_business_context' => ['business' => array_intersect_key((array) $business, array_flip(['id', 'name', 'currency', 'timezone'])), 'local_date' => $today, 'available_tools' => $this->availableTools(),
                 'business_reads_are_read_only' => true, 'available_management_tools' => app(AiManagementOperations::class)->ready() ? BusinessManagementTool::NAMES : [], 'available_advisor_tools' => app(AiBusinessAdvisor::class)->ready() ? array_keys(AiBusinessAdvisor::TOOLS) : [], 'available_action_tools' => app(AiBusinessActions::class)->ready() ? [...array_values(array_diff(AiBusinessOperations::OPERATIONS, ['create_purchase_draft'])), ...BusinessActionTool::HELPERS] : [],
@@ -133,7 +133,7 @@ class AiBusinessReader
 
     private function validate(string $tool, array $args): array
     {
-        $rules = ['topic' => ['sometimes', Rule::in(array_keys(OwnerOnboarding::GUIDES))], 'screen' => ['sometimes', Rule::in(array_keys(AiPageLinks::pages()))], 'query' => 'sometimes|string|max:120', 'category' => 'sometimes|string|max:120',
+        $rules = ['topic' => ['sometimes', 'string', 'max:100'], 'screen' => ['sometimes', Rule::in(array_keys(AiPageLinks::pages()))], 'query' => 'sometimes|string|max:120', 'category' => 'sometimes|string|max:120',
             'price_type' => 'sometimes|string|max:50', 'severity' => ['sometimes', Rule::in(['all', 'error', 'warning'])],
             'issue' => ['sometimes', Rule::in(['all', ...AiPriceChecker::ISSUES])], 'after_product_id' => 'sometimes|integer|min:0', 'scan_limit' => 'sometimes|integer|min:1|max:10000',
             'start' => 'sometimes|date_format:Y-m-d', 'end' => 'sometimes|date_format:Y-m-d', 'all_time' => 'sometimes|boolean',

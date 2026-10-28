@@ -19,6 +19,9 @@ class SalePostingService
             })
             ->orderBy('id')->lockForUpdate()->get()->keyBy('id');
         abort_if($products->count() !== collect($data['items'])->pluck('product_id')->unique()->count(), 404, 'One or more products were not found');
+        if (empty($data['ecommerce']) && app(AdminPinProtection::class)->configured() && app(AdminPinProtection::class)->saleRequiresApproval($data, $products)) {
+            app(AdminPinProtection::class)->authorize();
+        }
         if ($offline) {
             $this->validateOfflineItems($data['items'], $products);
         }

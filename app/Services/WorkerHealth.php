@@ -15,11 +15,11 @@ class WorkerHealth
         $now = CarbonImmutable::now('UTC');
         $default = (string) config('queue.default');
         $driver = config('queue.connections.'.$default.'.driver');
-        $required = ['sales_ai' => true, 'wyne_wyne' => false, 'customer_service' => (bool) config('telegram_support.enabled'), 'scheduler' => true,
+        $required = ['sales_ai' => true, 'wyne_wyne' => true, 'customer_service' => (bool) config('telegram_support.enabled'), 'scheduler' => true,
             'payment_validation' => (bool) config('worker_health.payment_validation_required', false),
             'default_queue' => ! in_array($default, ['sales-ai', 'wyne-wyne', 'customer-service'], true) && ! in_array($driver, ['sync', 'null', null], true)];
         $result = ['ok' => false, 'status' => 'unhealthy', 'checked_at' => $now->toIso8601String(),
-            'workers' => [], 'wyne_wyne' => ['worker_required' => false, 'mode' => 'http']];
+            'workers' => [], 'wyne_wyne' => ['worker_required' => true, 'mode' => 'queue']];
         try {
             $telegram = app(Settings::class)->get();
             $required['customer_service'] = $telegram['enabled'];

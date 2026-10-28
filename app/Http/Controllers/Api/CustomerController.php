@@ -140,6 +140,7 @@ class CustomerController extends ApiController
 
     public function storePayment(Request $request, int $id)
     {
+        if ($request->input('direction') === 'shop_to_customer') app(\App\Services\AdminPinProtection::class)->authorize($request);
         abort_if(! DB::table('customers')->where('id', $id)->where('is_active', true)->exists(), 404, 'Customer not found');
         $data = $this->validatedPayment($request);
         $paymentId = DB::table('customer_payments')->insertGetId($data + ['customer_id' => $id, 'status' => 'completed', 'created_at' => now(), 'updated_at' => now()]);
@@ -196,6 +197,7 @@ class CustomerController extends ApiController
 
     public function updatePayment(Request $request, int $id)
     {
+        app(\App\Services\AdminPinProtection::class)->authorize($request);
         $data = $this->validatedPayment($request, true);
         abort_if(! DB::table('customer_payments')->where('id', $id)->update($data + ['updated_at' => now()]), 404, 'Payment not found');
 
@@ -204,6 +206,7 @@ class CustomerController extends ApiController
 
     public function destroyPayment(int $id)
     {
+        app(\App\Services\AdminPinProtection::class)->authorize();
         $payment = DB::table('customer_payments')->where('id', $id)->first();
         abort_if(! $payment, 404, 'Payment not found');
         DB::table('customer_payments')->where('id', $id)->delete();

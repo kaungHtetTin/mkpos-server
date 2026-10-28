@@ -26,6 +26,7 @@ class AiAssistantAccessTest extends TestCase
     {
         parent::setUp();
         $this->setUpBusinessFixture();
+        (require database_path('migrations/2026_10_28_000006_create_agent_skill_library.php'))->up();
         Schema::table('users', fn (Blueprint $t) => $t->unsignedBigInteger('access_role_id')->nullable());
         Schema::create('access_roles', function (Blueprint $t) {
             $t->id();
@@ -151,11 +152,11 @@ class AiAssistantAccessTest extends TestCase
             $this->assertStringContainsString('"can_read_business_data":false', $system);
             $this->assertStringContainsString('one or two sentences', $system);
             $this->assertStringContainsString('Answer straight to the point', $system);
-            $this->assertStringContainsString('Simple questions normally need 1 to 3 short sentences', $system);
+            $this->assertStringContainsString('Default to 1-2 short sentences.', $system);
             $this->assertStringContainsString('Do not append generic offers, unsolicited advice, or closing questions', $system);
             $this->assertStringContainsString('Preserve essential currency/date context, uncertainty, access restrictions and owner-confirmation requirements', $system);
             $this->assertStringContainsString('proper Markdown pipe table with a header row and separator row', $system);
-            $this->assertStringContainsString('show the business-local date range and currency before the table', $system);
+            $this->assertStringContainsString('show the local date range/currency/unit', $system);
             $this->assertStringContainsString('Keep access-denied replies brief rather than forcing them into a table', $system);
             $this->assertStringContainsString('Do not disclose or repeat previously retrieved private business values', $system);
             $this->assertSame(['MkposKnowledge', 'get_wyne_wyne_skills', 'open_app_screen'], array_column(array_column($request['tools'], 'function'), 'name'));

@@ -4,8 +4,9 @@ For immediate replies using the existing persistent Node socket app, see
 [AI Node dispatch](ai-node-dispatch.md). Keep these cron jobs as recovery when
 enabling Node dispatch.
 
-Wyne Wyne uses direct HTTP replies and requires no worker cron. Remove any old
-`cron:work wyne-wyne` entry. The scheduler recovers Telegram jobs but does not consume its queue.
+Wyne Wyne, Sales AI and customer service use database queues. The scheduler
+recovers unstarted/interrupted jobs but does not consume these queues. Node can
+wake them immediately; cron remains the fallback when Node is unavailable.
 Upload the updated PHP source before adding these jobs. No migration is required for
 this command (the existing worker-heartbeat migration must already be installed).
 
@@ -14,6 +15,12 @@ each running every minute (`* * * * *`), using the real absolute artisan path:
 
 ```sh
 /opt/alt/php83/usr/bin/php /ABSOLUTE/LARAVEL/PATH/artisan cron:work sales-ai
+```
+
+For Wyne Wyne, also add:
+
+```sh
+/opt/alt/php83/usr/bin/php /ABSOLUTE/LARAVEL/PATH/artisan cron:work wyne-wyne
 ```
 
 If Telegram customer service is enabled, add:

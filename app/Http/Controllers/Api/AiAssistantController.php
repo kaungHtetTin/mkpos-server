@@ -15,7 +15,7 @@ use App\Services\AiWeeklyQuota;
 use App\Services\McpProductImportValidator;
 use App\Services\ProductImportService;
 use App\Services\SubscriptionService;
-use App\Services\WyneWyneRunner;
+use App\Services\WyneWyneQueue;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
@@ -156,6 +156,7 @@ class AiAssistantController extends Controller
         app(AiAssistantEntitlement::class)->requireAccess($this->actor($request));
         $settings = $this->available();
         $user = $this->actor($request);
+        app(WyneWyneQueue::class)->requireReady();
         $data = $request->validate(['client_id' => 'required|uuid', 'body' => 'nullable|string|max:4000', 'language' => 'sometimes|in:en,my', 'app' => 'sometimes|in:business_web,business_mobile,windows', 'csv' => 'sometimes|file|max:5120|prohibits:image', 'image' => 'sometimes|file|image|mimes:jpg,jpeg,png,webp|max:5120|dimensions:max_width=8192,max_height=8192|prohibits:csv', 'price_types' => 'nullable|string|max:1000']);
         $body = trim($data['body'] ?? '');
         $file = $request->file('csv');
@@ -220,7 +221,14 @@ class AiAssistantController extends Controller
                 // Match reply completion's user-before-wallet lock order.
                 app(AiBalanceBook::class)->funded(lock: true);
                 abort_if(DB::table('ai_runs')->where('user_id', $user->id)->whereNotNull('message_id')->whereIn('status', ['pending', 'processing'])->exists(), 409, 'Another Wyne Wyne reply is still being prepared. Wait for it to finish.');
-                abort_if(app(AiWeeklyQuota::class)->usage($user->id, $settings['weekly_limit'])['remaining'] === 0, 429, 'Your weekly AI message limit has been reached. It resets Monday at midnight Asia/Yangon.');
+                $quota = app(AiWeeklyQuota::class)->usage($user->id, $settings['weekly_limit']);
+                if ($quota['remaining'] === 0) {
+                    $retry = max(1, now()->diffInSeconds(\Carbon\Carbon::parse($quota['resets_at']), false));
+                    throw new \Illuminate\Http\Exceptions\HttpResponseException(response()->json([
+                        'message' => 'Your weekly AI message limit has been reached. It resets Monday at midnight Asia/Yangon.',
+                        'code' => 'ai_weekly_quota', 'rate_limit_scope' => 'ai-weekly-quota', 'weekly_usage' => $quota,
+                    ], 429, ['Retry-After' => (string) (int) ceil($retry), 'X-RateLimit-Scope' => 'ai-weekly-quota']));
+                }
                 $id = $existing?->id;
                 if ($id) {
                     DB::table('ai_messages')->where('id', $id)->update(['status' => 'pending', 'attempts' => $existing->attempts + 1, 'updated_at' => now('UTC')]);
@@ -229,26 +237,13 @@ class AiAssistantController extends Controller
                 }
                 DB::table('ai_runs')->insert(['id' => $runId, 'user_id' => $user->id, 'business_id' => $user->business_id, 'model' => $settings['model'], 'status' => 'pending', 'message_id' => $id, 'actor_role' => $user->role, 'language' => $data['language'] ?? 'en', 'app' => $data['app'] ?? 'business_web', 'max_tokens' => $settings['max_tokens'], 'pricing' => json_encode($pricing, JSON_THROW_ON_ERROR), 'created_at' => now('UTC'), 'updated_at' => now('UTC')]);
                 DB::table('ai_conversations')->where('id', $row->id)->update(['title' => Str::limit($body ?: ($attachment['name'] ?? 'Product CSV'), 100, ''), 'updated_at' => now('UTC')]);
+                app(WyneWyneQueue::class)->dispatch($runId);
 
                 return $id;
             });
             $imagePersisted = true;
-            // Complete this exchange in HTTP; no worker or scheduler starts the model.
-            // Finish saving a reply even when a client disconnects and later reconciles it.
-            ignore_user_abort(true);
-            if (function_exists('set_time_limit')) {
-                set_time_limit(360);
-            }
-            $runner = app(WyneWyneRunner::class);
-            if (! $runner->process($runId)) {
-                $runner->fail($runId, 'reply_busy');
-            }
             $exchange = $this->exchange($messageId, $user, $row->id);
-            if ($exchange['status'] === 'failed') {
-                return response()->json(['message' => 'AI could not reply. Your message is saved; retry it shortly.', 'message_id' => $messageId] + $exchange, 503);
-            }
-
-            return response()->json($exchange, $exchange['pending'] ? 202 : 200);
+            return response()->json($exchange, 202);
         } finally {
             if ($newImagePath && ! $imagePersisted) {
                 Storage::disk('local')->delete($newImagePath);

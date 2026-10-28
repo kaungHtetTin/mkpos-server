@@ -42,6 +42,7 @@ class SystemPaymentReviewTest extends TestCase
         parent::setUp();
         config()->set('database.connections.system_agent_test', ['driver' => 'sqlite', 'database' => ':memory:', 'prefix' => '']);
         DB::setDefaultConnection('system_agent_test');
+        (require database_path('migrations/2026_10_28_000006_create_agent_skill_library.php'))->up();
         config()->set('cache.default', 'array');
         config()->set('ai.providers.deepseek.key', 'test-key');
         Http::preventStrayRequests();
@@ -318,8 +319,8 @@ class SystemPaymentReviewTest extends TestCase
 
     public function test_myanmar_payment_skill_is_used_only_for_payment_extraction(): void
     {
-        $this->assertStringContainsString(PaymentScreenshotReview::INSTRUCTIONS, (new SystemAgent)->instructions());
-        $this->assertStringNotContainsString(PaymentScreenshotReview::INSTRUCTIONS, (new SystemAgent('theme'))->instructions());
+        $this->assertStringContainsString(PaymentScreenshotReview::instructions('platform'), (new SystemAgent)->instructions());
+        $this->assertStringNotContainsString(PaymentScreenshotReview::instructions('platform'), (new SystemAgent('theme'))->instructions());
     }
 
     public function test_myanmar_receipt_fields_can_be_submitted_but_still_need_office_approval(): void

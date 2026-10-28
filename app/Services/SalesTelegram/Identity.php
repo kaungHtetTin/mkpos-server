@@ -36,7 +36,7 @@ class Identity
     public static function permits(object $thread, string $tool): bool
     {
         return ($thread->sales_ai_channel ?? 'web') !== 'telegram' || in_array($tool, self::PUBLIC_TOOLS, true)
-            || (($thread->telegram_private ?? false) && (in_array($tool, self::ACCOUNT_TOOLS, true) || $tool === 'prepare_checkout'));
+            || (($thread->telegram_private ?? false) && (in_array($tool, self::ACCOUNT_TOOLS, true) || in_array($tool, ['prepare_checkout', 'submit_order_payment_proof'], true)));
     }
 
     public function issue(int $business, int $customer): array

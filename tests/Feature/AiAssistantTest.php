@@ -43,6 +43,7 @@ class AiAssistantTest extends TestCase
         parent::setUp();
         config()->set('database.connections.ai_test', ['driver' => 'sqlite', 'database' => ':memory:', 'prefix' => '']);
         DB::setDefaultConnection('ai_test');
+        (require database_path('migrations/2026_10_28_000006_create_agent_skill_library.php'))->up();
         config()->set('cache.default', 'array');
         config()->set('ai.providers.deepseek.key', 'test-key-never-return');
         Http::preventStrayRequests();
@@ -80,6 +81,7 @@ class AiAssistantTest extends TestCase
         DB::table('ai_assistant_settings')->where('id', 1)->update(['enabled' => true]);
         $this->mock(SubscriptionService::class, fn ($mock) => $mock->shouldReceive('status')->andReturn(['is_valid' => true, 'can_mutate' => true, 'access_type' => 'paid', 'reason' => null]));
         $this->actingAs($this->owner, 'web');
+        $this->backgroundQueue();
     }
 
     public function test_wyne_skill_guide_is_read_only_and_lists_only_real_exposed_tools(): void
@@ -89,7 +91,7 @@ class AiAssistantTest extends TestCase
         $agent = new MkposAssistant($this->owner);
         $tool = new WyneWyneSkills($agent);
         $list = json_decode($tool->handle(new Request(['topic' => 'all'])), true);
-        $this->assertCount(17, $list['skills']);
+        $this->assertCount(count(\App\Ai\Skills\WyneWyneService::guides()), $list['skills']);
         $this->assertArrayHasKey('sales_analysis', $list['skills']);
         $this->assertArrayNotHasKey('steps', $list['skills']['sales_analysis']);
         $actual = collect($agent->tools())->map(fn ($item) => method_exists($item, 'name') ? $item->name() : class_basename($item))->all();
@@ -138,6 +140,7 @@ class AiAssistantTest extends TestCase
     private function backgroundQueue(): void
     {
         config(['queue.connections.wyne-wyne.driver' => 'database', 'queue.connections.wyne-wyne.connection' => 'ai_test']);
+        if (Schema::hasTable('jobs')) return;
         Schema::create('jobs', function (Blueprint $table) {
             $table->bigIncrements('id');
             $table->string('queue')->index();
@@ -147,6 +150,20 @@ class AiAssistantTest extends TestCase
             $table->unsignedInteger('available_at');
             $table->unsignedInteger('created_at');
         });
+    }
+
+    /** Exercise the real acceptance/worker/receipt sequence for completed-content tests. */
+    private function sendReply(string $url, array $data, array $headers = [])
+    {
+        $accepted = $headers ? $this->post($url, $data, $headers) : $this->postJson($url, $data);
+        if ($accepted->status() !== 202 || ! str_contains($url, '/messages')) return $accepted;
+        $this->workReply();
+        return $this->getJson($url.'/'.$data['client_id'].'/delivery');
+    }
+
+    private function workReply(): void
+    {
+        app('queue.worker')->runNextJob('wyne-wyne', 'wyne-wyne', new \Illuminate\Queue\WorkerOptions(sleep: 0, timeout: 360, maxTries: 60));
     }
 
     private function stagePendingReply(string $conversation): string
@@ -167,18 +184,22 @@ class AiAssistantTest extends TestCase
         app(WyneWyneRunner::class)->process(DB::table('ai_runs')->whereNotNull('message_id')->value('id'));
     }
 
-    public function test_http_reply_completes_without_a_worker_and_duplicate_submission_does_not_repeat_usage(): void
+    public function test_submission_queues_without_calling_provider_and_duplicates_do_not_repeat_work_or_charges(): void
     {
-        $this->backgroundQueue();
-        MkposAssistant::fake(['Direct HTTP fixture reply']);
+        MkposAssistant::fake(['Queued fixture reply']);
         $conversation = $this->conversation();
         $url = '/api/ai-assistant/conversations/'.$conversation.'/messages';
         $data = ['client_id' => (string) Str::uuid(), 'body' => 'Help me'];
-        $this->postJson($url, $data)->assertOk()->assertJsonPath('pending', false)->assertJsonPath('status', 'completed')
-            ->assertJsonCount(2, 'items')->assertJsonPath('items.1.body', 'Direct HTTP fixture reply');
-        $this->postJson($url, $data)->assertOk()->assertJsonPath('items.1.body', 'Direct HTTP fixture reply');
+        $this->postJson($url, $data)->assertStatus(202)->assertJsonPath('pending', true)->assertJsonCount(1, 'items');
+        $this->assertSame(1, DB::table('jobs')->where('queue', 'wyne-wyne')->count());
+        MkposAssistant::assertNeverPrompted();
+        $this->postJson($url, $data)->assertStatus(202);
+        $this->assertSame(1, DB::table('jobs')->count());
         $this->postJson($url, ['client_id' => $data['client_id'], 'body' => 'Different content'])->assertConflict();
-        $this->getJson($url.'/'.$data['client_id'].'/delivery')->assertOk()->assertJsonPath('status', 'completed');
+        $this->getJson($url.'/'.$data['client_id'].'/delivery')->assertOk()->assertJsonPath('status', 'pending');
+        $this->workReply();
+        $this->getJson($url.'/'.$data['client_id'].'/delivery')->assertOk()->assertJsonPath('status', 'completed')->assertJsonPath('items.1.body', 'Queued fixture reply');
+        $this->postJson($url, $data)->assertOk()->assertJsonPath('items.1.body', 'Queued fixture reply');
         app(WyneWyneRunner::class)->process(DB::table('ai_runs')->value('id'));
         $this->assertSame(0, DB::table('jobs')->count());
         $this->assertSame(1, DB::table('ai_runs')->count());
@@ -240,7 +261,7 @@ class AiAssistantTest extends TestCase
         $this->stagePendingReply($conversation);
         DB::table('ai_runs')->update(['status' => 'processing', 'started_at' => now('UTC')->subMinutes(11), 'updated_at' => now('UTC')->subMinutes(11)]);
         $this->artisan('wyne-wyne:recover')->assertSuccessful();
-        $this->assertSame('http_interrupted', DB::table('ai_runs')->value('error_code'));
+        $this->assertSame('worker_interrupted', DB::table('ai_runs')->value('error_code'));
         $this->processStagedReply();
         MkposAssistant::assertNeverPrompted();
         DB::table('ai_runs')->insert(['id' => (string) Str::uuid(), 'user_id' => $this->owner->id, 'business_id' => 1,
@@ -249,29 +270,37 @@ class AiAssistantTest extends TestCase
         $this->assertSame(0, DB::table('jobs')->count());
     }
 
-    public function test_cleanup_never_queues_provider_calls_and_expires_only_abandoned_requests(): void
+    public function test_recovery_requeues_unstarted_work_once_and_workers_do_not_replay_claimed_runs(): void
     {
-        $this->backgroundQueue();
-        MkposAssistant::fake(['Never replay']);
+        MkposAssistant::fake(['Recovered reply']);
         $id = $this->stagePendingReply($this->conversation());
         $this->artisan('wyne-wyne:recover')->assertSuccessful();
-        $this->assertSame('pending', DB::table('ai_runs')->value('status'));
-        $this->travel(11)->minutes();
         $this->artisan('wyne-wyne:recover')->assertSuccessful();
-        $this->assertSame('failed', DB::table('ai_runs')->value('status'));
-        (new WyneWyneReply($id))->handle(app(WyneWyneRunner::class));
-        $this->assertSame(0, DB::table('jobs')->count());
+        $this->assertSame(1, DB::table('jobs')->count());
         MkposAssistant::assertNeverPrompted();
+        $this->workReply();
+        $this->assertSame('completed', DB::table('ai_runs')->value('status'));
+        (new WyneWyneReply($id))->handle(app(WyneWyneRunner::class));
+        MkposAssistant::assertPromptedTimes(1);
+        $this->assertSame(1, DB::table('ai_balance_entries')->where('type', 'usage')->count());
     }
 
-    public function test_old_queued_jobs_are_retired_without_using_the_provider(): void
+    public function test_new_submissions_roll_back_the_run_and_job_together_and_only_wake_node_after_commit(): void
     {
-        MkposAssistant::fake(['Never run in a worker']);
-        $id = $this->stagePendingReply($this->conversation());
-        (new WyneWyneReply($id))->handle(app(WyneWyneRunner::class));
-        $this->assertSame('failed', DB::table('ai_runs')->value('status'));
-        $this->assertSame('http_retry_required', DB::table('ai_runs')->value('error_code'));
-        $this->assertSame('failed', DB::table('ai_messages')->value('status'));
+        config(['ai_node.enabled' => true, 'ai_node.secret' => str_repeat('x', 40), 'ai_node.url' => 'https://socket.example.test/ai-jobs']);
+        Http::fake(['socket.example.test/*' => Http::response(['accepted' => true], 202)]);
+        MkposAssistant::fake(['Never run in submission']);
+        $url = '/api/ai-assistant/conversations/'.$this->conversation().'/messages';
+        DB::beginTransaction();
+        $this->postJson($url, ['client_id' => (string) Str::uuid(), 'body' => 'Rolled back'])->assertStatus(202);
+        Http::assertNothingSent();
+        DB::rollBack();
+        $this->assertSame(0, DB::table('ai_runs')->count());
+        $this->assertSame(0, DB::table('jobs')->count());
+        $this->postJson($url, ['client_id' => (string) Str::uuid(), 'body' => 'Committed'])->assertStatus(202);
+        Http::assertSentCount(1);
+        Http::assertSent(fn ($request) => $request['queue'] === 'wyne-wyne');
+        $this->assertSame(1, DB::table('jobs')->count());
         MkposAssistant::assertNeverPrompted();
     }
 
@@ -280,13 +309,41 @@ class AiAssistantTest extends TestCase
         MkposAssistant::fake(['Never call twice']);
         $this->stagePendingReply($this->conversation());
         $other = $this->conversation();
-        $this->postJson('/api/ai-assistant/conversations/'.$other.'/messages',
+        $this->sendReply('/api/ai-assistant/conversations/'.$other.'/messages',
             ['client_id' => (string) Str::uuid(), 'body' => 'Another question'])->assertConflict();
         $this->assertSame(1, DB::table('ai_runs')->count());
         MkposAssistant::assertNeverPrompted();
     }
 
-    public function test_http_provider_failure_is_terminal_until_the_user_explicitly_retries(): void
+    public function test_queue_configuration_failure_does_not_save_a_message_or_run_the_provider(): void
+    {
+        MkposAssistant::fake(['Never run inline']);
+        $url = '/api/ai-assistant/conversations/'.$this->conversation().'/messages';
+        config(['queue.connections.wyne-wyne.driver' => 'sync']);
+        $this->postJson($url, ['client_id' => (string) Str::uuid(), 'body' => 'Help'])->assertStatus(503);
+        $this->assertSame(0, DB::table('ai_messages')->count());
+        $this->assertSame(0, DB::table('ai_runs')->count());
+        $this->assertSame(0, DB::table('jobs')->count());
+        MkposAssistant::assertNeverPrompted();
+    }
+
+    public function test_cron_worker_finishes_accepted_work_when_node_wakeup_is_unavailable(): void
+    {
+        config(['ai_node.enabled' => true, 'ai_node.secret' => str_repeat('x', 40), 'ai_node.url' => 'https://socket.example.test/ai-jobs']);
+        Http::fake(['socket.example.test/*' => Http::response([], 503)]);
+        MkposAssistant::fake(['Cron recovery reply']);
+        $url = '/api/ai-assistant/conversations/'.$this->conversation().'/messages';
+        $data = ['client_id' => (string) Str::uuid(), 'body' => 'Help'];
+        $this->postJson($url, $data)->assertStatus(202)->assertJsonPath('pending', true);
+        MkposAssistant::assertNeverPrompted();
+        $this->artisan('cron:work', ['queue' => 'wyne-wyne'])->assertSuccessful();
+        $this->getJson($url.'/'.$data['client_id'].'/delivery')->assertOk()->assertJsonPath('status', 'completed')
+            ->assertJsonPath('items.1.body', 'Cron recovery reply');
+        $this->assertSame(0, DB::table('jobs')->count());
+        MkposAssistant::assertPromptedTimes(1);
+    }
+
+    public function test_queued_provider_failure_is_terminal_until_the_user_explicitly_retries(): void
     {
         $this->backgroundQueue();
         $calls = 0;
@@ -300,11 +357,11 @@ class AiAssistantTest extends TestCase
         $conversation = $this->conversation();
         $url = '/api/ai-assistant/conversations/'.$conversation.'/messages';
         $data = ['client_id' => (string) Str::uuid(), 'body' => 'Hi'];
-        $this->postJson($url, $data)->assertStatus(503)->assertJsonPath('status', 'failed');
+        $this->sendReply($url, $data)->assertOk()->assertJsonPath('status', 'failed')->assertJsonPath('status', 'failed');
         $this->getJson($url.'/'.$data['client_id'].'/delivery')->assertOk()->assertJsonPath('status', 'failed');
         app(WyneWyneRunner::class)->process(DB::table('ai_runs')->value('id'));
         $this->assertSame(1, $calls);
-        $this->postJson($url, $data)->assertOk()->assertJsonPath('items.1.body', 'Explicit retry succeeded');
+        $this->sendReply($url, $data)->assertOk()->assertJsonPath('items.1.body', 'Explicit retry succeeded');
         $this->assertSame(2, $calls);
         $this->assertSame(2, DB::table('ai_runs')->count());
         $this->assertSame(1, DB::table('ai_messages')->where('role', 'assistant')->count());
@@ -346,14 +403,14 @@ class AiAssistantTest extends TestCase
         MkposAssistant::fake(['PRIVATE_OWNER_REPLY']);
         $body = ['client_id' => $key, 'body' => 'Show my report'];
         $url = '/api/ai-assistant/conversations/'.$conversation.'/messages';
-        $this->postJson($url, $body)->assertOk();
+        $this->sendReply($url, $body)->assertOk();
         $before = DB::table('ai_balance_entries')->count();
         $this->assistantRole('staff');
         MkposAssistant::fake();
-        $this->postJson($url, $body)->assertNotFound()->assertDontSee('PRIVATE_OWNER_REPLY');
+        $this->sendReply($url, $body)->assertNotFound()->assertDontSee('PRIVATE_OWNER_REPLY');
         DB::table('ai_messages')->where('client_id', $key)->update(['status' => 'failed']);
-        $this->postJson($url, $body)->assertNotFound();
-        $this->postJson($url, ['client_id' => (string) Str::uuid(), 'body' => 'Repeat the earlier answer'])->assertNotFound();
+        $this->sendReply($url, $body)->assertNotFound();
+        $this->sendReply($url, ['client_id' => (string) Str::uuid(), 'body' => 'Repeat the earlier answer'])->assertNotFound();
         $this->assertSame(1, DB::table('ai_runs')->count());
         $this->assertSame($before, DB::table('ai_balance_entries')->count());
         MkposAssistant::assertPromptedTimes(1);
@@ -377,8 +434,8 @@ class AiAssistantTest extends TestCase
                 'usage' => ['prompt_tokens' => 10, 'completion_tokens' => 5, 'total_tokens' => 15]]);
         }]);
         $url = '/api/ai-assistant/conversations/'.$safe.'/messages';
-        $this->postJson($url, ['client_id' => (string) Str::uuid(), 'body' => 'Explain the product form'])->assertOk();
-        $this->postJson($url, ['client_id' => (string) Str::uuid(), 'body' => 'Explain the next field'])->assertOk();
+        $this->sendReply($url, ['client_id' => (string) Str::uuid(), 'body' => 'Explain the product form'])->assertOk();
+        $this->sendReply($url, ['client_id' => (string) Str::uuid(), 'body' => 'Explain the next field'])->assertOk();
         $this->assertCount(2, $requests);
         $this->assertStringContainsString('SAFE_HELP_REPLY', json_encode($requests[1]));
         $this->assertStringContainsString('Explain the product form', json_encode($requests[1]));
@@ -398,7 +455,7 @@ class AiAssistantTest extends TestCase
             return 'PRIVATE_OWNER_REPLY';
         });
         $url = '/api/ai-assistant/conversations/'.$conversation.'/messages';
-        $this->postJson($url, ['client_id' => (string) Str::uuid(), 'body' => 'Show my business report'])->assertOk();
+        $this->sendReply($url, ['client_id' => (string) Str::uuid(), 'body' => 'Show my business report'])->assertOk();
         $this->assistantRole('staff');
         $this->getJson($url)->assertNotFound();
         $this->getJson('/api/ai-assistant/conversations')->assertOk()->assertJsonCount(0, 'items');
@@ -447,7 +504,7 @@ class AiAssistantTest extends TestCase
             return 'PRIVATE_IN_FLIGHT_REPLY';
         });
         $url = '/api/ai-assistant/conversations/'.$conversation.'/messages';
-        $this->postJson($url, ['client_id' => (string) Str::uuid(), 'body' => 'Show my owner report'])
+        $this->sendReply($url, ['client_id' => (string) Str::uuid(), 'body' => 'Show my owner report'])
             ->assertNotFound()->assertDontSee('PRIVATE_IN_FLIGHT_REPLY');
         $this->assertSame('failed', DB::table('ai_runs')->value('status'));
         $this->assertSame('access_changed', DB::table('ai_runs')->value('error_code'));
@@ -628,8 +685,8 @@ class AiAssistantTest extends TestCase
         $id = $this->conversation();
         $url = '/api/ai-assistant/conversations/'.$id.'/messages';
         $body = ['client_id' => (string) Str::uuid(), 'body' => 'Hello', 'language' => 'my'];
-        $this->postJson($url, $body)->assertOk()->assertJsonCount(2, 'items')->assertJsonPath('items.1.role', 'assistant');
-        $this->postJson($url, $body)->assertOk();
+        $this->sendReply($url, $body)->assertOk()->assertJsonCount(2, 'items')->assertJsonPath('items.1.role', 'assistant');
+        $this->sendReply($url, $body)->assertOk();
         $this->assertSame(2, DB::table('ai_messages')->count());
         $this->assertSame(1, DB::table('ai_runs')->count());
         $this->getJson($url.'?limit=1')->assertOk()->assertJsonPath('has_more', true)->assertJsonCount(1, 'items');
@@ -637,7 +694,7 @@ class AiAssistantTest extends TestCase
         $other = User::create(['business_id' => 1, 'name' => 'Coworker', 'email' => 'other@test.example', 'password' => 'test-password', 'role' => 'staff', 'is_active' => true]);
         $this->actingAs($other, 'web');
         $this->getJson($url)->assertNotFound();
-        $this->postJson($url, $body)->assertNotFound();
+        $this->sendReply($url, $body)->assertNotFound();
         $this->getJson('/api/ai-assistant/conversations')->assertJsonCount(0, 'items');
         $other->business_id = 2;
         $other->save();
@@ -651,16 +708,16 @@ class AiAssistantTest extends TestCase
         $id = $this->conversation();
         $url = '/api/ai-assistant/conversations/'.$id.'/messages';
         $body = ['client_id' => (string) Str::uuid(), 'body' => 'Help'];
-        $failure = $this->postJson($url, $body)->assertStatus(503);
+        $failure = $this->sendReply($url, $body)->assertOk()->assertJsonPath('status', 'failed');
         $this->assertStringNotContainsString('secret-provider-error', $failure->getContent());
         $this->assertSame('failed', DB::table('ai_messages')->first()->status);
-        $this->postJson($url, array_merge($body, ['body' => 'Different']))->assertStatus(409);
+        $this->sendReply($url, array_merge($body, ['body' => 'Different']))->assertStatus(409);
         MkposAssistant::fake(['Try the Products screen.']);
-        $this->postJson($url, $body)->assertOk();
+        $this->sendReply($url, $body)->assertOk();
         $this->assertSame(2, DB::table('ai_runs')->count());
         $this->assertSame(2, DB::table('ai_messages')->count());
-        $this->postJson($url, ['client_id' => (string) Str::uuid(), 'body' => 'Third'])->assertStatus(429);
-        $this->postJson($url, $body)->assertOk();
+        $this->sendReply($url, ['client_id' => (string) Str::uuid(), 'body' => 'Third'])->assertStatus(429)->assertJsonPath('code', 'ai_weekly_quota')->assertHeader('Retry-After')->assertHeader('X-RateLimit-Scope', 'ai-weekly-quota');
+        $this->sendReply($url, $body)->assertOk();
     }
 
     public function test_weekly_limit_spans_days_and_conversations_and_resets_at_yangon_monday(): void
@@ -671,17 +728,17 @@ class AiAssistantTest extends TestCase
         try {
             $this->travelTo(Carbon::parse('2026-10-23 12:00:00', 'UTC'));
             $first = $this->conversation();
-            $this->postJson('/api/ai-assistant/conversations/'.$first.'/messages', ['client_id' => (string) Str::uuid(), 'body' => 'Friday'])->assertOk();
+            $this->sendReply('/api/ai-assistant/conversations/'.$first.'/messages', ['client_id' => (string) Str::uuid(), 'body' => 'Friday'])->assertOk();
             $this->getJson('/api/ai-assistant/config')->assertOk()->assertJsonPath('weekly_usage.remaining', 0)->assertJsonPath('weekly_usage.remaining_percent', 0)->assertJsonPath('weekly_usage.resets_at', '2026-10-26T00:00:00+06:30');
             $this->travelTo(Carbon::parse('2026-10-24 12:00:00', 'UTC'));
             $second = $this->conversation();
             $url = '/api/ai-assistant/conversations/'.$second.'/messages';
-            $this->postJson($url, ['client_id' => (string) Str::uuid(), 'body' => 'Saturday'])->assertStatus(429)->assertJsonPath('message', 'Your weekly AI message limit has been reached. It resets Monday at midnight Asia/Yangon.');
+            $this->sendReply($url, ['client_id' => (string) Str::uuid(), 'body' => 'Saturday'])->assertStatus(429)->assertJsonPath('message', 'Your weekly AI message limit has been reached. It resets Monday at midnight Asia/Yangon.');
             $this->travelTo(Carbon::parse('2026-10-25 17:29:59', 'UTC'));
-            $this->postJson($url, ['client_id' => (string) Str::uuid(), 'body' => 'Still Sunday'])->assertStatus(429);
+            $this->sendReply($url, ['client_id' => (string) Str::uuid(), 'body' => 'Still Sunday'])->assertStatus(429);
             $this->travelTo(Carbon::parse('2026-10-25 17:30:00', 'UTC'));
             $this->getJson('/api/ai-assistant/config')->assertOk()->assertJsonPath('weekly_usage.remaining', 1)->assertJsonPath('weekly_usage.remaining_percent', 100);
-            $this->postJson($url, ['client_id' => (string) Str::uuid(), 'body' => 'Yangon Monday'])->assertOk();
+            $this->sendReply($url, ['client_id' => (string) Str::uuid(), 'body' => 'Yangon Monday'])->assertOk();
             $this->assertSame(2, DB::table('ai_runs')->count());
             $this->getJson('/api/ai-assistant/config')->assertOk()->assertJsonPath('weekly_limit', 1)->assertJsonMissingPath('daily_limit');
         } finally {
@@ -694,7 +751,7 @@ class AiAssistantTest extends TestCase
         DB::table('ai_assistant_settings')->update(['weekly_limit' => 4]);
         $id = $this->conversation();
         MkposAssistant::fake(fn () => throw new \RuntimeException('Provider unavailable'));
-        $this->postJson('/api/ai-assistant/conversations/'.$id.'/messages', ['client_id' => (string) Str::uuid(), 'body' => 'Hi'])->assertStatus(503);
+        $this->sendReply('/api/ai-assistant/conversations/'.$id.'/messages', ['client_id' => (string) Str::uuid(), 'body' => 'Hi'])->assertOk()->assertJsonPath('status', 'failed');
         $this->getJson('/api/ai-assistant/config?user_id=999')->assertOk()->assertJsonPath('weekly_usage.limit', 4)->assertJsonPath('weekly_usage.used', 1)->assertJsonPath('weekly_usage.remaining', 3)->assertJsonPath('weekly_usage.remaining_percent', 75);
         $this->getJson('/api/ai-assistant/conversations/'.$id.'/messages')->assertOk()->assertJsonPath('weekly_usage.remaining', 3);
         $other = User::create(['business_id' => 1, 'name' => 'Coworker', 'email' => 'quota@test.example', 'password' => 'test-password', 'role' => 'staff', 'is_active' => true]);
@@ -716,7 +773,7 @@ class AiAssistantTest extends TestCase
 
             return 'Here is your reply.';
         });
-        $this->postJson('/api/ai-assistant/conversations/'.$id.'/messages', ['client_id' => $clientId, 'body' => 'Help'])->assertOk();
+        $this->sendReply('/api/ai-assistant/conversations/'.$id.'/messages', ['client_id' => $clientId, 'body' => 'Help'])->assertOk();
         $this->getJson($url)->assertOk()->assertJsonPath('seen', true)->assertJsonPath('message.status', 'completed');
         $other = User::create(['business_id' => 1, 'name' => 'Other', 'email' => 'receipt-other@test.example', 'password' => 'test-password', 'role' => 'staff', 'is_active' => true]);
         $this->actingAs($other, 'web')->getJson($url)->assertNotFound();
@@ -727,8 +784,8 @@ class AiAssistantTest extends TestCase
         MkposAssistant::fake(['There is an invalid cost on row 2. Nothing was imported.']);
         $id = $this->conversation();
         $url = '/api/ai-assistant/conversations/'.$id.'/messages';
-        $this->post($url, ['client_id' => (string) Str::uuid(), 'body' => 'Check this', 'csv' => UploadedFile::fake()->createWithContent('items.csv', "Name,Cost,Retail\nSoap,bad,100\n")], ['Accept' => 'application/json'])->assertOk()->assertJsonPath('items.0.attachment.validation.valid', false)->assertJsonPath('items.0.attachment.validation.writes_performed', false);
-        $this->post($url, ['client_id' => (string) Str::uuid(), 'body' => 'Check', 'csv' => UploadedFile::fake()->createWithContent('items.xlsx', 'bad')], ['Accept' => 'application/json'])->assertStatus(422);
+        $this->sendReply($url, ['client_id' => (string) Str::uuid(), 'body' => 'Check this', 'csv' => UploadedFile::fake()->createWithContent('items.csv', "Name,Cost,Retail\nSoap,bad,100\n")], ['Accept' => 'application/json'])->assertOk()->assertJsonPath('items.0.attachment.validation.valid', false)->assertJsonPath('items.0.attachment.validation.writes_performed', false);
+        $this->sendReply($url, ['client_id' => (string) Str::uuid(), 'body' => 'Check', 'csv' => UploadedFile::fake()->createWithContent('items.xlsx', 'bad')], ['Accept' => 'application/json'])->assertStatus(422);
         $this->getJson('/api/ai-assistant/product-template')->assertOk()->assertJsonPath('filename', 'mkpos-product-import-template.csv');
         $this->assertFalse(Schema::hasTable('products'));
     }
@@ -738,8 +795,8 @@ class AiAssistantTest extends TestCase
         MkposAssistant::fake(['Row 2 has an invalid cost.', 'Correct the Cost field.']);
         $id = $this->conversation();
         $url = '/api/ai-assistant/conversations/'.$id.'/messages';
-        $this->post($url, ['client_id' => (string) Str::uuid(), 'body' => 'Check CSV', 'csv' => UploadedFile::fake()->createWithContent('followup.csv', "Name,Cost\nSoap,bad\n")], ['Accept' => 'application/json'])->assertOk();
-        $this->postJson($url, ['client_id' => (string) Str::uuid(), 'body' => 'What should I correct?'])->assertOk();
+        $this->sendReply($url, ['client_id' => (string) Str::uuid(), 'body' => 'Check CSV', 'csv' => UploadedFile::fake()->createWithContent('followup.csv', "Name,Cost\nSoap,bad\n")], ['Accept' => 'application/json'])->assertOk();
+        $this->sendReply($url, ['client_id' => (string) Str::uuid(), 'body' => 'What should I correct?'])->assertOk();
         MkposAssistant::assertPrompted(fn ($prompt) => count($prompt->agent->history) === 2 && str_contains($prompt->agent->history[0]->content, 'Previously supplied CSV validation') && str_contains($prompt->agent->history[0]->content, 'followup.csv'));
     }
 
@@ -755,14 +812,14 @@ class AiAssistantTest extends TestCase
         TelegramImageReader::fake([$this->imageReport('error_unknown'), $this->imageReport('unrelated')]);
         $url = '/api/ai-assistant/conversations/'.$this->conversation().'/messages';
         $key = (string) Str::uuid();
-        $this->post($url, ['client_id' => $key, 'image' => UploadedFile::fake()->image('error.png')], ['Accept' => 'application/json'])->assertOk();
+        $this->sendReply($url, ['client_id' => $key, 'image' => UploadedFile::fake()->image('error.png')], ['Accept' => 'application/json'])->assertOk();
         $this->assertSame(1, DB::table('error_reports')->count());
         $this->assertSame(1, (int) DB::table('error_reports')->value('business_id'));
         $this->assertStringContainsString('submitted to the admin Office', DB::table('ai_messages')->where('role', 'assistant')->value('body'));
-        $this->postJson($url, ['client_id' => $key, 'body' => ''])->assertOk();
+        $this->sendReply($url, ['client_id' => $key, 'body' => ''])->assertOk();
         $this->assertSame(1, DB::table('error_reports')->count());
         $this->assertCount(1, Storage::disk('local')->allFiles('error-report-images'));
-        $this->post($url, ['client_id' => (string) Str::uuid(), 'image' => UploadedFile::fake()->image('unrelated.png')], ['Accept' => 'application/json'])->assertOk();
+        $this->sendReply($url, ['client_id' => (string) Str::uuid(), 'image' => UploadedFile::fake()->image('unrelated.png')], ['Accept' => 'application/json'])->assertOk();
         $this->assertSame('This image is not related to the MKPOS system.', DB::table('ai_messages')->where('role', 'assistant')->orderByDesc('id')->value('body'));
         $this->assertSame(1, DB::table('error_reports')->count());
     }
@@ -774,19 +831,19 @@ class AiAssistantTest extends TestCase
         $id = $this->conversation();
         $url = '/api/ai-assistant/conversations/'.$id.'/messages';
         $key = (string) Str::uuid();
-        $this->post($url, ['client_id' => $key, 'image' => UploadedFile::fake()->image('screen.png', 300, 400)], ['Accept' => 'application/json'])
+        $this->sendReply($url, ['client_id' => $key, 'image' => UploadedFile::fake()->image('screen.png', 300, 400)], ['Accept' => 'application/json'])
             ->assertOk()->assertJsonPath('items.0.attachment.type', 'image')->assertJsonPath('items.0.attachment.mime', 'image/png')->assertJsonPath('items.0.attachment.width', 300)
             ->assertJsonMissingPath('items.0.attachment._image_path')->assertJsonMissingPath('items.0.attachment._image_sha256');
         TelegramImageReader::assertPrompted(fn ($prompt) => count($prompt->attachments) === 1 && str_contains($prompt->prompt, 'Read the attached image'));
         $this->assertCount(1, Storage::disk('local')->allFiles('ai-chat-images'));
-        $this->postJson($url, ['client_id' => $key, 'body' => ''])->assertOk();
+        $this->sendReply($url, ['client_id' => $key, 'body' => ''])->assertOk();
         $this->assertSame(1, DB::table('ai_runs')->count());
         $history = $this->getJson($url)->assertOk()->assertJsonMissingPath('items.0.attachment._image_path');
         $previewPath = '/api'.$history->json('items.0.attachment.preview_path');
         $this->get($previewPath)->assertOk()->assertHeader('Content-Type', 'image/png')->assertHeader('X-Content-Type-Options', 'nosniff');
         $otherConversation = $this->conversation();
         $this->get('/api/ai-assistant/conversations/'.$otherConversation.'/messages/'.$history->json('items.0.id').'/image')->assertNotFound();
-        $this->post($url, ['client_id' => $key, 'image' => UploadedFile::fake()->image('different.png', 10, 10)], ['Accept' => 'application/json'])->assertStatus(409);
+        $this->sendReply($url, ['client_id' => $key, 'image' => UploadedFile::fake()->image('different.png', 10, 10)], ['Accept' => 'application/json'])->assertStatus(409);
         $this->assertCount(1, Storage::disk('local')->allFiles('ai-chat-images'));
         $other = User::create(['business_id' => 2, 'name' => 'Other', 'email' => 'image-other@example.test', 'password' => 'password', 'role' => 'owner', 'is_active' => true]);
         $this->actingAs($other, 'web')->getJson($url)->assertNotFound();
@@ -799,10 +856,10 @@ class AiAssistantTest extends TestCase
         TelegramImageReader::fake(fn () => throw new \RuntimeException('provider down'));
         $url = '/api/ai-assistant/conversations/'.$this->conversation().'/messages';
         $key = (string) Str::uuid();
-        $this->post($url, ['client_id' => $key, 'body' => 'Read this', 'image' => UploadedFile::fake()->image('photo.jpg')], ['Accept' => 'application/json'])->assertStatus(503);
+        $this->sendReply($url, ['client_id' => $key, 'body' => 'Read this', 'image' => UploadedFile::fake()->image('photo.jpg')], ['Accept' => 'application/json'])->assertOk()->assertJsonPath('status', 'failed');
         $this->assertCount(1, Storage::disk('local')->allFiles('ai-chat-images'));
         TelegramImageReader::fake([$this->imageReport('general')]);
-        $this->postJson($url, ['client_id' => $key, 'body' => 'Read this'])->assertOk();
+        $this->sendReply($url, ['client_id' => $key, 'body' => 'Read this'])->assertOk();
         TelegramImageReader::assertPrompted(fn ($prompt) => count($prompt->attachments) === 1);
         $this->assertCount(1, Storage::disk('local')->allFiles('ai-chat-images'));
         $this->assertSame(2, DB::table('ai_messages')->count());
@@ -815,9 +872,9 @@ class AiAssistantTest extends TestCase
         MkposAssistant::fake(['Here is the comparison']);
         $url = '/api/ai-assistant/conversations/'.$this->conversation().'/messages';
         for ($i = 0; $i < 3; $i++) {
-            $this->post($url, ['client_id' => (string) Str::uuid(), 'image' => UploadedFile::fake()->image('image-'.$i.'.png', 30 + $i, 40)], ['Accept' => 'application/json'])->assertOk();
+            $this->sendReply($url, ['client_id' => (string) Str::uuid(), 'image' => UploadedFile::fake()->image('image-'.$i.'.png', 30 + $i, 40)], ['Accept' => 'application/json'])->assertOk();
         }
-        $this->postJson($url, ['client_id' => (string) Str::uuid(), 'body' => 'Compare the recent images'])->assertOk();
+        $this->sendReply($url, ['client_id' => (string) Str::uuid(), 'body' => 'Compare the recent images'])->assertOk();
         MkposAssistant::assertPrompted(function ($prompt) {
             if ($prompt->prompt !== 'Compare the recent images') {
                 return false;
@@ -842,9 +899,9 @@ class AiAssistantTest extends TestCase
         foreach ([UploadedFile::fake()->createWithContent('fake.png', '<script>bad</script>'),
             UploadedFile::fake()->image('animation.gif'), UploadedFile::fake()->image('large.jpg')->size(5121),
             UploadedFile::fake()->image('wide.png', 8193, 1)] as $image) {
-            $this->post($url, ['client_id' => (string) Str::uuid(), 'image' => $image], ['Accept' => 'application/json'])->assertStatus(422);
+            $this->sendReply($url, ['client_id' => (string) Str::uuid(), 'image' => $image], ['Accept' => 'application/json'])->assertStatus(422);
         }
-        $this->post($url, ['client_id' => (string) Str::uuid(), 'image' => UploadedFile::fake()->image('a.png'), 'csv' => UploadedFile::fake()->createWithContent('a.csv', "Name\nSoap")], ['Accept' => 'application/json'])->assertStatus(422);
+        $this->sendReply($url, ['client_id' => (string) Str::uuid(), 'image' => UploadedFile::fake()->image('a.png'), 'csv' => UploadedFile::fake()->createWithContent('a.csv', "Name\nSoap")], ['Accept' => 'application/json'])->assertStatus(422);
         $this->assertSame(0, DB::table('ai_messages')->count());
         $this->assertSame([], Storage::disk('local')->allFiles());
         MkposAssistant::assertNeverPrompted();
@@ -884,7 +941,7 @@ class AiAssistantTest extends TestCase
             return Http::response(['id' => 'response-'.$calls, 'object' => 'chat.completion', 'model' => 'deepseek-flash', 'choices' => [['index' => 0, 'message' => $message, 'finish_reason' => $calls === 1 ? 'tool_calls' : 'stop']], 'usage' => ['prompt_tokens' => 10, 'completion_tokens' => 20, 'total_tokens' => 30, 'prompt_cache_hit_tokens' => $calls === 1 ? 6 : 2]]);
         }]);
         $id = $this->conversation();
-        $this->postJson('/api/ai-assistant/conversations/'.$id.'/messages', ['client_id' => (string) Str::uuid(), 'body' => 'Give me a product template'])->assertOk()->assertJsonPath('items.1.tools.0', 'get_product_import_template');
+        $this->sendReply('/api/ai-assistant/conversations/'.$id.'/messages', ['client_id' => (string) Str::uuid(), 'body' => 'Give me a product template'])->assertOk()->assertJsonPath('items.1.tools.0', 'get_product_import_template');
         $this->assertSame(2, $calls);
         $this->assertSame(8, (int) DB::table('ai_runs')->value('cached_input_tokens'));
         $this->assertSame(8, (int) DB::table('ai_messages')->where('role', 'assistant')->value('cached_input_tokens'));
@@ -1033,7 +1090,7 @@ class AiAssistantTest extends TestCase
             'choices' => [['index' => 0, 'message' => ['role' => 'assistant', 'content' => 'Hello'], 'finish_reason' => 'stop']],
             'usage' => ['prompt_tokens' => 1, 'completion_tokens' => 1, 'total_tokens' => 2]])]);
         $id = $this->conversation();
-        $this->postJson('/api/ai-assistant/conversations/'.$id.'/messages', ['client_id' => (string) Str::uuid(), 'body' => 'Hi'])->assertOk();
+        $this->sendReply('/api/ai-assistant/conversations/'.$id.'/messages', ['client_id' => (string) Str::uuid(), 'body' => 'Hi'])->assertOk();
         Http::assertSent(fn ($request) => $request->hasHeader('Authorization', 'Bearer sk-runtime-replacement-key'));
     }
 
@@ -1082,7 +1139,7 @@ class AiAssistantTest extends TestCase
             DB::table('ai_balance_accounts')->update(['balance_nanos' => $balance]);
             foreach ([[$this->owner, $one], [$other, $two]] as [$user, $conversation]) {
                 $this->actingAs($user, 'web');
-                $this->postJson('/api/ai-assistant/conversations/'.$conversation.'/messages', ['client_id' => (string) Str::uuid(), 'body' => 'Help'])->assertStatus(402)->assertSee('system AI balance is empty');
+                $this->sendReply('/api/ai-assistant/conversations/'.$conversation.'/messages', ['client_id' => (string) Str::uuid(), 'body' => 'Help'])->assertStatus(402)->assertSee('system AI balance is empty');
                 $this->postJson('/api/ai-assistant/conversations', ['id' => (string) Str::uuid()])->assertStatus(402);
                 $this->getJson('/api/ai-assistant/conversations/'.$conversation.'/messages')->assertOk();
             }
@@ -1111,7 +1168,7 @@ class AiAssistantTest extends TestCase
         $this->actingAs($this->owner, 'web');
         MkposAssistant::fake(['The top-up restored access.']);
         $conversation = $this->conversation();
-        $this->postJson('/api/ai-assistant/conversations/'.$conversation.'/messages', ['client_id' => (string) Str::uuid(), 'body' => 'Hello'])->assertOk();
+        $this->sendReply('/api/ai-assistant/conversations/'.$conversation.'/messages', ['client_id' => (string) Str::uuid(), 'body' => 'Hello'])->assertOk();
     }
 
     public function test_charges_once_at_captured_rates_and_blocks_the_next_request_when_exhausted(): void
@@ -1123,14 +1180,14 @@ class AiAssistantTest extends TestCase
             'usage' => ['prompt_tokens' => 1000, 'completion_tokens' => 100, 'total_tokens' => 1100]])]);
         $url = '/api/ai-assistant/conversations/'.$id.'/messages';
         $body = ['client_id' => (string) Str::uuid(), 'body' => 'Hello'];
-        $this->postJson($url, $body)->assertOk();
+        $this->sendReply($url, $body)->assertOk();
         $entry = DB::table('ai_balance_entries')->where('type', 'usage')->first();
         $this->assertSame(-420000, (int) $entry->amount_nanos);
         $this->assertSame(-419999, (int) $entry->balance_after_nanos);
-        $this->postJson($url, $body)->assertOk();
+        $this->sendReply($url, $body)->assertOk();
         $this->assertSame(1, DB::table('ai_balance_entries')->where('type', 'usage')->count());
         $this->assertSame(1, DB::table('ai_runs')->count());
-        $this->postJson($url, ['client_id' => (string) Str::uuid(), 'body' => 'Next'])->assertStatus(402);
+        $this->sendReply($url, ['client_id' => (string) Str::uuid(), 'body' => 'Next'])->assertStatus(402);
         $old = json_decode($entry->pricing, true);
         DB::transaction(fn () => app(AiBalanceBook::class)->charge($entry->run_id, 999, 999, $old));
         $this->assertSame(-419999, (int) DB::table('ai_balance_accounts')->value('balance_nanos'));
@@ -1144,11 +1201,11 @@ class AiAssistantTest extends TestCase
         DB::table('ai_assistant_settings')->update(['model' => 'custom-model']);
         MkposAssistant::fake(['No pricing should prevent this response.']);
         $url = '/api/ai-assistant/conversations/'.$id.'/messages';
-        $this->postJson($url, ['client_id' => (string) Str::uuid(), 'body' => 'Help'])->assertStatus(503)->assertSee('pricing is currently unavailable');
+        $this->sendReply($url, ['client_id' => (string) Str::uuid(), 'body' => 'Help'])->assertStatus(503)->assertSee('pricing is currently unavailable');
         MkposAssistant::assertNeverPrompted();
         DB::table('ai_assistant_settings')->update(['model' => 'deepseek-flash']);
         MkposAssistant::fake(fn () => throw new \RuntimeException('Provider outage'));
-        $this->postJson($url, ['client_id' => (string) Str::uuid(), 'body' => 'Help'])->assertStatus(503);
+        $this->sendReply($url, ['client_id' => (string) Str::uuid(), 'body' => 'Help'])->assertOk()->assertJsonPath('status', 'failed');
         $this->assertSame(0, DB::table('ai_balance_entries')->where('type', 'usage')->count());
         $this->assertSame(10000000000, (int) DB::table('ai_balance_accounts')->value('balance_nanos'));
     }
@@ -1184,7 +1241,7 @@ class AiAssistantTest extends TestCase
             if ($cached !== null) {
                 $usage['prompt_cache_hit_tokens'] = $cached;
             }
-            $this->postJson('/api/ai-assistant/conversations/'.$id.'/messages', ['client_id' => (string) Str::uuid(), 'body' => 'Hello'])->assertOk()
+            $this->sendReply('/api/ai-assistant/conversations/'.$id.'/messages', ['client_id' => (string) Str::uuid(), 'body' => 'Hello'])->assertOk()
                 ->assertJsonPath('items.1.cached_input_tokens', $cached);
             $entry = DB::table('ai_balance_entries')->where('type', 'usage')->orderByDesc('id')->first();
             $this->assertSame(-$expected, (int) $entry->amount_nanos);
@@ -1199,7 +1256,7 @@ class AiAssistantTest extends TestCase
         Http::fake(['api.deepseek.com/*' => Http::response(['id' => 'reply', 'object' => 'chat.completion', 'model' => 'deepseek-flash',
             'choices' => [['index' => 0, 'message' => ['role' => 'assistant', 'content' => 'Hello'], 'finish_reason' => 'stop']],
             'usage' => ['prompt_tokens' => 100, 'completion_tokens' => 10, 'prompt_cache_hit_tokens' => 101]])]);
-        $this->postJson('/api/ai-assistant/conversations/'.$id.'/messages', ['client_id' => (string) Str::uuid(), 'body' => 'Hello'])->assertStatus(503);
+        $this->sendReply('/api/ai-assistant/conversations/'.$id.'/messages', ['client_id' => (string) Str::uuid(), 'body' => 'Hello'])->assertOk()->assertJsonPath('status', 'failed');
         $this->assertSame(0, DB::table('ai_balance_entries')->where('type', 'usage')->count());
         $this->assertSame(10000000000, (int) DB::table('ai_balance_accounts')->value('balance_nanos'));
     }
@@ -1242,7 +1299,7 @@ class AiAssistantTest extends TestCase
             MkposAssistant::fake();
             $this->getJson('/api/ai-assistant/config')->assertOk()->assertJsonPath('subscription_access.allowed', false)->assertJsonPath('subscription_access.reason', $reason);
             $this->postJson('/api/ai-assistant/conversations', ['id' => (string) Str::uuid(), 'business_id' => 2])->assertStatus(402)->assertJsonPath('code', 'assistant_subscription_required');
-            $this->postJson('/api/ai-assistant/conversations/'.$id.'/messages', ['client_id' => (string) Str::uuid(), 'body' => 'Hello', 'image' => null])->assertStatus(402);
+            $this->sendReply('/api/ai-assistant/conversations/'.$id.'/messages', ['client_id' => (string) Str::uuid(), 'body' => 'Hello', 'image' => null])->assertStatus(402);
             $this->getJson('/api/ai-assistant/conversations/'.$id.'/messages')->assertOk();
             MkposAssistant::assertNeverPrompted();
         }
@@ -1252,6 +1309,6 @@ class AiAssistantTest extends TestCase
         $this->mock(SubscriptionService::class, fn ($m) => $m->shouldReceive('status')->andReturn(['is_valid' => true, 'can_mutate' => true, 'access_type' => 'trial', 'reason' => null]));
         $this->getJson('/api/ai-assistant/config')->assertOk()->assertJsonPath('subscription_access.allowed', true);
         MkposAssistant::fake(['Trial access is active.']);
-        $this->postJson('/api/ai-assistant/conversations/'.$id.'/messages', ['client_id' => (string) Str::uuid(), 'body' => 'Help'])->assertOk();
+        $this->sendReply('/api/ai-assistant/conversations/'.$id.'/messages', ['client_id' => (string) Str::uuid(), 'body' => 'Help'])->assertOk();
     }
 }

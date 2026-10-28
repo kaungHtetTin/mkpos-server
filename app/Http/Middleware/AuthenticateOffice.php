@@ -8,7 +8,7 @@ use Illuminate\Auth\AuthenticationException;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 
-class AuthenticateOffice
+class AuthenticateOffice implements \Illuminate\Contracts\Auth\Middleware\AuthenticatesRequests
 {
     public function handle(Request $request, Closure $next)
     {

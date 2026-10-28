@@ -41,11 +41,39 @@ class SalesTelegramTest extends TestCase
 
     private ?array $deliveryResponse = null;
 
+    public function test_telegram_ai_and_owner_messages_round_trip_as_the_same_utc_instants(): void
+    {
+        $pricing = Cache::get('ai.deepseek.pricing.v2');
+        $this->travelTo(\Carbon\CarbonImmutable::parse('2026-10-28T17:45:00Z'));
+        Cache::put('ai.deepseek.pricing.v2', $pricing, 3600);
+        try {
+            $this->receive($this->update('Hello'));
+            $thread = $this->thread();
+            $this->assertSame('2026-10-29 00:15:00', $thread->created_at);
+            $incoming = DB::table('shop_chat_messages')->where('thread_id', $thread->id)->first();
+            $this->assertSame('2026-10-29 00:15:00', $incoming->created_at);
+            $this->travel(30)->seconds();
+            SalesRepresentative::fake(['Hello from your shop.']);
+            $run = DB::table('sales_ai_runs')->where('thread_id', $thread->id)->first();
+            app(Runner::class)->process($run->id);
+            $this->assertSame('completed', DB::table('sales_ai_runs')->where('id', $run->id)->value('status'));
+            $url = '/api/shop-admin/chat/'.$thread->uuid.'/messages';
+            $this->getJson($url)->assertOk()->assertJsonPath('items.0.created_at', '2026-10-28 17:45:00')
+                ->assertJsonPath('items.1.created_at', '2026-10-28 17:45:30')
+                ->assertJsonPath('thread.telegram_last_message_at', '2026-10-28T17:45:00.000000Z');
+            $this->travel(30)->seconds();
+            $this->postJson($url, ['client_id' => (string) Str::uuid(), 'body' => 'Human reply'])
+                ->assertOk()->assertJsonPath('message.created_at', '2026-10-28 17:46:00');
+            $this->assertSame('2026-10-29 00:16:00', DB::table('shop_chat_threads')->where('id', $thread->id)->value('updated_at'));
+        } finally { $this->travelBack(); }
+    }
+
     protected function setUp(): void
     {
         parent::setUp();
         Queue::fake();
         Mail::fake();
+        Storage::fake('local');
         config(['cache.default' => 'array', 'shop_chat.realtime_enabled' => false, 'ai.providers.deepseek.key' => 'fixture-ai-key']);
         URL::forceRootUrl('https://fixture.test');
         URL::forceScheme('https');
@@ -108,12 +136,13 @@ class SalesTelegramTest extends TestCase
         return $buttons->firstWhere('text', $label)['callback_data'];
     }
 
-    private function checkoutDraft(): object
+    private function checkoutDraft(string $method = 'Cash'): object
     {
         $product = $this->postJson('/api/products', ['name' => 'Telegram rice', 'price' => 1500, 'cost' => 600, 'stock' => 10, 'base_unit' => 'Bag', 'prices' => [['name' => 'Retail', 'price' => 1500]]])->assertOk()->json();
         $this->putJson('/api/shop-admin/publications/'.$product['id'], ['published' => true, 'unit' => 'base'])->assertOk();
         DB::table('storefront_settings')->where('business_id', $this->owner['business']['id'])->update(['accepting_orders' => true,
-            'payment_methods' => json_encode([['id' => 'cash', 'name' => 'Cash', 'type' => 'cash', 'is_active' => true, 'provider' => 'manual']])]);
+            'payment_methods' => json_encode([['id' => 'cash', 'name' => 'Cash', 'type' => 'cash', 'is_active' => true, 'provider' => 'manual'],
+                ['id' => 'bank', 'name' => 'Bank transfer', 'type' => 'transfer', 'bank' => 'KBZPay', 'account_name' => 'Shop owner', 'account_no' => '09123456789', 'is_active' => true, 'provider' => 'manual']])]);
         $this->receive($this->update('I want two bags of rice'));
         $thread = app(Identity::class)->context($this->thread());
         $run = DB::table('sales_ai_runs')->where('thread_id', $thread->id)->firstOrFail();
@@ -126,14 +155,75 @@ class SalesTelegramTest extends TestCase
         $this->receive($this->update('Guest Buyer'));
         $this->receive($this->update('09123456789'));
         $this->click($this->button('Pickup'));
-        $this->click($this->button('Cash'));
+        $this->click($this->button($method));
         $this->click($this->button('Skip'));
         $this->click($this->button('Skip'));
         $draft = DB::table('sales_telegram_checkouts')->where('conversation_id', $conversation->id)->firstOrFail();
-        $this->assertSame('review', $draft->step);
+        $this->assertSame($method === 'Cash' ? 'review' : 'proof', $draft->step);
         $this->assertNotNull($draft->quote_encrypted);
 
         return $draft;
+    }
+
+    private function sendReceipt(): void
+    {
+        $receipt = UploadedFile::fake()->image('receipt.png');
+        $bytes = file_get_contents($receipt->getRealPath());
+        Http::swap(new \Illuminate\Http\Client\Factory);
+        Http::preventStrayRequests();
+        Http::fake(function ($request) use ($bytes) {
+            if (str_contains($request->url(), '/file/')) return Http::response($bytes, 200, ['Content-Type' => 'image/png']);
+            if (str_ends_with($request->url(), '/getFile')) return Http::response(['ok' => true, 'result' => ['file_path' => 'photos/receipt.png', 'file_size' => strlen($bytes)]]);
+            return Http::response(['ok' => true, 'result' => ['message_id' => 44]]);
+        });
+        $this->receive($this->update('', extra: ['photo' => [['file_id' => 'receipt_image_123', 'file_size' => strlen($bytes), 'width' => 10, 'height' => 10]]]));
+    }
+
+    public function test_transfer_checkout_waits_for_a_photo_and_submits_order_and_proof_once(): void
+    {
+        $draft = $this->checkoutDraft('Bank transfer');
+        $this->assertSame(0, DB::table('ecommerce_orders')->where('business_id', $this->connection->business_id)->count());
+        $this->sendReceipt();
+        $this->assertSame('review', DB::table('sales_telegram_checkouts')->where('id', $draft->id)->value('step'));
+        $confirm = $this->button('Confirm order');
+        $this->receive($this->update('yes')); // Text still cannot submit.
+        $this->assertSame(0, DB::table('ecommerce_orders')->where('business_id', $this->connection->business_id)->count());
+        $this->click($confirm); $this->click($confirm);
+        $order = DB::table('ecommerce_orders')->where('business_id', $this->connection->business_id)->sole();
+        $this->assertSame('proof_submitted', $order->payment_status);
+        $proof = DB::table('ecommerce_payments')->where('order_id', $order->id)->where('type', 'proof')->sole();
+        $this->assertSame('pending', $proof->status);
+        Storage::disk('local')->assertExists($proof->proof_path);
+        $this->assertSame(0, DB::table('ecommerce_payments')->where('order_id', $order->id)->where('type', 'confirm')->count());
+    }
+
+    public function test_invalid_transfer_screenshot_cannot_advance_or_create_an_order(): void
+    {
+        $draft = $this->checkoutDraft('Bank transfer');
+        $this->receive($this->update('', extra: ['photo' => [['file_id' => '../invalid', 'file_size' => 20]]]));
+        $this->assertSame('proof', DB::table('sales_telegram_checkouts')->where('id', $draft->id)->value('step'));
+        $this->assertSame(0, DB::table('ecommerce_orders')->where('business_id', $this->connection->business_id)->count());
+    }
+
+    public function test_existing_guest_order_proof_is_scoped_and_requires_a_signed_customer_confirmation(): void
+    {
+        $this->checkoutDraft();
+        $this->click($this->button('Confirm order'));
+        $order = DB::table('ecommerce_orders')->where('business_id', $this->connection->business_id)->sole();
+        DB::table('ecommerce_orders')->where('id', $order->id)->update(['payment_method' => json_encode(['id' => 'bank', 'type' => 'transfer', 'provider' => 'manual', 'bank' => 'KBZPay'])]);
+        $this->receive($this->update('Please attach payment to '.$order->reference));
+        $thread = app(Identity::class)->context($this->thread());
+        $run = DB::table('sales_ai_runs')->where('thread_id', $thread->id)->orderByDesc('created_at')->orderByDesc('trigger_message_id')->firstOrFail();
+        DB::table('sales_ai_runs')->where('id', $run->id)->update(['status' => 'processing']);
+        $agent = new SalesRepresentative($thread, app(Settings::class)->get($thread->business_id), [], $run->id, $run->trigger_message_id);
+        app(PublicTools::class)->handle($agent, 'submit_order_payment_proof', ['reference' => $order->reference]);
+        $this->sendReceipt();
+        $confirm = $this->button('Submit payment proof');
+        $this->click($confirm, 456, 456);
+        $this->assertSame(0, DB::table('ecommerce_payments')->where('order_id', $order->id)->count());
+        $this->click($confirm); $this->click($confirm);
+        $this->assertSame(1, DB::table('ecommerce_payments')->where('order_id', $order->id)->where('type', 'proof')->count());
+        $this->assertSame('proof_submitted', DB::table('ecommerce_orders')->where('id', $order->id)->value('payment_status'));
     }
 
     public function test_guest_checkout_requires_signed_confirmation_and_is_idempotent(): void

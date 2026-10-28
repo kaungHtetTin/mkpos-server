@@ -27,6 +27,7 @@ class AppServiceProvider extends ServiceProvider
         $this->app->singleton(TypingIndicator::class);
         $this->app->singleton(\App\Services\SalesTelegram\Typing::class);
         $this->app->singleton(TenantContext::class);
+        $this->app->singleton(\App\Services\ResourceRealtime::class);
         Connection::resolverFor('mysql', fn ($connection, $database, $prefix, $config) => new TenantMySqlConnection(
             $connection,
             $database,
@@ -42,6 +43,12 @@ class AppServiceProvider extends ServiceProvider
      */
     public function boot()
     {
+        $resources = $this->app->make(\App\Services\ResourceRealtime::class);
+        \Illuminate\Support\Facades\DB::listen(fn ($query) => $resources->observe($query));
+        $this->app->terminating(fn () => $resources->flush());
+        foreach ([\Illuminate\Queue\Events\JobProcessed::class, \Illuminate\Queue\Events\JobExceptionOccurred::class, \Illuminate\Queue\Events\JobFailed::class] as $event) {
+            \Illuminate\Support\Facades\Event::listen($event, fn () => $resources->flush());
+        }
         Http::globalMiddleware(new RetryAiConnectionFailures);
         Http::globalMiddleware(new RefreshTelegramTyping);
         RateLimiter::for('ai-chat', fn ($request) => Limit::perMinute(60)->by('ai-read:'.($request->user()?->id ?? $request->ip())));

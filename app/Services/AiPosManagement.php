@@ -69,7 +69,7 @@ class AiPosManagement
                 $baseline['record'] = $before;
                 $baseline['items'] = $this->table($itemsTable)->where($key, $id)->orderBy('id')->lockForUpdate()->get()->map(fn ($r) => (array) $r)->all();
             }
-            $requiresPin = (! $purchase && $action !== 'create') || ($purchase && $action === 'delete');
+            $requiresPin = (! $purchase && $action !== 'create') || ($purchase && $action !== 'create');
             if ($action === 'delete') {
                 $this->keys($data, []);
                 $effect = ['deleted' => true, 'stock_effect' => $purchase ? 'Reverse received stock' : 'Restore sold and FOC stock', 'account_effect' => 'Remove the original invoice credit; account payments are not deleted.'];
@@ -270,6 +270,11 @@ class AiPosManagement
         if ($operation === 'manage_purchases') {
             $this->purchaseImpacts($action, $id, $data, $baseline, $preview);
         }
+        $requiresPin = $requiresPin
+            || $operation === 'manage_inventory'
+            || ($operation === 'manage_business_records' && ($v['type'] ?? '') === 'product')
+            || ($operation === 'manage_account_payments' && ($action !== 'create' || in_array($data['direction'] ?? '', ['shop_to_customer', 'supplier_to_shop'], true)))
+            || ($operation === 'manage_sales' && $action === 'create' && app(AdminPinProtection::class)->saleRequiresApproval($data));
         $requiresPin = $requiresPin && (string) $this->table('settings')->where('key', 'admin_pin_hash')->value('value') !== '';
         $baseline['requires_pin'] = $requiresPin;
         $baseline['reservations'] = $this->table('ecommerce_stock_reservations')->where('status', 'active')->orderBy('id')->lockForUpdate()->get()->map(fn ($r) => (array) $r)->all();

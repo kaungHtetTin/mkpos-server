@@ -80,6 +80,7 @@ class SettingsController extends ApiController
             $data = array_intersect_key($data, array_flip(self::STAFF_WRITABLE_KEYS));
             $pin = '';
         }
+        if ($pin !== '') app(\App\Services\AdminPinProtection::class)->authorize($request, '', true);
         DB::transaction(function () use ($data, $pin) {
             foreach ($data as $key => $value) {
                 DB::table('settings')->updateOrInsert(['key' => $key], ['value' => (string) ($value ?? '')]);

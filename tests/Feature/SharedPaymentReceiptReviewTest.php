@@ -20,6 +20,7 @@ class SharedPaymentReceiptReviewTest extends TestCase
         parent::setUp();
         config(['database.connections.shared_receipts' => ['driver' => 'sqlite', 'database' => ':memory:', 'prefix' => '']]);
         DB::setDefaultConnection('shared_receipts');
+        (require database_path('migrations/2026_10_28_000006_create_agent_skill_library.php'))->up();
         Schema::create('payment_methods', function (Blueprint $t) {
             $t->id(); $t->boolean('is_active'); $t->string('bank'); $t->string('account_name'); $t->string('account_no');
         });
@@ -54,9 +55,9 @@ class SharedPaymentReceiptReviewTest extends TestCase
 
     public function test_all_agents_share_the_receipt_skill(): void
     {
-        foreach ([BillingPayment::INSTRUCTIONS, KaungKaungService::INSTRUCTIONS, PaymentScreenshotReview::SALES_INSTRUCTIONS,
+        foreach ([BillingPayment::instructions(), KaungKaungService::instructions(), PaymentScreenshotReview::instructions('sales'),
             (new TelegramImageReader)->instructions()] as $instructions) {
-            $this->assertStringContainsString(PaymentScreenshotReview::COMMON_INSTRUCTIONS, $instructions);
+            $this->assertStringContainsString(PaymentScreenshotReview::instructions('common'), $instructions);
         }
     }
 

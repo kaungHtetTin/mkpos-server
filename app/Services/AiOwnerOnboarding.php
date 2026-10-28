@@ -24,9 +24,11 @@ class AiOwnerOnboarding
         return app(AiPageLinks::class)->screen($screen);
     }
 
-    public function guide(string $topic): array
+    public function guide(string $topic, ?\App\Services\AgentSkills\SkillSession $skills = null): array
     {
-        $guide = OwnerOnboarding::GUIDES[$topic];
+        $guides = $skills ? $skills->guides('onboarding') : OwnerOnboarding::guides();
+        $guide = $guides[$topic] ?? null;
+        abort_unless($guide,404,'This published workflow is unavailable.');
         abort_unless(! $guide['modules'] || array_intersect($guide['modules'], config('mkpos.enabled_modules', [])), 403, 'This guide module is unavailable.');
         $screen = $guide['screen'];
         if ($topic === 'credit_accounts' && ! $this->enabled('customers')) {
@@ -35,7 +37,7 @@ class AiOwnerOnboarding
 
         return ['topic' => $topic, ...$guide, 'screen' => $screen,
             'action' => $this->enabled(AiPageLinks::pages()[$screen]['module'] ?? $screen) ? $this->screen($screen) : null,
-            'available_skills' => array_keys(OwnerOnboarding::GUIDES),
+            'available_skills' => array_keys($guides),
             'guidance' => 'Explain one relevant step at a time. These are app workflows, not proof that this business completed a step. Use the MKPOS knowledge tool for detailed field help. No practice/fake transactions in live data.'];
     }
 
@@ -89,10 +91,10 @@ class AiOwnerOnboarding
         return compact('id', 'label', 'status', 'evidence', 'required') + ['action' => $this->screen($screen)];
     }
 
-    public function run(string $tool, array $args): array
+    public function run(string $tool, array $args, ?\App\Services\AgentSkills\SkillSession $skills = null): array
     {
         if ($tool === 'get_feature_guide') {
-            return $this->guide($args['topic'] ?? 'business_setup');
+            return $this->guide($args['topic'] ?? 'business_setup', $skills);
         }
         if ($tool === 'open_app_screen') {
             return $this->screen($args['screen'] ?? 'settings');

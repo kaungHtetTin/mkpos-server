@@ -20,7 +20,7 @@ class Settings
         'calculate_quote' => 'Calculate an exact current server quote including promotions, coupon and selected delivery/payment options. Never invent missing choices.',
         'manage_customer_cart' => 'Read the customer cart or prepare reviewed product/quantity changes. Customer must press Apply cart; no stock is reserved.',
         'get_delivery_options' => 'Read real delivery zones, pickup instructions and active receiving methods with exact IDs. Courier-paid charges may be unknown.',
-        'prepare_checkout' => 'Prepare an in-chat checkout form from exact products or the saved cart. Customer fills contact/delivery/payment details, reviews the quote and presses Confirm order.',
+        'prepare_checkout' => 'Prepare a customer-confirmed checkout form. Non-COD methods require a payment screenshot before confirmation; COD needs none. Customer reviews items, receiving details, total and image. Payment awaits shop verification.',
         'submit_confirmed_order' => 'Read the status of a prepared checkout action. Cannot confirm or place an order from model arguments or chat consent.',
         'submit_order_payment_proof' => 'Prepare a customer-confirmed proof attachment to their own shop order. Does not verify funds, approve payment, top up Sales AI or pay MKPOS subscriptions.',
         'get_customer_order_details' => 'Read items, fulfillment, payment and customer-visible requests for one order owned by this customer and shop.',
@@ -49,7 +49,7 @@ class Settings
         $row = $this->ready() ? DB::table('sales_ai_settings')->where('business_id', $businessId)->first() : null;
         return ['enabled' => (bool) ($row->enabled ?? false), 'name' => $row->name ?? 'Sales assistant',
             'instructions' => $row->instructions ?? 'Help customers choose suitable products. Use verified shop information and ask the owner when uncertain.',
-            'soul' => $row->soul ?? 'Be friendly, honest and concise. Reply in the customer’s language. Never pressure a customer.',
+            'soul' => $row->soul ?? \App\Services\AgentSkills\SkillCatalog::text('sales-default-soul'),
             'tool_permissions' => $row ? json_decode($row->tool_permissions, true) : array_keys(self::TOOLS), 'sales_policies' => isset($row->sales_policies) ? (json_decode($row->sales_policies, true) ?: []) : [], 'version' => (int) ($row->version ?? 1)];
     }
 

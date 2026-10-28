@@ -42,7 +42,7 @@ class AgentAwarenessTest extends TestCase
         ];
         foreach ($agents as [$agent, $identity]) {
             $instructions = $agent->instructions();
-            $this->assertStringContainsString(AgentAwareness::INSTRUCTIONS, $instructions, $agent::class);
+            $this->assertStringContainsString(AgentAwareness::instructions(), $instructions, $agent::class);
             $this->assertSame(1, substr_count($instructions, 'MKPOS agent awareness skill:'), $agent::class);
             $this->assertSame(1, substr_count($instructions, 'Shared communication soul for every MKPOS agent:'), $agent::class);
             $this->assertStringContainsString('Assume customers, business owners and staff are non-technical people.', $instructions, $agent::class);

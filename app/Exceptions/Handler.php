@@ -33,6 +33,9 @@ class Handler extends ExceptionHandler
      * @var array<int, string>
      */
     protected $dontFlash = [
+        'admin_pin',
+        'authorization_pin',
+        'owner_password',
         'current_password',
         'password',
         'password_confirmation',
@@ -58,6 +61,10 @@ class Handler extends ExceptionHandler
      */
     public function register()
     {
+        $this->renderable(fn (AdminPinRequired $error) => response()->json([
+            'message' => $error->getMessage(), 'code' => 'admin_pin_required',
+            'allow_owner_recovery' => $error->allowOwnerRecovery,
+        ], 403));
         $this->reportable(function (Throwable $e) {
             //
         });

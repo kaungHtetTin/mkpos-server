@@ -34,8 +34,8 @@ class ActionFeedback
             if (DB::table('shop_chat_messages')->where('thread_id', $thread->id)->where('client_id', $key)->exists()) return;
             $label = str_replace('_', ' ', $a->kind);
             $body = 'Form activity: '.$label.' '.match ($outcome) { 'completed' => 'submitted successfully.', 'cancelled' => 'proposal cancelled. No order was cancelled by this button.', 'reviewed' => 'review refreshed; not submitted yet.', default => 'could not be completed. Review the form errors.' };
-            $messageId = DB::table('shop_chat_messages')->insertGetId(['thread_id' => $thread->id, 'client_id' => $key, 'sender' => 'customer', 'body' => $body, 'sales_ai_action_event' => json_encode($event, JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR), 'created_at' => now('UTC')]);
-            DB::table('shop_chat_threads')->where('id', $thread->id)->update(['updated_at' => now('UTC')]);
+            $messageId = DB::table('shop_chat_messages')->insertGetId(['thread_id' => $thread->id, 'client_id' => $key, 'sender' => 'customer', 'body' => $body, 'sales_ai_action_event' => json_encode($event, JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR), ...\App\Support\ChatTime::message()]);
+            DB::table('shop_chat_threads')->where('id', $thread->id)->update([...\App\Support\ChatTime::thread()]);
             app(Chat::class)->enqueue($current, DB::table('shop_chat_messages')->where('id', $messageId)->first());
             DB::afterCommit(fn () => app(ShopChatRealtime::class)->changed($current, $messageId));
         });

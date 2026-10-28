@@ -26,14 +26,16 @@ token stored by the Office app. Use the public route for a check without login.
 | Worker | Required | Evidence |
 | --- | --- | --- |
 | `sales_ai` | Yes | Dedicated `sales-ai` connection/queue loop and job events |
-| `wyne_wyne` | No | Replies run directly in HTTP; old worker diagnostics are optional |
+| `wyne_wyne` | Yes | Dedicated `wyne-wyne` queue, Node callbacks or cron worker, and job events |
 | `customer_service` | When Telegram customer service is enabled | Dedicated `customer-service` queue, configuration and stuck-work checks |
 | `scheduler` | Yes | Actual `schedule:run` start/finish; failed scheduled tasks fail the tick |
 | `payment_validation` | When legacy work is queued/processing, or explicitly configured | Legacy `system-agent:validate-payments` start/finish |
-| `default_queue` | When the default connection uses an asynchronous driver, separate from the two AI queues | Configured default connection and queue events |
+| `default_queue` | When the default connection uses an asynchronous driver, separate from the dedicated AI queues | Configured default connection and queue events |
 
-Wyne Wyne runs directly in HTTP. The response identifies
-it as `worker_required: false` and `mode: http`. Current payment-proof submission
+Wyne Wyne uses the database queue. The response identifies it as
+`worker_required: true` and `mode: queue`; missing/stale workers fail health.
+Run `cron:work wyne-wyne` every minute or a supervised worker, including when
+Node wakeup is enabled. Current payment-proof submission
 checks still run during web requests and do not need queue workers.
 To require an intentionally deployed legacy payment
 worker even without pending tasks, set

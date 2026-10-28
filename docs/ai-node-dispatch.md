@@ -2,8 +2,9 @@
 
 The Node server can now wake the existing Laravel database queues immediately
 after a committed job is enqueued. This covers Sales AI, Kaung Kaung, Sales AI
-Telegram delivery, and Kaung Kaung receipt notices. It does not move the model,
-wallet, customer permissions or payment logic into Node. Wyne Wyne is unchanged.
+Telegram delivery, Kaung Kaung receipt notices, and Wyne Wyne replies. Model execution, wallet charging, permissions and payment logic stay in Laravel.
+Wyne Wyne returns an immediate HTTP 202 acknowledgement and delivers the worker
+result through its authenticated receipt feed.
 
 Laravel sends a short signed notification to Node `/ai-jobs`. Node acknowledges
 it immediately and calls the fixed Laravel `/integrations/ai-jobs/process`
@@ -17,7 +18,7 @@ ready work or schedules the next callback for a delayed/released job. It uses no
 1. Deploy the changed Laravel source, including the new config, service,
    middleware and controller; deploy the Node source including `ai-jobs.js`.
    Rebuild Composer's optimized class map if your deployment uses it. No migration
-   or frontend build is needed.
+   is needed. Rebuild desktop/mobile clients for the shorter Wyne Wyne acknowledgement timeout.
 2. Generate a new server-only random secret of at least 32 characters. For example,
    run `php -r "echo bin2hex(random_bytes(32)), PHP_EOL;"` on your own server.
    Do not use a browser/Vite variable or share the secret in chat.
@@ -44,9 +45,9 @@ ready work or schedules the next callback for a delayed/released job. It uses no
    `php artisan route:cache`. Run `php artisan queue:restart` for persistent workers;
    their supervisor must start the replacement processes. Cron workers load new
    code on their next invocation.
-7. Keep the existing every-minute `schedule:run` and both `cron:work` entries.
+7. Keep the existing every-minute `schedule:run` and all enabled `cron:work` entries, including `cron:work wyne-wyne`.
    They remain the recovery path if Node restarts, a wakeup fails, or hosting
-   interrupts a callback. Remove neither worker cron just to enable this feature.
+   interrupts a callback. Keep every queue worker cron when enabling this feature.
 
 Both endpoints require a fresh timestamp and HMAC over the exact request body.
 Wake and process signatures have different purpose prefixes. Replayed request

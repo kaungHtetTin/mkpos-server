@@ -129,7 +129,7 @@ class ShopCustomerController extends Controller
                 $uuid = (string) \Illuminate\Support\Str::uuid();
                 DB::table('shop_chat_threads')->insert(['uuid' => $uuid, 'business_id' => $businessId,
                     'platform_customer_id' => $accountId, 'customer_name' => $account->name,
-                    'phone' => $account->phone ?? $customer->phone, 'created_at' => now(), 'updated_at' => now()]);
+                    'phone' => $account->phone ?? $customer->phone, ...\App\Support\ChatTime::thread(true, false)]);
             }
             return ['thread' => ['uuid' => $thread->uuid ?? $uuid]];
         });

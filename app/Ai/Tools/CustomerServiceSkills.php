@@ -25,18 +25,18 @@ class CustomerServiceSkills implements Tool
 
     public function schema(JsonSchema $schema): array
     {
-        return ['topic' => $schema->string()->enum(['all', ...array_keys(KaungKaungService::GUIDES)])->required()];
+        return ['topic' => $schema->string()->enum(['all', ...array_keys($this->agent->skillSession()->guides())])->required()];
     }
 
     public function handle(Request $request): string
     {
-        $input = $request->validate(['topic' => 'required|in:all,'.implode(',', array_keys(KaungKaungService::GUIDES))]);
+        $input = $request->validate(['topic' => 'required|in:all,'.implode(',', array_keys($this->agent->skillSession()->guides()))]);
         $this->agent->usedTools[] = $this->name();
-        $guides = $input['topic'] === 'all' ? KaungKaungService::GUIDES : [$input['topic'] => KaungKaungService::GUIDES[$input['topic']]];
+        $guides = $input['topic'] === 'all' ? $this->agent->skillSession()->guides() : [$input['topic'] => $this->agent->skillSession()->guides()[$input['topic']]];
         foreach ($guides as &$guide) {
             $guide['tools'] = array_values(array_intersect($guide['tools'], array_keys(CustomerServiceKnowledge::TOOLS)));
             if ($input['topic'] === 'all') {
-                unset($guide['steps']);
+                unset($guide['steps'], $guide['examples']);
             }
         }
 

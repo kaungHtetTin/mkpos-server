@@ -201,8 +201,8 @@ class Runner
             if ($deliver) {
                 $messageId = DB::table('shop_chat_messages')->insertGetId(['thread_id' => $run->thread_id, 'client_id' => (string) Str::uuid(), 'sender' => 'owner', 'is_ai' => true,
                     ...(Schema::hasColumn('shop_chat_messages', 'sales_ai_content') ? ['sales_ai_content' => json_encode($agent->publicContent, JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR)] : []),
-                    'ai_name' => $run->agent_name, 'sales_ai_run_id' => $run->id, 'body' => mb_substr(trim($answer->text), 0, 6000), 'created_at' => now('UTC')]);
-                DB::table('shop_chat_threads')->where('id', $thread->id)->update(['updated_at' => now('UTC')]);
+                    'ai_name' => $run->agent_name, 'sales_ai_run_id' => $run->id, 'body' => mb_substr(trim($answer->text), 0, 6000), ...\App\Support\ChatTime::message()]);
+                DB::table('shop_chat_threads')->where('id', $thread->id)->update([...\App\Support\ChatTime::thread()]);
                 if ($agent->handoffReason) {
                     DB::table('shop_chat_threads')->where('id', $thread->id)->update(['sales_ai_mode' => 'waiting_owner', 'sales_ai_version' => $thread->sales_ai_version + 1, 'sales_ai_handoff_reason' => 'The shop team will help with this conversation.']);
                 }
@@ -238,7 +238,7 @@ class Runner
             DB::table('sales_ai_runs')->where('id', $id)->update(['status' => $reason === 'cancelled' ? 'cancelled' : 'failed', 'reason' => $reason, 'updated_at' => now('UTC')]);
             app(CustomerActions::class)->publish($id, null);
             if ($reason !== 'cancelled' && $thread && $thread->sales_ai_mode === 'ai' && (int) $thread->sales_ai_version === (int) $run->thread_version && app(ActionFeedback::class)->current($run)) {
-                DB::table('shop_chat_threads')->where('id', $thread->id)->update(['sales_ai_mode' => 'waiting_owner', 'sales_ai_version' => $thread->sales_ai_version + 1, 'sales_ai_handoff_reason' => 'The shop team will help with this conversation.', 'updated_at' => now('UTC')]);
+                DB::table('shop_chat_threads')->where('id', $thread->id)->update(['sales_ai_mode' => 'waiting_owner', 'sales_ai_version' => $thread->sales_ai_version + 1, 'sales_ai_handoff_reason' => 'The shop team will help with this conversation.', ...\App\Support\ChatTime::thread()]);
             }
             if ($thread) {
                 if ($reason !== 'cancelled') app(\App\Services\SalesTelegram\Delivery::class)->failedRun($run,$thread);

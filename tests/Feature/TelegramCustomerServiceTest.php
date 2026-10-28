@@ -55,6 +55,7 @@ class TelegramCustomerServiceTest extends TestCase
             'queue.connections.customer-service.connection' => 'telegram_fixture', 'queue.connections.customer-service.after_commit' => false,
             'ai.providers.deepseek.key' => 'fixture-key-never-return']);
         DB::setDefaultConnection('telegram_fixture');
+        (require database_path('migrations/2026_10_28_000006_create_agent_skill_library.php'))->up();
         Schema::create('ai_runs', function (Blueprint $table) {
             $table->string('model');
             $table->string('status');
@@ -233,7 +234,7 @@ class TelegramCustomerServiceTest extends TestCase
     {
         $this->assertStringContainsString('Do not diagnose code', (new CustomerServiceAgent)->instructions());
         $this->assertStringContainsString('even if you recognize the symptom', (new TelegramImageReader)->instructions());
-        $this->assertStringContainsString('An attempted correction is not a prerequisite', \App\Ai\Skills\ErrorSupport::INSTRUCTIONS);
+        $this->assertStringContainsString('An attempted correction is not a prerequisite', \App\Ai\Skills\ErrorSupport::instructions());
         $this->assertStringContainsString('without a separate contact question', implode(' ', \App\Ai\Skills\ErrorSupport::guide()['steps']));
     }
 

@@ -33,10 +33,7 @@ abstract class ApiController extends Controller
 
     protected function requireAdminPin(?string $pin): void
     {
-        $hash = $this->setting('admin_pin_hash');
-        if ($hash !== '' && ! password_verify((string) $pin, $hash)) {
-            abort(403, 'Admin PIN is incorrect');
-        }
+        app(\App\Services\AdminPinProtection::class)->authorize(request(), $pin);
     }
 
     protected function insertMovement(int $productId, string $productName, string $type, float $quantity, string $referenceType = '', ?int $referenceId = null, string $note = ''): void

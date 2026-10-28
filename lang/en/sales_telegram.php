@@ -1,6 +1,16 @@
 <?php
 
 return [
+    'open_proof' => 'Attach payment screenshot',
+    'cancel_proof' => 'Cancel proof submission',
+    'proof_existing' => 'Send a JPG, PNG or WebP payment screenshot up to 2 MB for this order. Review it and tap Submit payment proof. Your existing order will not be placed again. Payment awaits shop verification.',
+    'proof_cancelled' => 'Payment screenshot submission cancelled. Your existing order is unchanged.',
+    'submit_proof' => 'Submit payment proof',
+    'proof_submitted' => 'Payment screenshot submitted for :reference. Awaiting shop verification.',
+    'proof' => 'Send the payment screenshot as a photo or JPG, PNG or WebP image up to 2 MB. It is required for this payment method. Then review and confirm the order. Payment still needs shop verification.',
+    'proof_invalid' => 'The payment screenshot could not be attached. Send a readable JPG, PNG or WebP image up to 2 MB and try again.',
+    'proof_attached' => 'Payment screenshot attached. Review this image in your conversation before confirming. The shop must verify payment.',
+    'ordered_with_proof' => 'Order and payment screenshot submitted: :reference. Awaiting shop payment verification.',
     'coupon_label' => 'Coupon',
     'waiting' => 'The shop team has this conversation. Please wait for a person to reply.',
     'help' => 'I am this shop’s Sales AI. Ask about products, prices and delivery. In a group, mention me or reply to my message. Place guest orders in private chat. Link your shop account from its web chat to view account-owned orders. Use /reset to start fresh, /unlink to remove linking, or /cancel to stop checkout.',

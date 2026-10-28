@@ -2,6 +2,7 @@
 
 namespace App\Providers;
 
+use App\Support\RateLimitIdentity;
 use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Foundation\Support\Providers\RouteServiceProvider as ServiceProvider;
 use Illuminate\Http\Request;
@@ -55,37 +56,46 @@ class RouteServiceProvider extends ServiceProvider
         }
         foreach (['shop-public' => 120, 'shop-quote' => 30, 'shop-checkout' => 10, 'shop-tracking' => 30, 'shop-proofs' => 5] as $name => $attempts) {
             RateLimiter::for($name, fn (Request $request) => Limit::perMinute($attempts)->by(
-                ($name === 'shop-public' && $this->isCustomerBackgroundRequest($request) ? 'background:' : '').$request->ip()
+                ($name === 'shop-public' && $this->isCustomerBackgroundRequest($request) ? 'background:' : '').RateLimitIdentity::forRequest($request)
             ));
         }
         RateLimiter::for('api', function (Request $request) {
-            $identity = ($request->is('api/office/*') ? 'office:' : 'business:').($request->user()?->id ?: $request->ip());
+            $identity = RateLimitIdentity::forRequest($request);
+            if ($request->isMethod('GET') && $request->is('api/ai-assistant/conversations/*/messages/*/delivery')) {
+                return $this->budget($request, 'ai-delivery', 60, $identity);
+            }
             if ($request->isMethod('GET') && $request->is('api/health', 'api/health/workers')) {
                 return Limit::perMinute(120)->by('health-probes:'.$request->ip());
             }
             $chatBackground = $request->is('api/shop-admin/chat', 'api/shop-admin/chat/*') &&
                 ($request->isMethod('GET') || $request->is('api/shop-admin/chat/presence', 'api/shop-admin/chat/auth', 'api/shop-admin/chat/*/read'));
-            if ($chatBackground) return Limit::perMinute(120)->by('chat-background:'.$identity);
+            if ($chatBackground) return $this->budget($request, 'chat-background', 120, $identity);
             $alertFeed = $request->is('api/activity-alerts', 'api/office/activity-alerts', 'api/subscription/alerts', 'api/shop-admin/order-notifications');
             $alertConfig = $request->is('api/activity-alerts/config', 'api/office/activity-alerts/config', 'api/subscription/alerts/config', 'api/shop-admin/order-notifications/config');
             $alertAuth = $request->is('api/activity-alerts/auth', 'api/office/activity-alerts/auth', 'api/subscription/alerts/auth', 'api/shop-admin/order-notifications/auth');
             if (($request->isMethod('GET') && ($alertFeed || $alertConfig)) || ($request->isMethod('POST') && $alertAuth)) {
-                return Limit::perMinute(120)->by('notification-background:'.$identity);
+                return $this->budget($request, 'notification-background', 120, $identity);
             }
             if ($this->isCustomerBackgroundRequest($request)) {
-                return Limit::perMinute(120)->by('customer-background:'.$identity);
+                return $this->budget($request, 'customer-background', 120, $identity);
             }
             // Catalog and cart thumbnails must not consume the checkout budget.
             if ($request->isMethod('GET') && preg_match('#^api/products/[0-9]+/photo$#', $request->path())) {
-                return Limit::perMinute(300)->by('product-photos:'.$identity);
+                return $this->budget($request, 'product-photos', 300, $identity);
             }
             $checkout = ($request->isMethod('POST') && $request->is('api/sales', 'api/sales/offline-sync')) ||
                 ($request->isMethod('GET') && preg_match('#^api/sales/([0-9]+|last)/receipt$#', $request->path())) ||
                 ($request->isMethod('POST') && preg_match('#^api/sales/[0-9]+/print$#', $request->path()));
-            if ($checkout) return Limit::perMinute(60)->by('pos-checkout:'.$identity);
-            if ($request->is('api/ecommerce/*')) return Limit::perMinute(120)->by('shop-public-api:'.$identity);
-            return Limit::perMinute(60)->by($identity);
+            if ($checkout) return $this->budget($request, 'pos-checkout', 60, $identity);
+            if ($request->is('api/ecommerce/*')) return $this->budget($request, 'shop-public-api', 120, $identity);
+            return $this->budget($request, $request->isMethod('GET') || $request->isMethod('HEAD') ? 'api-read' : 'api-write', 60, $identity);
         });
+    }
+
+    private function budget(Request $request, string $scope, int $attempts, string $identity): Limit
+    {
+        $request->attributes->set('_rate_limit_scope', $scope);
+        return Limit::perMinute($attempts)->by($scope.':'.$identity);
     }
 
     private function isCustomerBackgroundRequest(Request $request): bool

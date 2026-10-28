@@ -1,5 +1,43 @@
 # Sales AI implementation
 
+## Required payment screenshots in Sales AI checkout
+
+Shop-chat Sales AI checkout and the private Telegram checkout wizard now require
+a reviewed screenshot for non-COD methods. Customers may calculate a quote first
+to see the exact total and receiving details, but cannot confirm a transfer order
+until an image is staged and reviewed. COD checkout requires no image. The native
+order and its pending proof are submitted in one transaction through the existing
+shop APIs; screenshots never approve payment or mark an order paid.
+
+The Shop review card accepts JPG/PNG/WebP up to 2 MB, retains the chosen file and
+entered details after errors and Close/reopen, and invalidates consent after edits.
+The staged image is hash-bound to the review and checked again at confirmation.
+Existing unpaid transfer orders still use `submit_order_payment_proof` separately.
+
+In private Telegram chat, non-COD checkout asks for a photo/image before showing
+Confirm order. For an existing own unpaid transfer order, the same AI proof tool
+opens a native photo-and-Submit payment proof wizard. Guest orders are scoped to
+the originating Telegram conversation; linked account orders remain ownership
+checked. Group chats cannot prepare or submit proof. Chat text never confirms an
+order or receipt. The existing tool permission must be enabled for attaching proof
+to an existing order. Cancellation does not cancel an existing order. Staged images
+are removed after success/cancellation and expired images are pruned by the
+existing `sales-ai:prune-actions` scheduler task.
+
+No migration is required. Deploy the PHP source including
+`app/Services/SalesAi/CheckoutProof.php`, rebuild/deploy the customer Shop frontend,
+and restart persistent workers. The Node socket server needs no change for this
+flow. Existing native Shop checkout/order APIs retain their separate order/proof
+workflow; the new mandatory pre-confirmation screenshot gate applies to Sales AI
+checkout.
+
+Verification covers API confirmation without proof, hash tampering, exactly-once
+order/proof creation, COD compatibility, private Telegram receipt upload,
+customer-bound callback signatures, and pending owner verification. Shop component
+tests cover file review, blocked consent, multipart submission, failures and
+Close/reopen draft retention. An isolated rendered browser fixture verifies the
+same controls with fake APIs; it creates no live orders or provider calls.
+
 ## Realtime top-up activity
 
 New top-up requests notify Office through the shared private activity socket,

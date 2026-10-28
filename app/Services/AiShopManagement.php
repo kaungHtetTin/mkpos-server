@@ -282,7 +282,8 @@ class AiShopManagement
             array_unshift($preview, ['record_id' => $id, 'name' => ucwords(str_replace('_', ' ', $operation)).' — '.$action, 'before' => $before ? array_intersect_key($before, array_flip(array_keys($effect))) : null, 'after' => $effect]);
         }
 
-        return ['payload' => ['input' => $input, 'action' => $action, 'record_id' => $id, 'customer_key' => $a['customer_key'] ?? null, 'data' => $data], 'baseline' => $baseline, 'preview' => $preview, 'requires_payment_verification' => $paymentVerification, 'requires_goods_verification' => $goodsVerification];
+        $requiresPin = $operation === 'manage_shop_orders' && ($action === 'record_refund' || ($action === 'transition' && (($data['status'] ?? '') === 'return_pending' || $goodsVerification)) || ($action === 'resolve_request' && ($data['status'] ?? '') !== 'rejected' && ($goodsVerification || (collect($baseline['shop_order_requests'] ?? [])->firstWhere('id', $data['request_id'])['type'] ?? '') === 'return')));
+        return ['payload' => ['input' => $input, 'action' => $action, 'record_id' => $id, 'customer_key' => $a['customer_key'] ?? null, 'data' => $data], 'baseline' => $baseline, 'preview' => $preview, 'requires_pin' => $requiresPin && app(AdminPinProtection::class)->configured(), 'requires_payment_verification' => $paymentVerification, 'requires_goods_verification' => $goodsVerification];
     }
 
     private function orderImpacts(string $action, array $data, array $baseline, array &$effect, array &$preview): void
@@ -361,6 +362,7 @@ class AiShopManagement
     {
         $actor = User::findOrFail($userId);
         $data = $p['data'];
+        if (isset($approval['admin_pin'])) $data['admin_pin'] = $approval['admin_pin'];
         $entryId = $data['entry_id'] ?? null;
         unset($data['entry_id']);
         $id = $p['record_id'];

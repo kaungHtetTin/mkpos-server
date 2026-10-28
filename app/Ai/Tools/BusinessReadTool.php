@@ -58,7 +58,7 @@ class BusinessReadTool implements Tool
     public function schema(JsonSchema $schema): array
     {
         $fields = [
-            'topic' => $schema->string()->enum(array_keys(OwnerOnboarding::GUIDES)),
+            'topic' => $schema->string()->max(100),
             'screen' => $schema->string()->enum(array_keys(AiPageLinks::pages())),
             'query' => $schema->string()->max(120),
             'price_type' => $schema->string()->max(50),
@@ -94,7 +94,7 @@ class BusinessReadTool implements Tool
     {
         $this->agent->usedTools[] = $this->toolName;
         try {
-            $result = app(AiBusinessReader::class)->run($this->agent->actor, $this->toolName, $request->all());
+            $result = app(AiBusinessReader::class)->run($this->agent->actor, $this->toolName, $request->all(), $this->agent->skillSession());
         } catch (ValidationException $e) {
             $result = ['error' => 'invalid_arguments', 'fields' => $e->errors()];
         } catch (HttpExceptionInterface $e) {

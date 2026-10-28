@@ -54,7 +54,8 @@ class ProductController extends ApiController
                 $query->where('stock', '>', 0)->where(fn ($q) => $q->where('low_stock_threshold', '<=', 0)->orWhereColumn('stock', '>', 'low_stock_threshold'));
                 break;
         }
-        $result = $this->page($query->orderBy('name'), $request, 500, 500, true);
+        $direction = $request->query('sort') === 'name_desc' ? 'desc' : 'asc';
+        $result = $this->page($query->orderBy('name', $direction)->orderBy('id', $direction), $request, 500, 500, true);
         if (isset($result['items'])) {
             $result['items'] = $this->attachPrices($result['items']);
         } else {
@@ -182,6 +183,17 @@ class ProductController extends ApiController
         $data = app(ProductWriter::class)->validate($request, $id, true);
 
         return DB::transaction(function () use ($data, $id, $request) {
+            $current = DB::table('products')->where('id', $id)->lockForUpdate()->first();
+            abort_unless($current, 404, 'Product not found');
+            $sensitive = false;
+            foreach (['stock', 'cost', 'price', 'is_active'] as $field) {
+                if ((float) ($data[$field] ?? ($field === 'is_active' ? $current->$field : 0)) !== (float) $current->$field) $sensitive = true;
+            }
+            $prices = fn ($rows) => collect($rows)->mapWithKeys(fn ($row) => [trim((string) data_get($row, 'name')) => [(int) data_get($row, 'price'), (bool) data_get($row, 'is_manual', true)]])->sortKeys()->all();
+            $nextPrices = $data['prices'] ?? [];
+            if (! $nextPrices) $nextPrices = [['name' => 'Retail', 'price' => $data['price'], 'is_manual' => true]];
+            $sensitive = $sensitive || $prices($nextPrices) !== $prices(DB::table('product_prices')->where('product_id', $id)->get());
+            if ($sensitive) app(\App\Services\AdminPinProtection::class)->authorize($request);
             app(ProductWriter::class)->update($id, $data, (int) $request->user('web')->id);
 
             return $this->find($id);
@@ -190,6 +202,7 @@ class ProductController extends ApiController
 
     public function destroyMany(Request $request): array
     {
+        app(\App\Services\AdminPinProtection::class)->authorize($request);
         $data = $request->validate(['ids' => ['required', 'array', 'min:1', 'max:1000'],
             'ids.*' => ['required', 'integer', 'min:1', 'distinct']]);
         $businessId = app(TenantContext::class)->requireId();
@@ -213,6 +226,7 @@ class ProductController extends ApiController
 
     public function destroy(int $id)
     {
+        app(\App\Services\AdminPinProtection::class)->authorize();
         return DB::transaction(function () use ($id) {
             $product = DB::table('products')->where('id', $id)->where('is_active', true)->lockForUpdate()->first();
             abort_unless($product, 404, 'Product not found');
@@ -225,6 +239,7 @@ class ProductController extends ApiController
 
     public function adjustStock(Request $request, int $id)
     {
+        app(\App\Services\AdminPinProtection::class)->authorize($request);
         $data = $request->validate(['quantity' => ['required', 'numeric'], 'reason' => ['nullable', 'string']]);
 
         return DB::transaction(function () use ($data, $id) {
