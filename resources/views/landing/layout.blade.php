@@ -1,8 +1,8 @@
 @php
     $branding = \App\Support\PlatformBranding::all();
     $brandLogo = $branding['logo_url'] ?: asset('app/branding/mktransparenticon.png');
-    $brandIcon = $branding['icon_url'] ?: asset('app/branding/mkicon.png');
-    $brandFavicon = $branding['favicon_url'] ?: asset('app/branding/mkicon.png');
+    $brandIcon = $branding['icon_url'] ?: asset('landing/mkicon.png');
+    $brandFavicon = $branding['favicon_url'] ?: asset('favicon.ico').'?v='.filemtime(public_path('favicon.ico'));
 @endphp
 <!doctype html>
 <html lang="en" data-theme="{{ $branding['theme_mode'] }}">
