@@ -38,7 +38,7 @@ return [
     'text_only' => 'Please send a text message. Place checkout and payment details only in private chat.',
     'limit' => 'The chat limit has been reached. Please try again later or contact the shop.',
     'unavailable' => 'Sales AI is unavailable. Please contact the shop.',
-    'name' => 'Guest checkout: send the customer name. No account is required. Use /cancel to stop.',
+    'name' => 'Guest checkout: send the customer name. Use /cancel to stop.',
     'phone' => 'Send the customer phone number.', 'fulfillment' => 'Choose pickup or delivery.', 'zone' => 'Choose a delivery zone.',
     'address' => 'Send the delivery address.', 'payment' => 'Choose a payment method.',
     'coupon' => 'Send a coupon code, or tap Skip.', 'notes' => 'Send an order note, or tap Skip.',
