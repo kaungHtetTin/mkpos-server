@@ -273,14 +273,14 @@ class Checkout
         });
     }
 
-    private function button(object $draft, object $conversation, string $action, string $label): array
+    private function button(object $draft, object $conversation, string $action, string $label, bool $fullLabel = false): array
     {
         $body = 'sc:'.str_replace('-', '', $draft->id).':'.base_convert((string) $draft->version, 10, 36).':'.$action;
         $signature = substr(hash_hmac('sha256', $body.':'.$conversation->connection_id.':'.$conversation->bot_id.':'.$conversation->sender_id.':'.$conversation->chat_id, config('app.key')), 0, 16);
         $data = $body.':'.$signature;
         abort_if(strlen($data) > 64, 500);
 
-        return ['text' => mb_substr($label, 0, 70), 'callback_data' => $data];
+        return ['text' => $fullLabel ? $label : mb_substr($label, 0, 70), 'callback_data' => $data];
     }
 
     public function keyboardFor(object $conversation): array
@@ -518,7 +518,12 @@ class Checkout
             DB::table('sales_telegram_checkouts')->where('id', $draft->id)->update(['payload_encrypted' => Crypt::encryptString(json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR))]);
             $page = max(0, (int) ($payload['page'] ?? 0));
             foreach (array_slice($choices, $page * 8, 8, true) as $index => $choice) {
-                $rows[] = [$this->button($draft, $conversation, 'v'.base_convert((string) $index, 10, 36), (string) $choice['name'])];
+                $label = (string) $choice['name'];
+                if ($draft->step === 'payment' && ($choice['type'] ?? '') !== 'cash') {
+                    $details = array_map(fn ($key) => trim((string) ($choice[$key] ?? '')), ['bank', 'account_name', 'account_no']);
+                    $label = implode(' - ', array_filter($details, fn ($value) => $value !== '')) ?: $label;
+                }
+                $rows[] = [$this->button($draft, $conversation, 'v'.base_convert((string) $index, 10, 36), $label, fullLabel: $draft->step === 'payment')];
             }
             if ($page > 0) {
                 $rows[] = [$this->button($draft, $conversation, 'b', $this->text($draft, 'previous'))];

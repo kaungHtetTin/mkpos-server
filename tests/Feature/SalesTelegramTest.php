@@ -138,13 +138,13 @@ class SalesTelegramTest extends TestCase
         return $buttons->firstWhere('text', $label)['callback_data'];
     }
 
-    private function checkoutDraft(string $method = 'Cash'): object
+    private function checkoutDraft(string $method = 'Cash', array $bankDetails = []): object
     {
         $product = $this->postJson('/api/products', ['name' => 'Telegram rice', 'price' => 1500, 'cost' => 600, 'stock' => 10, 'base_unit' => 'Bag', 'prices' => [['name' => 'Retail', 'price' => 1500]]])->assertOk()->json();
         $this->putJson('/api/shop-admin/publications/'.$product['id'], ['published' => true, 'unit' => 'base'])->assertOk();
         DB::table('storefront_settings')->where('business_id', $this->owner['business']['id'])->update(['accepting_orders' => true,
             'payment_methods' => json_encode([['id' => 'cash', 'name' => 'Cash', 'type' => 'cash', 'is_active' => true, 'provider' => 'manual'],
-                ['id' => 'bank', 'name' => 'Bank transfer', 'type' => 'transfer', 'bank' => 'KBZPay', 'account_name' => 'Shop owner', 'account_no' => '09123456789', 'is_active' => true, 'provider' => 'manual']])]);
+                array_replace(['id' => 'bank', 'name' => 'Bank transfer', 'type' => 'transfer', 'bank' => 'KBZPay', 'account_name' => 'Shop owner', 'account_no' => '09123456789', 'is_active' => true, 'provider' => 'manual'], $bankDetails)])]);
         $this->receive($this->update('I want two bags of rice'));
         $thread = app(Identity::class)->context($this->thread());
         $run = DB::table('sales_ai_runs')->where('thread_id', $thread->id)->firstOrFail();
@@ -157,7 +157,10 @@ class SalesTelegramTest extends TestCase
         $this->receive($this->update('Guest Buyer'));
         $this->receive($this->update('09123456789'));
         $this->click($this->button('Pickup'));
-        $this->click($this->button($method));
+        $bankLabel = implode(' - ', array_replace(['bank' => 'KBZPay', 'account_name' => 'Shop owner', 'account_no' => '09123456789'], $bankDetails));
+        $this->assertContains($bankLabel, $this->latestButtons());
+        $this->assertContains('Cash', $this->latestButtons());
+        $this->click($this->button($method === 'Bank transfer' ? $bankLabel : $method));
         $this->click($this->button('Skip'));
         $this->click($this->button('Skip'));
         $draft = DB::table('sales_telegram_checkouts')->where('conversation_id', $conversation->id)->firstOrFail();
@@ -198,6 +201,14 @@ class SalesTelegramTest extends TestCase
     {
         $outbox = DB::table('sales_telegram_outbox')->whereNotNull('reply_markup')->orderByDesc('id')->firstOrFail();
         return collect(json_decode($outbox->reply_markup, true)['inline_keyboard'])->flatten(1)->pluck('text')->all();
+    }
+
+    public function test_payment_method_button_keeps_the_complete_bank_name_and_account_number(): void
+    {
+        $draft = $this->checkoutDraft('Bank transfer', ['bank' => str_repeat('Bank ', 8).'Wallet', 'account_name' => str_repeat('Account owner ', 5).'Name']);
+        $payload = json_decode(Crypt::decryptString($draft->payload_encrypted), true);
+        $this->assertSame('bank', $payload['payment_method_id']);
+        $this->assertSame('proof', $draft->step);
     }
 
     public function test_transfer_checkout_waits_for_a_photo_and_submits_order_and_proof_once(): void
