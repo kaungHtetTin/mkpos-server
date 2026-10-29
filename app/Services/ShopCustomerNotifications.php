@@ -17,8 +17,13 @@ class ShopCustomerNotifications
 
     public function send(int $customer, int $business, string $event, string $key, array $payload): void
     {
-        DB::table('shop_customer_notifications')->insertOrIgnore(['customer_id' => $customer, 'business_id' => $business,
+        $inserted = DB::table('shop_customer_notifications')->insertOrIgnore(['customer_id' => $customer, 'business_id' => $business,
             'event' => $event, 'entity_key' => $key, 'payload' => json_encode($payload), 'created_at' => now(), 'updated_at' => now()]);
+        if ($inserted) {
+            $id = (int) DB::table('shop_customer_notifications')->where('customer_id', $customer)->where('entity_key', $key)->value('id');
+            DB::afterCommit(fn () => app(ShopChatRealtime::class)->publish(['private-shop.orders.customer.'.$customer],
+                'notification.created', ['notification_id' => $id]));
+        }
     }
 
     public function restocks(): int

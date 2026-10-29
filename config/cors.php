@@ -30,7 +30,8 @@ return [
 
     'exposed_headers' => ['Content-Disposition', 'Retry-After', 'X-RateLimit-Scope', 'X-Request-ID'],
 
-    'max_age' => 0,
+    // Cache permission preflights; this does not cache API data or authentication.
+    'max_age' => max(0, min(86400, (int) env('CORS_MAX_AGE', 3600))),
 
     'supports_credentials' => true,
 

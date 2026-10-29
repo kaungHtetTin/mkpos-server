@@ -19,8 +19,11 @@ class ResourceRealtimeTest extends TestCase
             'shop_chat.realtime_enabled' => true, 'shop_chat.secret' => str_repeat('s', 40),
             'shop_chat.publish_host' => 'socket.example.test', 'shop_chat.publish_port' => 443, 'shop_chat.publish_scheme' => 'https']);
         DB::setDefaultConnection('resource_fixture');
-        foreach (['products', 'settings', 'platform_branding'] as $table) {
-            Schema::create($table, function (Blueprint $table) { $table->id(); $table->integer('value')->default(0); });
+        foreach (['products', 'settings', 'roles', 'platform_branding'] as $table) {
+            Schema::create($table, function (Blueprint $schema) use ($table) {
+                $schema->id(); $schema->integer('value')->default(0);
+                if ($table === 'products') { $schema->integer('stock')->default(0); $schema->string('category')->default(''); $schema->boolean('is_active')->default(true); }
+            });
         }
         Http::preventStrayRequests();
         Http::fake(['socket.example.test/*' => Http::response(['ok' => true])]);
@@ -42,7 +45,7 @@ class ResourceRealtimeTest extends TestCase
         app(ResourceRealtime::class)->flush();
         Http::assertSentCount(2);
         Http::assertSent(fn ($request) => $request['channels'] === ['private-business.resources.42']
-            && $request['data']['resources'] === ['products', 'reports', 'settings']);
+            && $request['data']['resources'] === ['products', 'reports', 'categories', 'settings']);
         Http::assertSent(fn ($request) => $request['channels'] === ['private-business.resources.43']);
         app(ResourceRealtime::class)->flush();
         Http::assertSentCount(2);
@@ -81,5 +84,49 @@ class ResourceRealtimeTest extends TestCase
         $this->getJson('/api/branding/realtime/config')->assertOk()->assertJsonPath('channel', 'public-platform.branding');
         $this->getJson('/api/branding/realtime/auth?channel_name=private-business.resources.42')->assertForbidden();
         $this->getJson('/api/branding/realtime/auth?channel_name=public-platform.branding')->assertOk()->assertJsonStructure(['token', 'expires_at']);
+    }
+
+    public function test_access_changes_are_coalesced_in_the_captured_private_scope_after_commit_only(): void
+    {
+        app(TenantContext::class)->set(42);
+        DB::beginTransaction();
+        DB::table('roles')->insert(['value' => 1]);
+        app(ResourceRealtime::class)->access(42);
+        app(ResourceRealtime::class)->flush();
+        Http::assertNothingSent();
+        DB::commit();
+        app(TenantContext::class)->clear();
+        app(ResourceRealtime::class)->flush();
+        Http::assertSentCount(1);
+        Http::assertSent(fn ($request) => $request['channels'] === ['private-business.resources.42']
+            && $request['data'] === ['resources' => ['access']]);
+        DB::beginTransaction();
+        app(ResourceRealtime::class)->access(43);
+        DB::rollBack();
+        app(ResourceRealtime::class)->flush();
+        Http::assertSentCount(1);
+    }
+
+    public function test_stock_changes_keep_category_cache_and_membership_writes_invalidate_it(): void
+    {
+        app(TenantContext::class)->set(42);
+        $id = DB::table('products')->insertGetId(['stock' => 10, 'category' => 'Pens']);
+        app(ResourceRealtime::class)->flush();
+        Http::fake(['socket.example.test/*' => Http::response(['ok' => true])]);
+        DB::table('products')->where('id', $id)->decrement('stock');
+        app(ResourceRealtime::class)->flush();
+        Http::assertSentCount(1);
+        Http::assertSent(fn ($request) => $request['data']['resources'] === ['products', 'reports']);
+        DB::table('products')->where('id', $id)->update(['category' => 'Books']);
+        app(ResourceRealtime::class)->flush();
+        Http::assertSent(fn ($request) => in_array('categories', $request['data']['resources'], true));
+        Http::fake(['socket.example.test/*' => Http::response(['ok' => true])]);
+        DB::table('products')->where('id', $id)->update(['is_active' => false]);
+        app(ResourceRealtime::class)->flush();
+        Http::assertSent(fn ($request) => in_array('categories', $request['data']['resources'], true));
+        Http::fake(['socket.example.test/*' => Http::response(['ok' => true])]);
+        DB::table('products')->where('id', $id)->delete();
+        app(ResourceRealtime::class)->flush();
+        Http::assertSent(fn ($request) => in_array('categories', $request['data']['resources'], true));
     }
 }

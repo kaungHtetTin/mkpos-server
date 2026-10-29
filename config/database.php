@@ -47,7 +47,8 @@ return [
             'driver' => 'mysql',
             'url' => env('DATABASE_URL'),
             'host' => env('DB_HOST', '127.0.0.1'),
-            'port' => env('DB_PORT', '3306'),
+            // An explicitly blank port omits port= from PDO's DSN (local socket hosts).
+            'port' => env('DB_PORT', '3306') ?: null,
             'database' => env('DB_DATABASE', 'forge'),
             'username' => env('DB_USERNAME', 'forge'),
             'password' => env('DB_PASSWORD', ''),
@@ -60,7 +61,9 @@ return [
             'engine' => null,
             'options' => extension_loaded('pdo_mysql') ? array_filter([
                 PDO::MYSQL_ATTR_SSL_CA => env('MYSQL_ATTR_SSL_CA'),
-            ]) : [],
+                // Opt in only after checking the host's worker/connection budget.
+                PDO::ATTR_PERSISTENT => (bool) env('DB_PERSISTENT', false),
+            ], static fn ($value) => $value !== null && $value !== '') : [],
         ],
 
         'pgsql' => [

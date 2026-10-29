@@ -18,9 +18,10 @@ class Kernel extends ConsoleKernel
     {
         // Shop orders have no automatic processing deadline.
         $this->scheduledCommand($schedule, 'shop-chat:expire-images')->everyMinute()->withoutOverlapping();
-        $this->scheduledCommand($schedule, 'sales-ai:process --limit=10')->everyMinute()->withoutOverlapping(10);
-        $this->scheduledCommand($schedule, 'wyne-wyne:recover --limit=50')->everyMinute()->withoutOverlapping();
-        $this->scheduledCommand($schedule, 'customer-service:recover --limit=50')->everyMinute()->withoutOverlapping();
+        // Dedicated workers deliver normally; these are bounded recovery passes.
+        $this->scheduledCommand($schedule, 'sales-ai:process --limit=1')->everyFiveMinutes()->withoutOverlapping(10);
+        $this->scheduledCommand($schedule, 'wyne-wyne:recover --limit=50')->everyFiveMinutes()->withoutOverlapping();
+        $this->scheduledCommand($schedule, 'customer-service:recover --limit=50')->everyFiveMinutes()->withoutOverlapping();
         $this->scheduledCommand($schedule, 'customer-service:prune')->daily()->withoutOverlapping();
         $this->scheduledCommand($schedule, 'sales-ai:prune-actions')->hourly()->withoutOverlapping();
         $this->scheduledCommand($schedule, 'shop:notify-restocks')->everyMinute()->withoutOverlapping();
@@ -30,7 +31,7 @@ class Kernel extends ConsoleKernel
 
     protected function canStartScheduledProcesses(): bool
     {
-        return function_exists('proc_open');
+        return ! config('worker_health.scheduler_in_process', false) && function_exists('proc_open');
     }
 
     protected function scheduledCommand(Schedule $schedule, string $command): Event

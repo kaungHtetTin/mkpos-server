@@ -10,6 +10,20 @@ use Tests\TestCase;
 
 class RestrictedHostScheduleTest extends TestCase
 {
+    public function test_shared_host_flag_uses_callbacks_even_when_processes_are_available(): void
+    {
+        config(['worker_health.scheduler_in_process' => true]);
+        $kernel = new class($this->app, $this->app['events']) extends Kernel
+        {
+            public function registerSchedule(Schedule $schedule): void { $this->schedule($schedule); }
+        };
+        $schedule = new Schedule;
+        $kernel->registerSchedule($schedule);
+        foreach (array_slice($schedule->events(), 0, 8) as $event) {
+            $this->assertInstanceOf(CallbackEvent::class, $event);
+        }
+    }
+
     public function test_runtime_function_availability_selects_the_schedule_type(): void
     {
         $kernel = new class($this->app, $this->app['events']) extends Kernel
@@ -55,28 +69,28 @@ class RestrictedHostScheduleTest extends TestCase
             $this->assertTrue($event->withoutOverlapping);
             $this->assertNotEmpty($event->description);
         }
-        $sales = collect($events)->firstWhere('description', 'sales-ai:process --limit=10');
-        $this->assertSame('* * * * *', $sales->expression);
+        $sales = collect($events)->firstWhere('description', 'sales-ai:process --limit=1');
+        $this->assertSame('*/5 * * * *', $sales->expression);
         $this->assertSame(10, $sales->expiresAt);
         $this->assertCount(9, array_unique(array_map(fn ($event) => $event->mutexName(), $events)));
     }
 
     public function test_recovery_runs_in_process_and_nonzero_exit_fails_the_scheduled_event(): void
     {
-        $sales = collect($this->events())->firstWhere('description', 'sales-ai:process --limit=10');
+        $sales = collect($this->events())->firstWhere('description', 'sales-ai:process --limit=1');
         $this->mock(ConsoleKernelContract::class)->shouldReceive('call')->once()
-            ->with('sales-ai:process --limit=10')->andReturn(1);
+            ->with('sales-ai:process --limit=1')->andReturn(1);
 
         $this->expectException(\RuntimeException::class);
-        $this->expectExceptionMessage('sales-ai:process --limit=10 (exit 1)');
+        $this->expectExceptionMessage('sales-ai:process --limit=1 (exit 1)');
         $sales->run($this->app);
     }
 
     public function test_successful_recovery_completes_without_a_subprocess(): void
     {
-        $sales = collect($this->events())->firstWhere('description', 'sales-ai:process --limit=10');
+        $sales = collect($this->events())->firstWhere('description', 'sales-ai:process --limit=1');
         $this->mock(ConsoleKernelContract::class)->shouldReceive('call')->once()
-            ->with('sales-ai:process --limit=10')->andReturn(0);
+            ->with('sales-ai:process --limit=1')->andReturn(0);
 
         $sales->run($this->app);
         $this->assertSame(0, $sales->exitCode);

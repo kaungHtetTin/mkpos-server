@@ -19,6 +19,8 @@ class ResourceRealtime
             'products', 'product_prices', 'stock_movements', 'ecommerce_stock_reservations' => ['products', 'reports'],
             'price_type_rules' => ['priceTypes', 'products', 'settings'],
             'settings' => ['settings'],
+            'categories' => ['categories'],
+            'roles', 'role_permissions', 'users' => ['access'],
             'sales', 'sale_items' => ['sales', 'reports'],
             'purchases', 'purchase_items' => ['purchases', 'reports'],
             'expenses' => ['expenses', 'reports'],
@@ -29,6 +31,12 @@ class ResourceRealtime
             'platform_branding' => ['branding'],
             default => [],
         };
+        if (strtolower($match[1]) === 'products') {
+            $membershipWrite = preg_match('/^\s*(?:insert|replace|delete)\b/i', $query->sql)
+                || (preg_match('/\bset\b(.*?)(?:\bwhere\b|$)/is', $query->sql, $set)
+                    && preg_match('/(?:^|,)\s*(?:[`"]?\w+[`"]?\.)?[`"]?(?:category|is_active)[`"]?\s*=/i', $set[1]));
+            if ($membershipWrite) $resources[] = 'categories';
+        }
         if (! $resources) return;
         $business = app(TenantContext::class)->id();
         if ($resources === ['branding']) $channel = 'public-platform.branding';
@@ -40,6 +48,11 @@ class ResourceRealtime
     public function assistant(int $businessId): void
     {
         \Illuminate\Support\Facades\DB::afterCommit(fn () => $this->mark('private-business.resources.'.$businessId, ['assistant']));
+    }
+
+    public function access(int $businessId): void
+    {
+        \Illuminate\Support\Facades\DB::afterCommit(fn () => $this->mark('private-business.resources.'.$businessId, ['access']));
     }
 
     private function mark(string $channel, array $resources): void

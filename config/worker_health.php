@@ -1,6 +1,8 @@
 <?php
 
 return [
+    // Avoid starting a fresh PHP process for each scheduled command on shared hosts.
+    'scheduler_in_process' => (bool) env('SCHEDULER_IN_PROCESS', false),
     // Current receipt checks run in the request. Force monitoring only for
     // deployments retaining the legacy worker; queued legacy work also requires it.
     'payment_validation_required' => env('WORKER_HEALTH_PAYMENT_VALIDATION_REQUIRED', false),

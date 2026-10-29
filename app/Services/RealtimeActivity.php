@@ -33,6 +33,8 @@ class RealtimeActivity
         $status = app(SubscriptionService::class)->status($businessId);
         $this->record('owner', $businessId, $event, ['title' => $titles[$event],
             'message' => $reason ?: ($status['subscription']['plan_name'] ?? 'Your subscription access changed.'), 'target' => 'billing'], $key);
+        // Staff receive an access invalidation too; their UI no longer polls auth/me on resume.
+        app(ResourceRealtime::class)->access($businessId);
     }
 
     public function salesAiTopup(object $topup, string $status): void
