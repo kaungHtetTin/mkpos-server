@@ -8,6 +8,11 @@ use Symfony\Component\HttpFoundation\StreamedResponse;
 
 class ReportController extends ApiController
 {
+    public function products(Request $request): array
+    {
+        return app(\App\Services\ProductSalesReport::class)->index($request);
+    }
+
     public function summary(Request $request): array
     {
         return app(BusinessReport::class)->summary($request);

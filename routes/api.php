@@ -244,6 +244,7 @@ Route::middleware(['auth:sanctum', VerifyPasswordReset::class, 'business'])->gro
 
         Route::middleware('module:reports')->group(function () {
             Route::get('/reports/summary', [ReportController::class, 'summary']);
+            Route::get('/reports/products', [ReportController::class, 'products']);
             Route::get('/reports/today-summary', [ReportController::class, 'today']);
             Route::get('/reports/summary.csv', [ReportController::class, 'csv']);
         });
