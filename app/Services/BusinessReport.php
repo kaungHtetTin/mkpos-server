@@ -34,20 +34,25 @@ class BusinessReport
         }
         $saleIds = (clone $sales)->select('sales.id');
         $purchaseIds = (clone $purchases)->select('purchases.id');
-        $salesTotal = (int) (clone $sales)->sum('total');
-        $cashTotal = (int) (clone $sales)->sum('paid_amount');
-        $creditTotal = (int) (clone $sales)->sum('credit_amount');
-        $purchaseTotal = (int) (clone $purchases)->sum('total_cost');
-        $purchasePaidTotal = (int) (clone $purchases)->sum('paid_amount');
-        $purchaseCreditTotal = (int) (clone $purchases)->sum('credit_amount');
+        // One aggregate per source instead of rescanning for each metric.
+        $saleTotals = (clone $sales)->selectRaw('COUNT(*) as count, COALESCE(SUM(total),0) as total, COALESCE(SUM(paid_amount),0) as paid, COALESCE(SUM(credit_amount),0) as credit')->first();
+        $purchaseTotals = (clone $purchases)->selectRaw('COUNT(*) as count, COALESCE(SUM(total_cost),0) as total, COALESCE(SUM(paid_amount),0) as paid, COALESCE(SUM(credit_amount),0) as credit')->first();
+        $salesTotal = (int) $saleTotals->total;
+        $cashTotal = (int) $saleTotals->paid;
+        $creditTotal = (int) $saleTotals->credit;
+        $purchaseTotal = (int) $purchaseTotals->total;
+        $purchasePaidTotal = (int) $purchaseTotals->paid;
+        $purchaseCreditTotal = (int) $purchaseTotals->credit;
         $expenseTotal = (int) (clone $expenses)->sum('amount');
-        $productCost = (int) round($this->table('sale_items')->whereIn('sale_id', $saleIds)->selectRaw('COALESCE(SUM(quantity * unit_cost),0) as total')->value('total') ?: 0);
-        $foc = $this->table('sale_items')->whereIn('sale_id', $saleIds)->selectRaw('COALESCE(SUM(foc_quantity),0) as quantity, COALESCE(SUM(foc_quantity * unit_cost),0) as cost')->first();
+        $foc = $this->table('sale_items')->whereIn('sale_id', $saleIds)->selectRaw('COALESCE(SUM(quantity * unit_cost),0) as product_cost, COALESCE(SUM(foc_quantity),0) as quantity, COALESCE(SUM(foc_quantity * unit_cost),0) as cost')->first();
+        $productCost = (int) round($foc->product_cost);
         $purchaseFoc = $this->table('purchase_items')->whereIn('purchase_id', $purchaseIds)->selectRaw('COALESCE(SUM(base_foc_quantity),0) as quantity, COALESCE(SUM(base_foc_quantity * effective_unit_cost),0) as value')->first();
-        $debtCollected = (int) (clone $payments)->where('direction', 'customer_to_shop')->sum('amount');
-        $shopPayouts = (int) (clone $payments)->where('direction', 'shop_to_customer')->sum('amount');
-        $supplierPaid = (int) (clone $supplierPayments)->where('direction', 'shop_to_supplier')->sum('amount');
-        $supplierRefunds = (int) (clone $supplierPayments)->where('direction', 'supplier_to_shop')->sum('amount');
+        $customerFlow = (clone $payments)->selectRaw("COALESCE(SUM(CASE WHEN direction='customer_to_shop' THEN amount ELSE 0 END),0) as received, COALESCE(SUM(CASE WHEN direction='shop_to_customer' THEN amount ELSE 0 END),0) as paid")->first();
+        $supplierFlow = (clone $supplierPayments)->selectRaw("COALESCE(SUM(CASE WHEN direction='shop_to_supplier' THEN amount ELSE 0 END),0) as paid, COALESCE(SUM(CASE WHEN direction='supplier_to_shop' THEN amount ELSE 0 END),0) as received")->first();
+        $debtCollected = (int) $customerFlow->received;
+        $shopPayouts = (int) $customerFlow->paid;
+        $supplierPaid = (int) $supplierFlow->paid;
+        $supplierRefunds = (int) $supplierFlow->received;
         $accounts = $this->accounts();
         $supplierAccounts = $this->supplierAccounts();
         $accounts['customer_payable_total'] = $accounts['payable_total'];
@@ -60,8 +65,8 @@ class BusinessReport
         $salesTrends = $includeTrends ? $this->salesTrends($end) : [];
 
         return ['start' => $start ?: ($this->table('sales')->min(DB::raw('DATE(created_at)')) ?: now()->toDateString()), 'end' => $end ?: now()->toDateString(), 'all_time' => $allTime,
-            'sales_count' => (clone $sales)->count(), 'sales_total' => $salesTotal, 'cash_total' => $cashTotal, 'credit_total' => $creditTotal,
-            'purchase_count' => (clone $purchases)->count(), 'purchase_total' => $purchaseTotal, 'purchase_paid_total' => $purchasePaidTotal, 'purchase_credit_total' => $purchaseCreditTotal,
+            'sales_count' => (int) $saleTotals->count, 'sales_total' => $salesTotal, 'cash_total' => $cashTotal, 'credit_total' => $creditTotal,
+            'purchase_count' => (int) $purchaseTotals->count, 'purchase_total' => $purchaseTotal, 'purchase_paid_total' => $purchasePaidTotal, 'purchase_credit_total' => $purchaseCreditTotal,
             'expense_total' => $expenseTotal, 'profit_estimate' => $salesTotal - $productCost - $expenseTotal,
             'foc_quantity' => (float) ($foc->quantity ?? 0), 'foc_cost' => (int) round($foc->cost ?? 0), 'purchase_foc_quantity' => (float) ($purchaseFoc->quantity ?? 0), 'purchase_foc_value' => (int) round($purchaseFoc->value ?? 0),
             'top_products' => $this->topProducts($saleIds), 'payment_methods' => $this->paymentMethods($saleIds), 'expense_categories' => $this->expenseCategories($expenses),
@@ -149,21 +154,10 @@ class BusinessReport
         $timezone = AppTime::businessTimezone();
         $anchor = Carbon::parse($anchorDate ?: now($timezone)->toDateString(), $timezone);
         $monthStart = $anchor->copy()->startOfMonth();
-        $monthEnd = $anchor->copy()->endOfMonth();
         $yearStart = $anchor->copy()->startOfYear();
-        $yearEnd = $anchor->copy()->endOfYear();
 
-        $dailyTotals = $this->table('sales')->where('status', 'completed')
-            ->whereBetween('created_at', [AppTime::storage($monthStart), AppTime::storage($monthEnd)])
-            ->get(['created_at', 'total'])
-            ->groupBy(fn ($sale) => AppTime::storage($sale->created_at)->setTimezone($timezone)->day)
-            ->map(fn ($sales) => (int) $sales->sum('total'));
-
-        $monthlyTotals = $this->table('sales')->where('status', 'completed')
-            ->whereBetween('created_at', [AppTime::storage($yearStart), AppTime::storage($yearEnd)])
-            ->get(['created_at', 'total'])
-            ->groupBy(fn ($sale) => AppTime::storage($sale->created_at)->setTimezone($timezone)->month)
-            ->map(fn ($sales) => (int) $sales->sum('total'));
+        $dailyTotals = $this->periodTotals($monthStart, $anchor->daysInMonth, 'day');
+        $monthlyTotals = $this->periodTotals($yearStart, 12, 'month');
 
         return [
             'month' => [
@@ -181,6 +175,25 @@ class BusinessReport
                 ])->all(),
             ],
         ];
+    }
+
+    /** Boundaries are computed in PHP so SQL needs no installed timezone tables.
+     * Half-open local periods preserve DST and midnight boundaries exactly.
+     * Return one aggregate row rather than every sale in the year.
+     */
+    private function periodTotals(Carbon $start, int $count, string $unit): \Illuminate\Support\Collection
+    {
+        $query = $this->table('sales')->where('status', 'completed');
+        $cursor = $start->copy();
+        for ($index = 1; $index <= $count; $index++) {
+            $next = $unit === 'day' ? $cursor->copy()->addDay() : $cursor->copy()->addMonth();
+            $query->selectRaw("COALESCE(SUM(CASE WHEN created_at >= ? AND created_at < ? THEN total ELSE 0 END),0) as period_{$index}", [AppTime::storage($cursor), AppTime::storage($next)]);
+            $cursor = $next;
+        }
+        $row = $query->where('created_at', '>=', AppTime::storage($start))
+            ->where('created_at', '<', AppTime::storage($cursor))->first();
+
+        return collect(range(1, $count))->mapWithKeys(fn ($index) => [$index => (int) $row->{'period_'.$index}]);
     }
 
     private function table(string $table): Builder

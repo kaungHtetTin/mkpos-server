@@ -288,7 +288,7 @@ class ProductController extends ApiController
             $product['online_description'] = $descriptions[$product['id']] ?? '';
             $photoPath = $product['photo_path'] ?? null;
             unset($product['photo_path']);
-            $product['photo_url'] = $photoPath ? '/products/'.$product['id'].'/photo?v='.strtotime((string) ($product['updated_at'] ?? 'now')) : null;
+            $product['photo_url'] = $photoPath ? '/products/'.$product['id'].'/photo?v='.substr(hash('sha256', $photoPath), 0, 16) : null;
             $product['stock'] = (float) $product['stock'];
             $product['reserved_stock'] = (float) ($reserved[$product['id']] ?? 0);
             $product['dispatched_stock'] = (float) ($dispatched[$product['id']] ?? 0);

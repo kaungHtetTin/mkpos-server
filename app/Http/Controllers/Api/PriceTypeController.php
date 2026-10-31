@@ -18,7 +18,8 @@ class PriceTypeController extends ApiController
         app(\App\Services\AdminPinProtection::class)->authorize($request);
         $data = $this->validated($request);
         $name = $this->clean($data['name']);
-        abort_if(DB::table('price_type_rules')->where('name', $name)->exists(), 409, 'Price type already exists');
+        abort_if($this->configured()->contains(fn ($type) => strcasecmp($type, $name) === 0)
+            || DB::table('price_type_rules')->where('name', $name)->exists(), 409, 'Price type already exists');
         DB::transaction(function () use ($data, $name) {
             DB::table('price_type_rules')->insert($this->rule($data, $name));
             $this->saveConfigured($this->configured()->push($name)->all());
@@ -37,9 +38,16 @@ class PriceTypeController extends ApiController
         $old = $this->clean($priceType);
         $name = $this->clean($data['name']);
         $current = DB::table('price_type_rules')->where('name', $old)->first();
-        abort_if(! $current, 404, 'Price type not found');
+        if (! $current) {
+            // Legacy configured types can have no persisted rule. Initialize only
+            // on this explicit mutation, never while reading their defaults.
+            $configured = $this->configured()->first(fn ($type) => strcasecmp($type, $old) === 0);
+            abort_if($configured === null, 404, 'Price type not found');
+            $current = (object) $this->rule([], $configured);
+        }
         if (strcasecmp($old, $name) !== 0) {
-            abort_if(DB::table('price_type_rules')->where('name', $name)->exists(), 409, 'Price type already exists');
+            abort_if($this->configured()->contains(fn ($type) => strcasecmp($type, $name) === 0)
+                || DB::table('price_type_rules')->where('name', $name)->exists(), 409, 'Price type already exists');
         }
         DB::transaction(function () use ($data, $old, $name, $current) {
             DB::table('product_prices')->where('name', $old)->update(['name' => $name]);
@@ -93,7 +101,7 @@ class PriceTypeController extends ApiController
 
     private function configured()
     {
-        $types = collect(explode(',', $this->setting('price_types', 'Retail')))->map('trim')->filter()->values();
+        $types = collect(explode(',', $this->setting('price_types', 'Retail')))->map(fn ($name) => trim($name))->filter()->values();
 
         return $types->isEmpty() ? collect(['Retail']) : $types;
     }
@@ -112,17 +120,27 @@ class PriceTypeController extends ApiController
     private function response(): array
     {
         $types = $this->configured();
-        foreach ($types as $name) {
-            DB::table('price_type_rules')->updateOrInsert(['name' => $name], ['updated_at' => now()]);
-        }
+        // GET is read-only: defaults for legacy/missing rows stay in memory.
+        // Writing here publishes resource invalidations and can make clients
+        // request these same price types again indefinitely.
         $rules = DB::table('price_type_rules')->whereIn('name', $types)->get()->keyBy('name');
+        $usageQuery = DB::table('product_prices as pp')->join('products as p', 'p.id', '=', 'pp.product_id')
+            ->whereIn('pp.name', $types)->where('p.is_active', true)->where('pp.price', '>', 0);
+        foreach ($types as $index => $name) {
+            // Conditional counts retain the database's name collation semantics
+            // (including case variants) while using a single usage query.
+            $usageQuery->selectRaw("COUNT(DISTINCT CASE WHEN pp.name = ? THEN pp.product_id END) as usage_{$index}", [$name]);
+        }
+        $usageRow = $usageQuery->first();
         $usage = [];
-        foreach ($types as $name) {
-            $usage[$name] = DB::table('product_prices as pp')->join('products as p', 'p.id', '=', 'pp.product_id')->where('pp.name', $name)->where('p.is_active', true)->where('pp.price', '>', 0)->distinct('pp.product_id')->count('pp.product_id');
+        foreach ($types as $index => $name) {
+            $usage[$name] = (int) $usageRow->{'usage_'.$index};
         }
 
         return ['items' => $types->all(), 'usage' => $usage, 'rules' => $types->map(function ($name) use ($rules) {
-            $rule = $rules[$name];
+            $rule = $rules->get($name)
+                ?? $rules->first(fn ($candidate) => strcasecmp($candidate->name, $name) === 0)
+                ?? (object) $this->rule([], $name);
 
             return ['name' => $name, 'pricing_mode' => $rule->pricing_mode, 'markup_percent' => (float) $rule->markup_percent, 'rounding' => (int) $rule->rounding, 'minimum_profit' => (int) $rule->minimum_profit];
         })->all()];

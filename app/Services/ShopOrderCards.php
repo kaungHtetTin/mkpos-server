@@ -20,7 +20,7 @@ class ShopOrderCards
             $order->item_count = $lines->count();
             $order->item_previews = $lines->take($previewLimit)->map(fn ($item) => [
                 'product_id' => $item->product_id, 'name' => $item->name,
-                'photo_url' => $item->photo_path ? '/shop-admin/orders/'.$order->id.'/items/'.$item->product_id.'/photo?v='.strtotime((string) $item->updated_at) : null,
+                'photo_url' => $item->photo_path ? '/shop-admin/orders/'.$order->id.'/items/'.$item->product_id.'/photo?v='.substr(hash('sha256', $item->photo_path), 0, 16) : null,
             ])->values();
         }
         return $orders;

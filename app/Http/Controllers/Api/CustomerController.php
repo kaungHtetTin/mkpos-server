@@ -104,7 +104,7 @@ class CustomerController extends ApiController
                 $sale = (array) $sale;
                 $sale['items'] = ($items->get($sale['id']) ?? collect())->map(function ($row) {
                     $item = (array) $row;
-                    $item['photo_url'] = $item['photo_path'] ? '/products/'.$item['product_id'].'/photo?v='.strtotime((string) $item['product_updated_at']) : null;
+                    $item['photo_url'] = $item['photo_path'] ? '/products/'.$item['product_id'].'/photo?v='.substr(hash('sha256', $item['photo_path']), 0, 16) : null;
                     unset($item['photo_path'], $item['product_updated_at']);
 
                     return $item;

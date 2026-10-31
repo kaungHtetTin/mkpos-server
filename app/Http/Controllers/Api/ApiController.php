@@ -15,7 +15,7 @@ abstract class ApiController extends Controller
         $offset = max((int) $request->query('offset', 0), 0);
         $hasLimit = $request->query->has('limit');
         $limit = $hasLimit ? max(1, min((int) $request->query('limit'), $maxLimit)) : $defaultLimit;
-        $total = (clone $query)->count();
+        $total = $withTotal ? (clone $query)->count() : null;
         if (! $optionalLimit || $hasLimit) {
             $query->limit($limit)->offset($offset);
         }

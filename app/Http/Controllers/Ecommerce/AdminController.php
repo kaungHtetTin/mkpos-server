@@ -148,7 +148,7 @@ class AdminController extends Controller
                 ->orderByDesc('id')->get(['id', 'product_id', 'name'])->unique('product_id')->keyBy('product_id');
         }
         foreach ($rows as $row) {
-            $row->photo_url = $row->photo_path ? '/shop-admin/publications/'.$row->id.'/photo?v='.strtotime((string) $row->updated_at) : null;
+            $row->photo_url = $row->photo_path ? '/shop-admin/publications/'.$row->id.'/photo?v='.substr(hash('sha256', $row->photo_path), 0, 16) : null;
             unset($row->photo_path, $row->updated_at);
             $row->stock = (float) $row->stock;
             $row->base_price = $row->base_price === null ? null : (int) $row->base_price;

@@ -185,7 +185,7 @@ class SaleController extends ApiController
                 $item['quantity'] = (float) $item['quantity'];
                 $item['foc_quantity'] = (float) $item['foc_quantity'];
                 $item['line_type'] = 'product';
-                $item['photo_url'] = $item['photo_path'] ? '/products/'.$item['product_id'].'/photo?v='.strtotime((string) $item['product_updated_at']) : null;
+                $item['photo_url'] = $item['photo_path'] ? '/products/'.$item['product_id'].'/photo?v='.substr(hash('sha256', $item['photo_path']), 0, 16) : null;
                 unset($item['photo_path'], $item['product_updated_at']);
 
                 return $item;
